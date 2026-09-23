@@ -1,0 +1,47 @@
+<Popup x:Class="SemiconductorCsvAnalyzer.Controls.ColumnValueFilterPopup"
+       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+       xmlns:controls="clr-namespace:SemiconductorCsvAnalyzer.Controls"
+       StaysOpen="False" AllowsTransparency="True" Placement="Bottom">
+    <Border Background="White" BorderBrush="#8D9CA9" BorderThickness="1" Padding="12" Width="380" Height="440">
+        <DockPanel LastChildFill="True">
+            <StackPanel DockPanel.Dock="Top">
+                <TextBlock x:Name="TxtTitle" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Margin="0,0,0,8"/>
+                <TextBox x:Name="SearchBox" TextChanged="Search_Changed" Padding="4" Margin="0,0,0,8"
+                         ToolTip="搜索候选值；搜索不会改变已勾选的值"/>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <Button Content="全选搜索结果" Click="SelectVisible_Click" Padding="7,3"/>
+                    <Button Content="取消搜索结果" Click="DeselectVisible_Click" Padding="7,3" Margin="6,0,0,0"/>
+                </StackPanel>
+            </StackPanel>
+            <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                <TextBlock x:Name="TxtCount" Foreground="DimGray" FontSize="11" Margin="0,0,0,8"/>
+                <DockPanel>
+                    <Button Content="清除此列筛选" Click="Clear_Click" DockPanel.Dock="Left" Padding="7,4"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="取消" Click="Cancel_Click" Width="60" Padding="7,4"/>
+                        <Button Content="应用" Click="Apply_Click" Width="60" Padding="7,4" Margin="6,0,0,0"/>
+                    </StackPanel>
+                </DockPanel>
+            </StackPanel>
+            <controls:FastDataGrid x:Name="ValuesGrid" AutoGenerateColumns="False" HeadersVisibility="None"
+                       IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False" CanUserResizeRows="False"
+                       CanUserSortColumns="False" CanUserReorderColumns="False" GridLinesVisibility="None"
+                       RowHeight="25" SelectionMode="Single" EnableRowVirtualization="True" EnableColumnVirtualization="True"
+                       ScrollViewer.CanContentScroll="True" VirtualizingPanel.IsVirtualizing="True"
+                       VirtualizingPanel.VirtualizationMode="Recycling">
+                <DataGrid.Columns>
+                    <DataGridTemplateColumn Width="32">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                          VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTextColumn Binding="{Binding Label, Mode=OneTime}" Width="*"/>
+                </DataGrid.Columns>
+            </controls:FastDataGrid>
+        </DockPanel>
+    </Border>
+</Popup>
