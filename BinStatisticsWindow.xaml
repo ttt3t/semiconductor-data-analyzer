@@ -1,0 +1,88 @@
+<Window x:Class="SemiconductorCsvAnalyzer.BinStatisticsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="BIN Table" Width="1200" Height="760" MinWidth="900" MinHeight="600" WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="12">
+        <StackPanel DockPanel.Dock="Top">
+            <DockPanel Margin="0,0,0,10">
+                <Button Content="复制全部（4 个表）" Click="BtnCopyAll_Click" DockPanel.Dock="Right" Padding="10,4"/>
+                <TextBlock x:Name="TxtCopyStatus" DockPanel.Dock="Right" VerticalAlignment="Center" Foreground="DimGray" Margin="10,0"/>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="复测模式：" VerticalAlignment="Center"/>
+                    <RadioButton x:Name="FirstMode" Content="只保留首测" Checked="Mode_Changed" Margin="8,0,24,0"/>
+                    <RadioButton x:Name="LastMode" Content="复测覆盖首测" IsChecked="True" Checked="Mode_Changed"/>
+                </StackPanel>
+            </DockPanel>
+            <TextBlock x:Name="TxtInfo" Margin="0,0,0,12" TextWrapping="Wrap"/>
+        </StackPanel>
+        <TextBlock DockPanel.Dock="Bottom" Foreground="DimGray" TextWrapping="Wrap" Margin="0,10,0,0"
+                   Text="按晶圆及芯片选择整条首测或末次记录；无完整坐标时使用序列号。SBIN 与分类占比以有 SBIN 的芯片数为分母，HBIN 占比以有 HBIN 的芯片数为分母。分类在设置的 [SBinCategories] 中编辑。"/>
+        <Grid>
+            <Grid.Resources>
+                <Style TargetType="DataGrid">
+                    <Setter Property="AutoGenerateColumns" Value="False"/>
+                    <Setter Property="IsReadOnly" Value="True"/>
+                    <Setter Property="CanUserAddRows" Value="False"/>
+                    <Setter Property="SelectionUnit" Value="FullRow"/>
+                    <Setter Property="ClipboardCopyMode" Value="IncludeHeader"/>
+                    <Setter Property="EnableRowVirtualization" Value="True"/>
+                    <Setter Property="AlternatingRowBackground" Value="#F5F5F5"/>
+                </Style>
+            </Grid.Resources>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="1.4*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="1.1*"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition x:Name="SummaryTablesRow" Height="1.2*" MinHeight="150"/>
+                <RowDefinition Height="8"/>
+                <RowDefinition x:Name="SiteTableRow" Height="*" MinHeight="150"/>
+            </Grid.RowDefinitions>
+            <DockPanel Margin="0,0,8,0">
+                <TextBlock Text="SBIN 明细" FontWeight="Bold" DockPanel.Dock="Top" Margin="0,0,0,6"/>
+                <DataGrid x:Name="DgSbin" HeadersVisibility="Column" CanUserReorderColumns="False"
+                          SelectionChanged="DgSbin_SelectionChanged">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="分类" Binding="{Binding Category, Mode=OneTime}" Width="*"/>
+                        <DataGridTextColumn Header="SBIN" Binding="{Binding Bin, Mode=OneTime}" SortMemberPath="BinSort" Width="70"/>
+                        <DataGridTextColumn Header="数量" Binding="{Binding Count, Mode=OneTime}" Width="70"/>
+                        <DataGridTextColumn Header="占比%" Binding="{Binding Percent, Mode=OneTime, StringFormat=F2}" Width="75"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </DockPanel>
+            <DockPanel Grid.Column="1" Margin="0,0,8,0">
+                <TextBlock Text="HBIN 明细" FontWeight="Bold" DockPanel.Dock="Top" Margin="0,0,0,6"/>
+                <DataGrid x:Name="DgHbin">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="HBIN" Binding="{Binding Bin, Mode=OneTime}" SortMemberPath="BinSort" Width="*"/>
+                        <DataGridTextColumn Header="数量" Binding="{Binding Count, Mode=OneTime}" Width="70"/>
+                        <DataGridTextColumn Header="占比%" Binding="{Binding Percent, Mode=OneTime, StringFormat=F2}" Width="75"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </DockPanel>
+            <DockPanel Grid.Column="2">
+                <TextBlock Text="SBIN 分类汇总" FontWeight="Bold" DockPanel.Dock="Top" Margin="0,0,0,6"/>
+                <DataGrid x:Name="DgCategories">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="分类" Binding="{Binding Category, Mode=OneTime}" Width="*"/>
+                        <DataGridTextColumn Header="数量" Binding="{Binding Count, Mode=OneTime}" Width="70"/>
+                        <DataGridTextColumn Header="占比%" Binding="{Binding Percent, Mode=OneTime, StringFormat=F2}" Width="75"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </DockPanel>
+            <GridSplitter Grid.Row="1" Grid.ColumnSpan="3" Height="6" HorizontalAlignment="Stretch"
+                          VerticalAlignment="Center" ResizeDirection="Rows" Background="#DDD"/>
+            <DockPanel Grid.Row="2" Grid.ColumnSpan="3">
+                <TextBlock Text="SBIN 各 Site 占比" FontWeight="Bold" DockPanel.Dock="Top" Margin="0,0,0,6"/>
+                <TextBlock Text="每列分母为该 Site 有效 SBIN 芯片数；无有效 SBIN 时显示 –。复测模式与上方一致。"
+                           DockPanel.Dock="Top" Foreground="DimGray" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                <DataGrid x:Name="DgSites" FrozenColumnCount="2" CanUserReorderColumns="False"
+                          HeadersVisibility="Column" EnableColumnVirtualization="True">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="分类" Binding="{Binding Category, Mode=OneTime}" Width="150"/>
+                        <DataGridTextColumn Header="SBIN" Binding="{Binding Bin, Mode=OneTime}" SortMemberPath="BinSort" Width="80"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </DockPanel>
+        </Grid>
+    </DockPanel>
+</Window>

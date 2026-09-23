@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+    <ApplicationTitle>CSV Analyzer</ApplicationTitle>
+    <AssemblyName>SemiconductorCsvAnalyzer</AssemblyName>
+    <RootNamespace>SemiconductorCsvAnalyzer</RootNamespace>
+    <!-- 将 app.ico 放在本项目目录（与此 csproj 同级）即可作为 EXE 图标。 -->
+    <ApplicationIcon Condition="Exists('app.ico')">app.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.105.1" />
+    <Resource Include="app.ico" Condition="Exists('app.ico')" />
+    <EmbeddedResource Include="Docs\UserGuide.md" LogicalName="SemiconductorCsvAnalyzer.Docs.UserGuide.md" />
+    <None Update="config.ini">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+</Project>

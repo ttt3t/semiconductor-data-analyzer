@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <Version>2.0.0</Version>
+    <!-- Both entry projects compile the same WPF views; keep their generated resource references separate. -->
+    <BaseIntermediateOutputPath>obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;bin\**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>

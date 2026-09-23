@@ -1,0 +1,42 @@
+<Window x:Class="SemiconductorCsvAnalyzer.AboutWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:SemiconductorCsvAnalyzer.Controls"
+        Title="关于" Width="490" SizeToContent="Height"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False" FontFamily="Microsoft YaHei UI" Background="{DynamicResource SurfaceBrush}">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Styles/WorkspaceTheme.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+    <StackPanel Margin="30">
+        <Border Background="#EFF6FF" CornerRadius="10" Width="48" Height="48" HorizontalAlignment="Left" Margin="0,0,0,18">
+            <controls:ActionIcon Kind="Wafer" Width="28" Height="28" Stroke="#2563EB"
+                                 HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Border>
+        <DockPanel Margin="0,0,0,14">
+            <Border DockPanel.Dock="Right" Background="#EFF6FF" CornerRadius="5" Padding="9,4" VerticalAlignment="Center">
+                <TextBlock Text="V2.0" Foreground="#2563EB" FontWeight="SemiBold"/>
+            </Border>
+            <TextBlock Text="CSV Analyzer" FontSize="26" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+        </DockPanel>
+        <TextBlock Text="半导体 CSV / STDF 测试数据分析工具" FontSize="14" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,10"/>
+        <TextBlock FontSize="13" LineHeight="25" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}">
+            <Run Text="良率统计与多晶圆 / Site 对比"/><LineBreak/>
+            <Run Text="晶圆 Map、直方图与散点图"/><LineBreak/>
+            <Run Text="阈值模拟、良率预测与 XLSX 报告导出"/>
+        </TextBlock>
+        <Button x:Name="DetailedHelpButton" Content="详细说明" Style="{StaticResource PrimaryButton}" Click="DetailedHelp_Click"
+                HorizontalAlignment="Left" MinWidth="110" Margin="0,22,0,0"/>
+        <Border BorderBrush="{DynamicResource BorderSoft}" BorderThickness="0,1,0,0" Margin="0,24,0,0" Padding="0,16,0,0">
+            <Grid>
+                <TextBlock Text="GYF" Foreground="#94A3B8" FontSize="12" VerticalAlignment="Center"/>
+                <Button Content="关闭" Style="{StaticResource QuietButton}" IsCancel="True" IsDefault="True" MinWidth="76"
+                        HorizontalAlignment="Right"/>
+            </Grid>
+        </Border>
+    </StackPanel>
+</Window>

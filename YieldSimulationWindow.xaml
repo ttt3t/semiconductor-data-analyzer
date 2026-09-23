@@ -1,0 +1,162 @@
+<Window x:Class="SemiconductorCsvAnalyzer.YieldSimulationWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:SemiconductorCsvAnalyzer.Controls"
+        Title="阈值调整 / 关闭测试项 · 良率预测" Width="1500" Height="900" MinWidth="1050" MinHeight="650"
+        WindowStartupLocation="CenterOwner">
+    <Window.Resources>
+        <Style TargetType="DataGrid">
+            <Setter Property="AutoGenerateColumns" Value="False"/>
+            <Setter Property="CanUserAddRows" Value="False"/>
+            <Setter Property="CanUserDeleteRows" Value="False"/>
+            <Setter Property="EnableRowVirtualization" Value="True"/>
+            <Setter Property="EnableColumnVirtualization" Value="True"/>
+            <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/>
+            <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/>
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
+            <Setter Property="RowHeight" Value="28"/>
+            <Setter Property="HeadersVisibility" Value="Column"/>
+        </Style>
+        <Style TargetType="Button"><Setter Property="Padding" Value="10,5"/><Setter Property="Margin" Value="0,0,8,5"/></Style>
+        <Style TargetType="RadioButton"><Setter Property="Margin" Value="8,4"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+    </Window.Resources>
+    <DockPanel Margin="12">
+        <StackPanel DockPanel.Dock="Top">
+            <WrapPanel>
+                <TextBlock Text="模拟目标：" VerticalAlignment="Center"/>
+                <RadioButton x:Name="TargetPass" GroupName="Target" Content="Pass" IsChecked="True" Checked="Context_Changed"/>
+                <RadioButton x:Name="TargetCombined" GroupName="Target" Content="Pass + PartialPass" Checked="Context_Changed"/>
+                <TextBlock Text="   复测：" VerticalAlignment="Center"/>
+                <RadioButton x:Name="RetestFirst" GroupName="Retest" Content="只保留首测" Checked="Context_Changed"/>
+                <RadioButton x:Name="RetestLast" GroupName="Retest" Content="复测覆盖首测" IsChecked="True" Checked="Context_Changed"/>
+                <Button Content="重新识别建议" Click="Recommend_Click"/>
+                <Button Content="确认有效项 / 建立基准" Click="Confirm_Click" FontWeight="SemiBold"/>
+                <Button Content="恢复原规则" Click="Restore_Click"/>
+                <Button Content="保存方案…" Click="Save_Click"/>
+                <Button Content="载入方案…" Click="Load_Click"/>
+            </WrapPanel>
+            <TextBlock x:Name="ClassificationInfo" Foreground="DimGray" Margin="0,2,0,6" TextWrapping="Wrap"/>
+            <WrapPanel Margin="0,0,0,6">
+                <TextBlock Text="缺测预测：最少参考数" VerticalAlignment="Center"/>
+                <TextBox x:Name="MinimumReferences" Text="20" Width="50" Margin="6,0,12,0" TextChanged="Options_Changed"/>
+                <TextBlock Text="最多参考数" VerticalAlignment="Center"/>
+                <TextBox x:Name="MaximumReferences" Text="100" Width="55" Margin="6,0,12,0" TextChanged="Options_Changed"/>
+                <TextBlock Text="前段标准化 RMS 距离 ≤" VerticalAlignment="Center"/>
+                <TextBox x:Name="MaximumDistance" Text="1.5" Width="50" Margin="6,0,12,0" TextChanged="Options_Changed"/>
+                <TextBlock Text="最多匹配缺测前最近 8 项；优先同批次；不删除参考中的未知结果。" Foreground="DimGray" VerticalAlignment="Center"/>
+            </WrapPanel>
+            <Border Background="#EFF5FC" Padding="10" Margin="0,0,0,8">
+                <TextBlock x:Name="Summary" Text="正在准备数据…" TextWrapping="Wrap" LineHeight="22"/>
+            </Border>
+        </StackPanel>
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+            <ProgressBar x:Name="Busy" Height="3" IsIndeterminate="True" Visibility="Collapsed"/>
+            <TextBlock x:Name="Status" TextWrapping="Wrap" Foreground="#385E80" Margin="0,5,0,0"/>
+        </StackPanel>
+        <TabControl x:Name="Tabs" SelectionChanged="Tabs_Changed">
+            <TabItem Header="1 · 确认测试项与调整阈值">
+                <DockPanel Margin="8">
+                    <TextBlock DockPanel.Dock="Top" Margin="0,0,0,8" TextWrapping="Wrap" Foreground="DimGray"
+                               Text="先核对“有效项”及冲突，再确认建立基准；取消“模拟启用”即关闭该项。空限值表示单侧无限制。阶段默认按测试项顺序递增，请按实际程序调整；同阶段填写相同数字。更改有效项或阶段后须重新确认。原始阈值、原文和主列表保持不变。原良率 / 预测良率为有效实测值在原始 / 模拟阈值下的单项通过率，缺测不计入；总体联合预测见上方。"/>
+                    <DataGrid x:Name="RulesGrid" FrozenColumnCount="3">
+                        <DataGrid.Columns>
+                            <DataGridTemplateColumn Header="有效项" Width="65"><DataGridTemplateColumn.CellTemplate><DataTemplate>
+                                <CheckBox IsChecked="{Binding Included, UpdateSourceTrigger=PropertyChanged}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="模拟启用" Width="80"><DataGridTemplateColumn.CellTemplate><DataTemplate>
+                                <CheckBox IsChecked="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding Included}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+                            <DataGridTextColumn Header="测试项" Binding="{Binding Name}" IsReadOnly="True" Width="210"/>
+                            <DataGridTextColumn Header="测试数量" Binding="{Binding TestCount}" IsReadOnly="True" Width="85">
+                                <DataGridTextColumn.HeaderStyle><Style TargetType="DataGridColumnHeader"><Setter Property="ToolTip" Value="按所选首测 / 末测规则去重后，该项的有效数值数量；部分复测沿用已有测项继承规则。缺测、不适用、无效数据不计入。"/></Style></DataGridTextColumn.HeaderStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="原良率" Binding="{Binding OriginalYield, StringFormat=P2, TargetNullValue=—}" IsReadOnly="True" Width="85">
+                                <DataGridTextColumn.HeaderStyle><Style TargetType="DataGridColumnHeader"><Setter Property="ToolTip" Value="原始上下限内的有效数值数量 ÷ 测试数量；无原始限值或没有有效数值时显示 —。这是单项通过率，不是 HBIN 芯片良率。"/></Style></DataGridTextColumn.HeaderStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="预测良率" Binding="{Binding PredictedYieldText}" SortMemberPath="PredictedYield" IsReadOnly="True" Width="95">
+                                <DataGridTextColumn.HeaderStyle><Style TargetType="DataGridColumnHeader"><Setter Property="ToolTip" Value="本次模拟上下限内的有效数值数量 ÷ 测试数量，仅在最新后台计算完成后显示。未纳入 / 已关闭项目不显示 100%；缺测不推定通过。此列不包含缺测概率，总体联合概率预计良率见上方。"/></Style></DataGridTextColumn.HeaderStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="阶段" Binding="{Binding Stage, UpdateSourceTrigger=PropertyChanged}" Width="55"/>
+                            <DataGridTextColumn Header="原始上下限" Binding="{Binding OriginalLimits}" IsReadOnly="True" Width="170"/>
+                            <DataGridTextColumn Header="模拟 LSL" Binding="{Binding Lower, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
+                            <DataGridTextColumn Header="模拟 USL" Binding="{Binding Upper, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
+                            <DataGridTextColumn Header="单位" Binding="{Binding Unit}" IsReadOnly="True" Width="60"/>
+                            <DataGridTextColumn Header="良品超限" Binding="{Binding GoodViolations}" IsReadOnly="True" Width="75"/>
+                            <DataGridTextColumn Header="不良超限" Binding="{Binding BadViolations}" IsReadOnly="True" Width="75"/>
+                            <DataGridTextColumn Header="识别建议（需人工确认）" Binding="{Binding Recommendation}" IsReadOnly="True" Width="510"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+            <TabItem Header="2 · 逐芯片结果与测量状态">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="6"/><RowDefinition Height="190"/></Grid.RowDefinitions>
+                    <DataGrid x:Name="ChipsGrid" IsReadOnly="True" SelectionMode="Single" SelectionChanged="Chip_Changed">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Wafer" Binding="{Binding Wafer}" Width="140"/>
+                            <DataGridTextColumn Header="SN" Binding="{Binding SN}" Width="100"/>
+                            <DataGridTextColumn Header="XY" Binding="{Binding XY}" Width="90"/>
+                            <DataGridTextColumn Header="Site" Binding="{Binding Site}" Width="50"/>
+                            <DataGridTextColumn Header="HBIN" Binding="{Binding HBIN}" Width="55"/>
+                            <DataGridTextColumn Header="原始分类" Binding="{Binding Original}" Width="90"/>
+                            <DataGridTextColumn Header="基准" Binding="{Binding BaselineText}" Width="65"/>
+                            <DataGridTextColumn Header="模拟结果" Binding="{Binding Status}" Width="155"/>
+                            <DataGridTextColumn Header="通过概率" Binding="{Binding Probability}" Width="85"/>
+                            <DataGridTextColumn Header="已测" Binding="{Binding Measured}" Width="50"/>
+                            <DataGridTextColumn Header="应测未测" Binding="{Binding Missing}" Width="75"/>
+                            <DataGridTextColumn Header="不适用" Binding="{Binding NotApplicable}" Width="60"/>
+                            <DataGridTextColumn Header="无效" Binding="{Binding Invalid}" Width="50"/>
+                            <DataGridTextColumn Header="预测依据 / 无法估计原因" Binding="{Binding Note}" Width="700"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <GridSplitter Grid.Row="1" Height="6" HorizontalAlignment="Stretch"/>
+                    <DockPanel Grid.Row="2">
+                    <TextBox DockPanel.Dock="Top" Text="{Binding SelectedItem.Note, ElementName=ChipsGrid, Mode=OneWay}"
+                             IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Height="55" Margin="0,0,0,5"/>
+                    <DataGrid x:Name="DetailsGrid" IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="测试项" Binding="{Binding Name}" Width="230"/>
+                            <DataGridTextColumn Header="原始测量状态" Binding="{Binding State}" Width="140"/>
+                            <DataGridTextColumn Header="数值" Binding="{Binding Value}" Width="140"/>
+                            <DataGridTextColumn Header="当前规则" Binding="{Binding Rule}" Width="160"/>
+                            <DataGridTextColumn Header="判定" Binding="{Binding Decision}" Width="180"/>
+                            <DataGridTextColumn Header="阶段" Binding="{Binding Stage}" Width="70"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    </DockPanel>
+                </Grid>
+            </TabItem>
+            <TabItem Header="3 · 缺测集合与覆盖">
+                <DockPanel>
+                <TextBox DockPanel.Dock="Bottom" Text="{Binding SelectedItem.Items, ElementName=GroupsGrid, Mode=OneWay}"
+                         IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Height="120" Margin="8"/>
+                <DataGrid x:Name="GroupsGrid" Margin="8" IsReadOnly="True">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="芯片数" Binding="{Binding Chips}" Width="85"/>
+                        <DataGridTextColumn Header="已估计" Binding="{Binding Estimated}" Width="85"/>
+                        <DataGridTextColumn Header="无法估计" Binding="{Binding Unestimable}" Width="90"/>
+                        <DataGridTextColumn Header="概率良品数" Binding="{Binding ExpectedGood, StringFormat=F2}" Width="100"/>
+                        <DataGridTextColumn Header="非连续缺测项目集合" Binding="{Binding Items}" Width="2000"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+                </DockPanel>
+            </TabItem>
+            <TabItem x:Name="MapTab" Header="4 · 模拟 Map">
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="185"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <DockPanel Margin="0,0,10,0">
+                        <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+                            <CheckBox x:Name="SiteBorders" Content="显示 Site 边界" Margin="0,0,0,10"/>
+                            <TextBlock Text="绿：确认良品&#10;蓝：确认恢复&#10;红：新增不良&#10;深红：确认不良&#10;橙：待预测（概率）&#10;灰：无法估计" LineHeight="25"/>
+                        </StackPanel>
+                        <ListBox x:Name="Wafers" SelectionChanged="Wafer_Changed"/>
+                    </DockPanel>
+                    <DockPanel Grid.Column="1">
+                        <TextBlock x:Name="MapInfo" DockPanel.Dock="Bottom" Height="100" TextWrapping="Wrap" Foreground="DimGray"/>
+                        <controls:WaferMapControl x:Name="Map" ShowSiteBorders="{Binding IsChecked, ElementName=SiteBorders}"/>
+                    </DockPanel>
+                </Grid>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</Window>

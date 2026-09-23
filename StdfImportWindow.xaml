@@ -1,0 +1,20 @@
+<Window x:Class="SemiconductorCsvAnalyzer.StdfImportWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="STDF 导入模式" Width="500" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <StackPanel Margin="20">
+        <TextBlock x:Name="TxtFile" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,16"/>
+        <RadioButton x:Name="StandardMode" Content="普通 STDF 模式" GroupName="Mode" IsChecked="True"/>
+        <TextBlock Text="沿用测量记录中的测试名称；没有名称时使用 TSR 名称。"
+                   Foreground="DimGray" TextWrapping="Wrap" Margin="22,5,0,16"/>
+        <RadioButton x:Name="Mode93K" Content="93k STDF 模式（优先 TSR 完整测试名）" GroupName="Mode"/>
+        <TextBlock Text="按测试编号、类型及 Head / Site 匹配 TSR 的 TEST_NAM。找不到对应名称时，回退到测量记录的名称。仅改变名称读取方式。"
+                   Foreground="DimGray" TextWrapping="Wrap" Margin="22,5,0,18"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="取消" IsCancel="True" Width="80" Padding="8,5"/>
+            <Button x:Name="BtnContinue" Content="继续" IsDefault="True" Click="Continue_Click"
+                    Width="80" Padding="8,5" Margin="8,0,0,0"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

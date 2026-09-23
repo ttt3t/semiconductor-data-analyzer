@@ -1,0 +1,33 @@
+# Visual Studio / .NET build outputs
+.vs/
+bin/
+obj/
+artifacts/
+outputs/
+Diagnostics/
+*.user
+*.suo
+*.pubxml
+*.pubxml.user
+*.log
+*.tmp
+*.rawcache
+
+# Local preferences and working data
+app.settings.ini
+last_config.ini
+ui.preferences.json
+layout.json
+recent*.json
+*.csv
+*.std
+*.stdf
+*.gz
+*.xlsx
+*.zip
+.env
+.env.*
+*.pem
+*.key
+Thumbs.db
+.DS_Store

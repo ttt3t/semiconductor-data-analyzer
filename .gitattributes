@@ -1,0 +1,9 @@
+* text=auto
+*.cs text
+*.xaml text
+*.csproj text
+*.props text
+*.md text
+*.ini text
+*.ico binary
+*.png binary

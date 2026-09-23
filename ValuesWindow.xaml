@@ -1,0 +1,44 @@
+<Window x:Class="SemiconductorCsvAnalyzer.ValuesWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Value 表" Width="940" Height="560"
+        WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="8">
+        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+            <Button Content="复制全部"
+                    Click="BtnCopy_Click"
+                    DockPanel.Dock="Right"
+                    Padding="10,3"
+                    ToolTip="复制当前表格全部数据（含表头）到剪贴板"/>
+            <TextBlock x:Name="TxtTitle"
+                       FontWeight="Bold" FontSize="14"
+                       VerticalAlignment="Center"
+                       TextWrapping="Wrap"/>
+        </DockPanel>
+
+        <TextBlock x:Name="TxtCount" DockPanel.Dock="Bottom"
+                   Margin="0,6,0,0" Foreground="Gray"/>
+
+        <DataGrid x:Name="DgValues"
+                  AutoGenerateColumns="False" IsReadOnly="True"
+                  CanUserAddRows="False" CanUserDeleteRows="False"
+                  HeadersVisibility="Column"
+                  SelectionMode="Extended"
+                  SelectionUnit="FullRow"
+                  ClipboardCopyMode="IncludeHeader"
+                  CanUserResizeColumns="True"
+                  GridLinesVisibility="Horizontal"
+                  AlternatingRowBackground="#F5F5F5"
+                  EnableRowVirtualization="True">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="SN"     Binding="{Binding SerialNumber, Mode=OneTime}" Width="140"/>
+                <DataGridTextColumn Header="X"      Binding="{Binding X, Mode=OneTime}" Width="60"/>
+                <DataGridTextColumn Header="Y"      Binding="{Binding Y, Mode=OneTime}" Width="60"/>
+                <DataGridTextColumn Header="Site"   Binding="{Binding Site, Mode=OneTime}" SortMemberPath="SiteSort" Width="70"/>
+                <DataGridTextColumn Header="Value"  Binding="{Binding RawText, Mode=OneTime}" SortMemberPath="Value" Width="120"/>
+                <DataGridTextColumn Header="SBIN"   Binding="{Binding SBin, Mode=OneTime}" SortMemberPath="SBinSort" Width="80"/>
+                <DataGridTextColumn Header="HBIN"   Binding="{Binding HBin, Mode=OneTime}" SortMemberPath="HBinSort" Width="80"/>
+            </DataGrid.Columns>
+        </DataGrid>
+    </DockPanel>
+</Window>

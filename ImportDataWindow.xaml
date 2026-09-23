@@ -1,0 +1,40 @@
+<Window x:Class="SemiconductorCsvAnalyzer.ImportDataWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="导入新数据" Width="530" Height="460" ResizeMode="NoResize" WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="20">
+        <StackPanel DockPanel.Dock="Bottom">
+            <TextBlock x:Name="TxtError" Foreground="Firebrick" TextWrapping="Wrap" Margin="0,0,0,8"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="取消" IsCancel="True" Width="80" Padding="8,5"/>
+                <Button Content="导入" Click="BtnImport_Click" Width="80" Padding="8,5" Margin="8,0,0,0"/>
+            </StackPanel>
+        </StackPanel>
+        <StackPanel>
+            <TextBlock x:Name="TxtFile" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,16"/>
+            <GroupBox Header="1. Wafer 关系" Margin="0,0,0,12">
+                <StackPanel Margin="10">
+                    <StackPanel Orientation="Horizontal">
+                        <RadioButton x:Name="NewWafer" GroupName="Wafer" Content="不同 wafer" IsChecked="True" Margin="0,0,24,0"/>
+                        <RadioButton x:Name="SameWafer" GroupName="Wafer" Content="同 wafer"/>
+                    </StackPanel>
+                    <ComboBox x:Name="CmbTargetWafer" Margin="0,10,0,0" IsEnabled="{Binding IsChecked, ElementName=SameWafer}"/>
+                </StackPanel>
+            </GroupBox>
+            <GroupBox Header="2. 测试项匹配方式" Margin="0,0,0,12">
+                <StackPanel Orientation="Horizontal" Margin="10">
+                    <RadioButton x:Name="MatchNumber" GroupName="Match" Content="按序号" Margin="0,0,32,0"/>
+                    <RadioButton x:Name="MatchName" GroupName="Match" Content="按测试项名称" IsChecked="True"/>
+                </StackPanel>
+            </GroupBox>
+            <GroupBox Header="3. 已匹配测试项的阈值" Margin="0,0,0,12">
+                <StackPanel Orientation="Horizontal" Margin="10">
+                    <RadioButton x:Name="OldLimits" GroupName="Limits" Content="使用旧文件阈值" IsChecked="True" Margin="0,0,24,0"/>
+                    <RadioButton x:Name="NewLimits" GroupName="Limits" Content="使用新文件阈值"/>
+                </StackPanel>
+            </GroupBox>
+            <TextBlock Text="保留全部原始记录，统计按主列表选项计算；Map 同 wafer、同坐标取最新值。未匹配的测试项作为新项保留。"
+                       Foreground="DimGray" TextWrapping="Wrap"/>
+        </StackPanel>
+    </DockPanel>
+</Window>
