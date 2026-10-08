@@ -4,5 +4,6 @@ public enum RetestMode
 {
     All,
     First,
-    Last
+    Last,
+    OnlyRetests
 }
