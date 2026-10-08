@@ -1,6 +1,6 @@
 # Semiconductor Data Analyzer
 
-**CSV Analyzer V2.0 · GYF**
+**CSV Analyzer V2.0.1 · GYF**
 
 A Windows desktop application for semiconductor CSV / STDF test-data analysis, built with .NET 8 and WPF.
 
@@ -13,11 +13,15 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 - **Run / Value**：按序列号浏览原始记录；缺失或重复序列号自动编号，保留复测身份；超限 Value 标红，良率渐变着色。
 - **图表与 Map**：直方图、散点图、SBIN / HBIN / P/F Map；支持多晶圆、均值中心热力图、Site 边框和 BIN 数字。
 - **BIN / Wafer Table**：自定义 SBIN 分类，按 Site、Wafer 比较数量及占比。
-- **复测与整合**：首测与复测均保留、仅首测、复测覆盖首测；可追加数据并选择测项匹配方式及限值来源。
+- **复测与整合**：首测与复测均保留、仅首测、复测覆盖首测；支持多文件批量追加、调整导入顺序，并选择测项匹配方式及限值来源。整批成功后统一刷新，失败时保留当前数据。
 - **阈值模拟与良率预测**：确认有效测项、调整上下限或关闭测项，联合判断整颗芯片；缺测预测区分确认结果、估计结果与无法估计。
 - **导出**：整合 CSV、可选离群值剔除、四工作表 XLSX 报告及关注项图表。使用 ClosedXML，不依赖安装 Excel。
 
 详细操作与统计口径见 [使用手册](Docs/UserGuide.md)，也可在程序“关于 → 详细说明”中离线阅读。
+
+## 下载运行
+
+从 [GitHub Releases](https://github.com/ttt3t/semiconductor-data-analyzer/releases/latest) 下载 Windows x64 ZIP，解压后双击其中的 EXE。程序为自包含单文件版本，无需安装 .NET 或 Excel。CSV 导入前请在“设置”加载或调整布局配置；STDF 可直接打开。
 
 ## 开发与运行
 
@@ -29,13 +33,13 @@ dotnet build SemiconductorCsvAnalyzer.csproj -c Release
 dotnet run --project SemiconductorCsvAnalyzer.csproj -c Release
 ```
 
-发布为 Windows x64 自包含程序：
+发布为 Windows x64 自包含单文件程序：
 
 ```powershell
-dotnet publish SemiconductorCsvAnalyzer.csproj -c Release -r win-x64 --self-contained true -o artifacts/win-x64
+dotnet publish SemiconductorCsvAnalyzer.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -o artifacts/win-x64
 ```
 
-发布目录包含程序及运行所需文件。WPF 界面仅支持 Windows。
+将发布目录中的 `SemiconductorCsvAnalyzer.exe` 压缩为 ZIP 即可分发，PDB 无需附带；示例 `config.ini` 可按需要单独使用。首次运行后可在设置中定义并保存自己的配置。WPF 界面仅支持 Windows。
 
 ## CSV 示例配置
 

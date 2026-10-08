@@ -302,11 +302,11 @@ public partial class MainWindow : Window
         await OpenDataAsync(path, mode.Value);
     }
 
-    private StdfImportMode? SelectStdfMode(string path)
+    private StdfImportMode? SelectStdfMode(string path, int fileCount = 1)
     {
         if (!File.Exists(path)) throw new FileNotFoundException("找不到数据文件：" + path);
         if (!DataFileService.IsStdf(path)) return StdfImportMode.Standard;
-        var options = new StdfImportWindow(path) { Owner = this };
+        var options = new StdfImportWindow(path, fileCount) { Owner = this };
         if (_uiPreferences.Value.DefaultStdfMode == StdfImportMode.Advantest93K)
             ((RadioButton)options.FindName("Mode93K")).IsChecked = true;
         return options.ShowDialog() == true ? options.SelectedMode : null;
@@ -343,24 +343,27 @@ public partial class MainWindow : Window
         if (_isBusy) return;
         if (_data.Records.Count == 0)
         { MessageBox.Show("请先打开基础数据。", "导入新数据", MessageBoxButton.OK, MessageBoxImage.Information); return; }
-        var file = new OpenFileDialog { Filter = DataFileService.OpenFilter, Title = "选择要导入的新数据" };
+        var file = new OpenFileDialog { Filter = DataFileService.OpenFilter, Title = "选择要追加的数据（支持多选 / 批量导入）", Multiselect = true };
         if (file.ShowDialog(this) != true) return;
-        var choices = new ImportDataWindow(Path.GetFileName(file.FileName), _data.Wafers) { Owner = this };
+        var choices = new ImportDataWindow(file.FileNames, _data.Wafers) { Owner = this };
         if (choices.ShowDialog() != true) return;
         try
         {
-            var mode = SelectStdfMode(file.FileName);
+            var paths = choices.SelectedFiles;
+            var stdfFiles = paths.Where(DataFileService.IsStdf).ToArray();
+            var mode = stdfFiles.Length == 0 ? StdfImportMode.Standard : SelectStdfMode(stdfFiles[0], stdfFiles.Length);
             if (!mode.HasValue) return;
+            var sources = paths.Select(path => new CsvImportSource(path, choices.Options, mode.Value)).ToArray();
             await RunBusyAsync(async () =>
             {
-                var merged = await Task.Run(() => DatasetService.Merge(_data, DataFileService.Parse(file.FileName, _config, stdfMode: mode.Value), choices.Options!));
+                var merged = await Task.Run(() => DatasetService.AppendSources(_data, sources, _config));
                 var prepared = await PrepareAnalysisAsync(merged, _config);
                 CommitAnalysis(merged, prepared);
-                _sources.Add(new CsvImportSource(file.FileName, choices.Options, mode.Value));
+                _sources.AddRange(sources);
                 TxtCsvName.Text = $"整合数据（{_sources.Count} 个文件 / {_data.Wafers.Count} 个 wafer）";
                 RefreshOpenMaps();
-                _recentFiles.RememberCsv(file.FileName);
-                TxtStatus.Text = $"已导入 {Path.GetFileName(file.FileName)}，原始测试记录全部保留";
+                foreach (string path in paths) _recentFiles.RememberCsv(path);
+                TxtStatus.Text = $"已导入 {paths.Length} 个文件，原始测试记录全部保留";
                 ShowSerialNumberNotice(merged);
             });
         }
