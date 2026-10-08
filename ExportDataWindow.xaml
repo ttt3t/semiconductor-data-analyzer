@@ -1,7 +1,7 @@
 <Window x:Class="SemiconductorCsvAnalyzer.ExportDataWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="导出数据" Width="570" Height="670" MinWidth="490" MinHeight="590"
+        Title="导出数据" Width="570" Height="700" MinWidth="490" MinHeight="620"
         WindowStartupLocation="CenterOwner">
     <DockPanel Margin="20">
         <StackPanel x:Name="ExportOptions" DockPanel.Dock="Bottom" Margin="0,12,0,0">
@@ -9,9 +9,10 @@
                 <StackPanel Margin="12">
                     <RadioButton x:Name="KeepAll" Content="首测与复测均保留" IsChecked="True" Margin="0,0,0,8"/>
                     <RadioButton x:Name="KeepFirst" Content="只保留首测" Margin="0,0,0,8"/>
-                    <RadioButton x:Name="KeepLast" Content="复测覆盖首测"/>
+                    <RadioButton x:Name="KeepLast" Content="复测覆盖首测" Margin="0,0,0,8"/>
+                    <RadioButton x:Name="KeepRetests" Content="只保留复测" ToolTip="每颗芯片、每个测项去掉首次，保留后续全部复测；仅测一次的项不计入。"/>
                     <TextBlock Margin="0,12,0,0" Foreground="DimGray" TextWrapping="Wrap"
-                               Text="与 Testitem Yield 一致，按晶圆、芯片及测试项选择首末记录。部分复测未测到的项目保留原记录；原文格式与异常值一并导出。"/>
+                               Text="与 Testitem Yield 一致，按晶圆、芯片及测试项选择记录。只保留复测会去掉各测项首次，保留后续全部复测；原文格式与异常值一并导出。"/>
                 </StackPanel>
             </GroupBox>
 

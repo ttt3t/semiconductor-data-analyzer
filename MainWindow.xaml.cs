@@ -30,6 +30,7 @@ public partial class MainWindow : Window
     private string _currentSite = TestItemSummary.CombinedSite;
     private string _lastConfigPath = "";
     private string _currentCsvPath = "";
+    private string _currentDataName = "尚未打开文件";
     private CsvParseResult _data = new();
     private List<CsvImportSource> _sources = new();
     private readonly List<(WaferMapWindow Window, Func<CsvParseResult, IReadOnlyList<WaferMapPage>> Pages)> _openMaps = new();
@@ -201,7 +202,7 @@ public partial class MainWindow : Window
             }
         }
 
-        TxtConfigName.Text = "(未加载配置)";
+        UpdateWindowTitle();
         TxtStatus.Text = "请先加载配置文件";
     }
 
@@ -233,9 +234,15 @@ public partial class MainWindow : Window
         });
     }
 
+    private void UpdateWindowTitle()
+    {
+        string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
+        Title = $"CSV Analyzer · V2.0.1 | 当前数据：{_currentDataName} | 配置：{configName}";
+    }
+
     private void UpdateConfigInfo()
     {
-        TxtConfigName.Text = _config.ConfigFileName;
+        UpdateWindowTitle();
         TxtBottomInfo.Text = $"TestItemRow={_config.TestItemRow}  DataStartRow={_config.DataStartRow}  StartCol={_config.TestItemStartColumn}";
         CmbBinMode.SelectedIndex = _config.BinMode.ToUpperInvariant() switch
         {
@@ -328,7 +335,8 @@ public partial class MainWindow : Window
             CommitAnalysis(result, prepared);
             _sources = new List<CsvImportSource> { new(path, StdfMode: mode) };
             _currentCsvPath = path;
-            TxtCsvName.Text = Path.GetFileName(path);
+            _currentDataName = Path.GetFileName(path);
+            UpdateWindowTitle();
             RefreshOpenMaps();
             TxtStatus.Text = _recentFiles.RememberCsv(path) ? "解析完成" : "解析完成（最近文件记录未能保存）";
             if (result.SourceDescription.Length > 0) TxtStatus.Text += " | " + result.SourceDescription;
@@ -360,7 +368,8 @@ public partial class MainWindow : Window
                 var prepared = await PrepareAnalysisAsync(merged, _config);
                 CommitAnalysis(merged, prepared);
                 _sources.AddRange(sources);
-                TxtCsvName.Text = $"整合数据（{_sources.Count} 个文件 / {_data.Wafers.Count} 个 wafer）";
+                _currentDataName = $"整合数据（{_sources.Count} 个文件 / {_data.Wafers.Count} 个 wafer）";
+                UpdateWindowTitle();
                 RefreshOpenMaps();
                 foreach (string path in paths) _recentFiles.RememberCsv(path);
                 TxtStatus.Text = $"已导入 {paths.Length} 个文件，原始测试记录全部保留";
@@ -414,7 +423,7 @@ public partial class MainWindow : Window
         {
             await RunBusyAsync(async () =>
             {
-                await XlsxReportService.SaveAsync(file.FileName, _data, _config, report, TxtCsvName.Text);
+                await XlsxReportService.SaveAsync(file.FileName, _data, _config, report, _currentDataName);
                 TxtStatus.Text = $"报告已导出：4 个工作表，{focused.Length} 个关注测项";
             });
         }
