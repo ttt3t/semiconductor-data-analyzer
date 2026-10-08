@@ -142,20 +142,33 @@ public static class DatasetService
     {
         if (sources.Count == 0) throw new InvalidDataException("没有可重新读取的数据文件。");
         var result = DataFileService.Parse(sources[0].Path, config, stdfMode: sources[0].StdfMode);
-        foreach (var source in sources.Skip(1))
+        return sources.Count == 1 ? result : AppendSources(result, sources.Skip(1).ToArray(), config);
+    }
+
+    /// <summary>Append in explicit order, then build columns once. The active dataset is never mutated.</summary>
+    public static CsvParseResult AppendSources(CsvParseResult existing, IReadOnlyList<CsvImportSource> sources,
+        AnalyzerConfig config)
+    {
+        if (sources.Count == 0) throw new InvalidDataException("请至少选择一个追加文件。");
+        var result = existing;
+        foreach (var source in sources)
         {
-            string priorNotice = result.SerialNumberNotice;
-            result = Merge(result, DataFileService.Parse(source.Path, config, stdfMode: source.StdfMode), source.Options!);
-            if (priorNotice.Length > 0)
+            try
             {
-                result.SerialNumberNotice = priorNotice + (result.SerialNumberNotice.Length > 0 ? "\n\n" + result.SerialNumberNotice : "");
-                result.ReassignedSerialNumberCount = result.Records.Count(r => r.OriginalSerialNumber != null);
+                var incoming = DataFileService.Parse(source.Path, config, stdfMode: source.StdfMode);
+                result = MergeDefinitions(result, incoming, source.Options ??
+                    throw new InvalidDataException("追加文件缺少导入选项。"));
             }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            { throw new InvalidDataException($"文件“{Path.GetFileName(source.Path)}”导入失败：{ex.Message}", ex); }
         }
-        return result;
+        return CompleteMerge(result);
     }
 
     public static CsvParseResult Merge(CsvParseResult existing, CsvParseResult incoming, ImportOptions options)
+        => CompleteMerge(MergeDefinitions(existing, incoming, options));
+
+    private static CsvParseResult MergeDefinitions(CsvParseResult existing, CsvParseResult incoming, ImportOptions options)
     {
         if (incoming.Records.Count == 0) throw new InvalidDataException("新文件没有可导入的测试记录。");
         if (options.SameWafer && (!existing.Wafers.Contains(options.TargetWafer) || incoming.Wafers.Count != 1))
@@ -224,15 +237,24 @@ public static class DatasetService
                 Product = record.Product, Program = record.Program, Lot = record.Lot,
                 Measurements = Remap(record.Measurements)
             });
-        var merged = Build(items, records);
-        string incomingNotice = incoming.SerialNumberNotice;
+        return new CsvParseResult
+        {
+            Items = items, Records = records,
+            SerialNumberNotice = string.Join("\n\n", new[] { existing.SerialNumberNotice, incoming.SerialNumberNotice }
+                .Where(notice => notice.Length > 0)),
+            ReassignedSerialNumberCount = records.Count(r => r.OriginalSerialNumber != null)
+        };
+    }
+
+    private static CsvParseResult CompleteMerge(CsvParseResult definitions)
+    {
+        var merged = Build(definitions.Items, definitions.Records);
+        string priorNotice = definitions.SerialNumberNotice;
+        merged.ReassignedSerialNumberCount = definitions.ReassignedSerialNumberCount;
         if (SerialNumberService.Normalize(merged))
             merged.SerialNumberNotice = "整合数据：" + merged.SerialNumberNotice;
-        if (incomingNotice.Length > 0)
-        {
-            merged.SerialNumberNotice = incomingNotice + (merged.SerialNumberNotice.Length > 0 ? "\n\n" + merged.SerialNumberNotice : "");
-            if (merged.ReassignedSerialNumberCount == 0) merged.ReassignedSerialNumberCount = incoming.ReassignedSerialNumberCount;
-        }
+        if (priorNotice.Length > 0)
+            merged.SerialNumberNotice = priorNotice + (merged.SerialNumberNotice.Length > 0 ? "\n\n" + merged.SerialNumberNotice : "");
         return merged;
     }
 
