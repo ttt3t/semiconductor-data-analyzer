@@ -34,7 +34,8 @@ public static class DatasetService
     public static List<CsvRecord> SelectRetestRecords(List<CsvRecord> source, RetestMode mode)
     {
         if (mode == RetestMode.All) return source;
-        if (mode != RetestMode.First && mode != RetestMode.Last) throw new ArgumentOutOfRangeException(nameof(mode));
+        if (mode != RetestMode.First && mode != RetestMode.Last && mode != RetestMode.OnlyRetests)
+            throw new ArgumentOutOfRangeException(nameof(mode));
         var groups = new Dictionary<(string Wafer, int? X, int? Y, string Fallback), List<CsvRecord>>();
         foreach (var record in source)
         {
@@ -42,14 +43,34 @@ public static class DatasetService
             if (!groups.TryGetValue(key, out var group)) groups[key] = group = new();
             group.Add(record);
         }
-        if (groups.Count == source.Count) return source;
+        if (groups.Count == source.Count)
+            return mode == RetestMode.OnlyRetests ? new List<CsvRecord>() : source;
         // Select per measurement: a partial retest must not remove other tests on the same chip.
         // Work on one chip at a time instead of indexing every cell in the whole file.
         var retained = new Dictionary<CsvRecord, HashSet<string>>();
         var unique = new HashSet<CsvRecord>();
         foreach (var group in groups.Values)
         {
-            if (group.Count == 1) { unique.Add(group[0]); continue; }
+            if (group.Count == 1)
+            {
+                if (mode != RetestMode.OnlyRetests) unique.Add(group[0]);
+                continue;
+            }
+            if (mode == RetestMode.OnlyRetests)
+            {
+                // The first occurrence is determined per test, including invalid values.
+                // A test first measured during a partial retest is still its first test.
+                var seen = new HashSet<string>();
+                foreach (var record in group)
+                    foreach (string test in record.Measurements.Keys)
+                        if (!seen.Add(test))
+                        {
+                            if (!retained.TryGetValue(record, out var measurements))
+                                retained[record] = measurements = new HashSet<string>();
+                            measurements.Add(test);
+                        }
+                continue;
+            }
             var chosen = new Dictionary<string, CsvRecord>();
             foreach (var record in group)
                 foreach (string test in record.Measurements.Keys)

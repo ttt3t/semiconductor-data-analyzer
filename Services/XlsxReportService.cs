@@ -129,13 +129,15 @@ public static class XlsxReportService
 
     private static string SiteKey(string site) => string.IsNullOrWhiteSpace(site) ? "(空)" : site;
     private static string ModeName(RetestMode mode) => mode switch
-    { RetestMode.First => "只保留首测", RetestMode.Last => "复测覆盖首测", _ => "首测与复测均保留" };
+    { RetestMode.First => "只保留首测", RetestMode.Last => "复测覆盖首测",
+        RetestMode.OnlyRetests => "只保留复测", _ => "首测与复测均保留" };
     private static string HistogramName(int mode) => mode switch { 1 => "规格区间", 2 => "中位数中心", _ => "固定等宽" };
     private static string Context(XlsxReportOptions options) =>
         $"晶圆 {options.Wafers.Count} 个 | {ModeName(options.RetestMode)} | " +
         (options.OutlierSigma.HasValue ? $"剔除均值 ± {options.OutlierSigma.Value:G}σ 以外的测项值（单次）" : "不剔除离群点") +
         (options.CombineSites ? " | 合并 Site" : " | 按 Site 分行");
     private static string BinContext(XlsxReportOptions options) =>
+        (options.RetestMode == RetestMode.OnlyRetests ? "仅统计有复测测项的芯片；" : "") +
         "按晶圆与芯片选择整条" + (options.RetestMode == RetestMode.First ? "首测" : "末测") +
         "记录；Map 仅绘制有完整坐标的芯片。BIN 占比以有相应 BIN 的芯片为分母。";
 
@@ -228,6 +230,12 @@ public static class XlsxReportService
         foreach (string wafer in data.Wafers.Where(options.Wafers.Contains))
         {
             var raw = data.Records.Where(r => r.WaferId == wafer).ToList();
+            if (options.RetestMode == RetestMode.OnlyRetests)
+            {
+                var retested = DatasetService.SelectRetestRecords(raw, RetestMode.OnlyRetests)
+                    .Select(DatasetService.ChipKey).ToHashSet();
+                raw = raw.Where(r => retested.Contains(DatasetService.ChipKey(r))).ToList();
+            }
             var chosen = new Dictionary<(string Wafer, int? X, int? Y, string Fallback), CsvRecord>();
             foreach (var record in raw)
             {
@@ -249,7 +257,8 @@ public static class XlsxReportService
             var map = new WaferMapControl { Dies = dies,
                 ShowBinNumbers = options.ShowBinNumbers, ShowSiteBorders = options.ShowSiteBorders };
             if (dies.Count > 0) Plot(sheet, row + 3, 2, map, "Wafer_" + index++, 740, 500);
-            else sheet.Cell(row + 4, 2).Value = "该晶圆没有完整 X/Y 坐标，无法绘制 Map；统计如下。";
+            else sheet.Cell(row + 4, 2).Value = raw.Count == 0
+                ? "该晶圆没有符合当前复测口径的记录。" : "该晶圆没有完整 X/Y 坐标，无法绘制 Map；统计如下。";
             map.Dies = null;
             WriteHeader(sheet, row + 3, 13, "颜色", soft ? "SBIN" : "HBIN");
             int legendRow = row + 4;
