@@ -33,16 +33,19 @@ public static class MapDataService
         }).ToList();
     }
 
-    public static List<WaferMapPage> BinPages(CsvParseResult data, Func<DeviceInfo, string> selector) =>
-        data.Wafers.Select(wafer => new WaferMapPage(wafer,
+    public static List<WaferMapPage> BinPages(CsvParseResult data, bool soft)
+    {
+        var colors = BinPalette.Create(data.Records.Select(r => soft ? r.SBin : r.HBin));
+        return data.Wafers.Select(wafer => new WaferMapPage(wafer,
             data.Devices.Where(d => d.WaferId == wafer && d.X.HasValue && d.Y.HasValue).Select(d =>
             {
-                string category = selector(d);
+                string category = BinPalette.Key(soft ? d.SBin : d.HBin);
                 return new WaferDie
                 {
                     WaferId = wafer, X = d.X!.Value, Y = d.Y!.Value, Site = d.Site, SerialNumber = d.SerialNumber,
                     SBin = d.SBin, HBin = d.HBin, Result = d.Result,
-                    Category = category, Color = WaferMapWindow.ColorForCategory(category)
+                    Category = category, Color = colors[category]
                 };
             }).ToList())).ToList();
+    }
 }

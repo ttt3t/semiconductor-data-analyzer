@@ -24,6 +24,8 @@ public static class DatasetService
 
     internal static (string Wafer, int? X, int? Y, string Fallback) ChipKey(CsvRecord record)
     {
+        if (record.IsFtIdentity)
+            return ("", null, null, !string.IsNullOrEmpty(record.RetestUuid) ? "UUID:" + record.RetestUuid : "ROW:" + record.Id);
         bool coordinates = record.X.HasValue && record.Y.HasValue;
         string fallback = coordinates ? "" : !string.IsNullOrWhiteSpace(record.ChipSerialNumber)
             ? "SN:" + record.ChipSerialNumber.Trim() : "ROW:" + record.Id;
@@ -93,6 +95,7 @@ public static class DatasetService
                 {
                     Id = record.Id, WaferId = record.WaferId, SerialNumber = record.SerialNumber,
                     OriginalSerialNumber = record.OriginalSerialNumber,
+                    IsFtIdentity = record.IsFtIdentity, RetestUuid = record.RetestUuid, UuidTestNumbers = record.UuidTestNumbers,
                     X = record.X, Y = record.Y, Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
                     Product = record.Product, Program = record.Program, Lot = record.Lot,
                     Measurements = record.Measurements.SelectKeys(measurements)
@@ -148,7 +151,8 @@ public static class DatasetService
                 new[] { record.ChipSerialNumber, record.Site, record.SBin, record.HBin }.All(string.IsNullOrWhiteSpace) &&
                 rawBlank;
             if (blank) continue;
-            var key = (record.WaferId, record.X, record.Y, record.X.HasValue && record.Y.HasValue ? "" : record.Id);
+            var key = record.IsFtIdentity ? ChipKey(record) :
+                (record.WaferId, record.X, record.Y, record.X.HasValue && record.Y.HasValue ? "" : record.Id);
             devices[key] = new DeviceInfo
             {
                 WaferId = record.WaferId, SerialNumber = record.SerialNumber, X = record.X, Y = record.Y,
@@ -254,6 +258,7 @@ public static class DatasetService
             {
                 WaferId = waferMap[record.WaferId], SerialNumber = record.SerialNumber, X = record.X, Y = record.Y,
                 OriginalSerialNumber = record.OriginalSerialNumber,
+                IsFtIdentity = record.IsFtIdentity, RetestUuid = record.RetestUuid, UuidTestNumbers = record.UuidTestNumbers,
                 Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
                 Product = record.Product, Program = record.Program, Lot = record.Lot,
                 Measurements = Remap(record.Measurements)
@@ -283,6 +288,7 @@ public static class DatasetService
     {
         Id = record.Id, WaferId = record.WaferId, SerialNumber = record.SerialNumber,
         OriginalSerialNumber = record.OriginalSerialNumber,
+        IsFtIdentity = record.IsFtIdentity, RetestUuid = record.RetestUuid, UuidTestNumbers = record.UuidTestNumbers,
         X = record.X, Y = record.Y, Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
         Product = record.Product, Program = record.Program, Lot = record.Lot,
         Measurements = record.Measurements
@@ -304,7 +310,8 @@ public static class DatasetService
                 }
                 if (rawBlank) continue;
             }
-            var keyForDevice = (record.WaferId, record.X, record.Y, record.X.HasValue && record.Y.HasValue ? "" : record.Id);
+            var keyForDevice = record.IsFtIdentity ? ChipKey(record) :
+                (record.WaferId, record.X, record.Y, record.X.HasValue && record.Y.HasValue ? "" : record.Id);
             devices[keyForDevice] = new DeviceInfo
             {
                 WaferId = record.WaferId, SerialNumber = record.SerialNumber, X = record.X, Y = record.Y,

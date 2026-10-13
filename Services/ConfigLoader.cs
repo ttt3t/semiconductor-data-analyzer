@@ -87,6 +87,11 @@ public static class ConfigLoader
             case "YCOLUMN": c.YColumn = ParseNonNegativeInt(key, value); break;
             case "SITECOLUMN": c.SiteColumn = ParseNonNegativeInt(key, value); break;
             case "WAFERCOLUMN": c.WaferColumn = ParseNonNegativeInt(key, value); break;
+            case "TESTMODE":
+                if (!Enum.TryParse<TestAnalysisMode>(value, true, out var testMode) || !Enum.IsDefined(testMode))
+                    throw new InvalidDataException("TestMode 必须为 CP 或 FT。");
+                c.TestMode = testMode; break;
+            case "UUIDTESTNUMBERS": c.UuidTestNumbers = RetestIdentityService.ParseTestNumbers(value); break;
             // Accept old files for migration, but never read/filter using their P/F column.
             case "RESULTCOLUMN": case "PASSTEXT": case "FAILTEXT": case "IGNOREFAILEDDEVICES": break;
             case "SBINCOLUMN": c.SBinColumn = ParseNonNegativeInt(key, value); break;
@@ -128,6 +133,8 @@ public static class ConfigLoader
 
     private static void Validate(AnalyzerConfig c)
     {
+        if (c.TestMode == TestAnalysisMode.FT && c.UuidTestNumbers.Count == 0)
+            throw new InvalidDataException("FT 模式请指定至少一个 eFuse/OTP UUID Test Num。");
         var pass = c.PassHBins.Select(BinStatisticsService.NormalizeBin).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (c.PartialPassHBins.Select(BinStatisticsService.NormalizeBin).Any(pass.Contains))
             throw new InvalidDataException("PassHBins 与 PartialPassHBins 不允许重叠。");
@@ -228,6 +235,10 @@ public static class ConfigLoader
             ProductColumn={c.ProductColumn}
             ProgramColumn={c.ProgramColumn}
             LotColumn={c.LotColumn}
+
+            [RetestIdentity]
+            TestMode={c.TestMode}
+            UuidTestNumbers={string.Join(",", c.UuidTestNumbers)}
 
             [HBINClassification]
             PassHBins={string.Join(",", c.PassHBins)}

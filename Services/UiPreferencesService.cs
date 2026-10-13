@@ -10,7 +10,8 @@ public sealed class UiPreferencesService
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
-        Converters = { new JsonStringEnumConverter<StdfImportMode>(allowIntegerValues: false) }
+        Converters = { new JsonStringEnumConverter<StdfImportMode>(allowIntegerValues: false),
+            new JsonStringEnumConverter<RunSelectionMode>(allowIntegerValues: false) }
     };
     public static UiPreferencesService Current { get; } = new();
     private readonly string _path;
@@ -28,6 +29,7 @@ public sealed class UiPreferencesService
                 ? JsonSerializer.Deserialize<UiPreferences>(File.ReadAllText(_path), JsonOptions) ?? new()
                 : new();
             if (!Enum.IsDefined(_value.DefaultStdfMode)) _value = new();
+            if (!Enum.IsDefined(_value.RunSelection)) _value.RunSelection = RunSelectionMode.SerialNumber;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         { _value = new(); }
@@ -40,6 +42,8 @@ public sealed class UiPreferencesService
         var next = preferences.Clone();
         if (!Enum.IsDefined(next.DefaultStdfMode))
             throw new ArgumentException("不支持的 STDF 默认导入模式。", nameof(preferences));
+        if (!Enum.IsDefined(next.RunSelection))
+            throw new ArgumentException("不支持的 Run 选取模式。", nameof(preferences));
         string path = Path.GetFullPath(_path);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";

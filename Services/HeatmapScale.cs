@@ -7,16 +7,18 @@ public sealed class HeatmapScale
     private static readonly SolidColorBrush[] Palette = CreatePalette();
     public double Minimum { get; }
     public double Mean { get; }
+    public double Center { get; }
     public double Sigma { get; }
     public double Maximum { get; }
     public double DataMinimum { get; }
     public double DataMaximum { get; }
 
     private HeatmapScale(double minimum, double mean, double maximum, double sigma,
-        double dataMinimum, double dataMaximum)
+        double dataMinimum, double dataMaximum, double? center = null)
     {
         Minimum = minimum; Mean = mean; Maximum = maximum; Sigma = sigma;
         DataMinimum = dataMinimum; DataMaximum = dataMaximum;
+        Center = center ?? mean;
     }
 
     public static HeatmapScale? Create(IEnumerable<double> values)
@@ -44,17 +46,24 @@ public sealed class HeatmapScale
     {
         if (!value.HasValue || !double.IsFinite(value.Value)) return Brushes.Gray;
         double v = value.Value;
-        if (v == Mean) return Palette[256];
+        if (v == Center) return Palette[256];
         if (v <= Minimum) return Palette[0];
         if (v >= Maximum) return Palette[512];
-        // Independent sides keep the mean green in both sigma and min/max views.
-        double span = v < Mean ? Mean - Minimum : Maximum - Mean;
-        double ratio = double.IsFinite(span) ? (v - Mean) / span :
-            (v < Mean
-                ? (v * 0.5 - Mean * 0.5) / (Mean * 0.5 - Minimum * 0.5)
-                : (v * 0.5 - Mean * 0.5) / (Maximum * 0.5 - Mean * 0.5));
+        // Independent sides keep the chosen center green even for asymmetric ranges.
+        double span = v < Center ? Center - Minimum : Maximum - Center;
+        double ratio = double.IsFinite(span) ? (v - Center) / span :
+            (v < Center
+                ? (v * 0.5 - Center * 0.5) / (Center * 0.5 - Minimum * 0.5)
+                : (v * 0.5 - Center * 0.5) / (Maximum * 0.5 - Center * 0.5));
         int index = (int)Math.Round(256 + 256 * Math.Clamp(ratio, -1, 1));
         return Palette[Math.Clamp(index, 0, 512)];
+    }
+
+    public HeatmapScale WithCustomRange(double blue, double green, double red)
+    {
+        if (!double.IsFinite(blue) || !double.IsFinite(green) || !double.IsFinite(red) || blue >= green || green >= red)
+            throw new ArgumentException("色标必须为有限数字，且蓝标 < 绿标 < 红标。");
+        return new(blue, Mean, red, Sigma, DataMinimum, DataMaximum, green);
     }
 
     private static SolidColorBrush[] CreatePalette()

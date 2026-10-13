@@ -27,7 +27,7 @@ public static class DataFileService
             : CsvParser.Parse(path, config, progress);
         if (SerialNumberService.Normalize(result, !stdf && !integrated && config.SerialNumberColumn <= 0))
             result.SerialNumberNotice = $"文件“{Path.GetFileName(path)}”：{result.SerialNumberNotice}";
-        return result;
+        return RetestIdentityService.Prepare(result, config);
     }
 }
 

@@ -5,14 +5,17 @@ namespace SemiconductorCsvAnalyzer.Services;
 public static class StatisticsService
 {
     public static double? CalculateSiteYieldSigma(TestItemData item)
+        => CalculateSiteYieldSigma(item.Values, item.LowLimit, item.HighLimit);
+
+    public static double? CalculateSiteYieldSigma(IReadOnlyList<TestValue> values, double? lowLimit, double? highLimit)
     {
         var sites = new Dictionary<string, (int Count, int InSpec)>();
-        foreach (var value in item.Values)
+        foreach (var value in values)
         {
             string site = string.IsNullOrWhiteSpace(value.Site) ? "(空)" : value.Site;
             sites.TryGetValue(site, out var counts);
-            bool failed = (item.LowLimit.HasValue && value.Value < item.LowLimit.Value) ||
-                (item.HighLimit.HasValue && value.Value > item.HighLimit.Value);
+            bool failed = (lowLimit.HasValue && value.Value < lowLimit.Value) ||
+                (highLimit.HasValue && value.Value > highLimit.Value);
             sites[site] = (counts.Count + 1, counts.InSpec + (failed ? 0 : 1));
         }
         var yields = sites.Values.Select(s => 100.0 * s.InSpec / s.Count).ToArray();
@@ -70,7 +73,7 @@ public static class StatisticsService
         double sum = 0;
         double min = double.PositiveInfinity;
         double max = double.NegativeInfinity;
-        int below = 0, above = 0;
+        int below = 0, above = 0, inSpec = 0;
 
         for (int i = 0; i < n; i++)
         {
@@ -80,6 +83,8 @@ public static class StatisticsService
             if (x > max) max = x;
             if (lsl.HasValue && x < lsl.Value) below++;
             if (usl.HasValue && x > usl.Value) above++;
+            // Count each sample once, including malformed overlapping limits.
+            if ((!lsl.HasValue || x >= lsl.Value) && (!usl.HasValue || x <= usl.Value)) inSpec++;
         }
 
         double mean = sum / n;
@@ -91,7 +96,6 @@ public static class StatisticsService
         }
 
         double sigma = Math.Sqrt(varSum / n);
-        int inSpec = n - below - above;
 
         var result = new StatisticsResult
         {

@@ -3,8 +3,9 @@ using SemiconductorCsvAnalyzer.Models;
 namespace SemiconductorCsvAnalyzer.Services;
 
 public readonly record struct ScatterPoint(int Index, double Value, bool OutOfSpec);
+public readonly record struct ScatterGroup(string Name, int StartIndex, int EndIndex);
 
-/// <summary>Every finite measurement in acquisition order. No sampled or aggregated levels.</summary>
+/// <summary>Every finite measurement. No sampled or aggregated levels.</summary>
 public sealed class ScatterSeries
 {
     public static ScatterSeries Empty { get; } = new();
@@ -12,6 +13,74 @@ public sealed class ScatterSeries
     public int SampleCount { get; private init; }
     public double Minimum { get; private init; }
     public double Maximum { get; private init; }
+    public ScatterOrder Order { get; private init; } = ScatterOrder.SerialNumber;
+    public ScatterGroup[] Groups { get; private init; } = Array.Empty<ScatterGroup>();
+
+    private readonly record struct SortKey(int SourceIndex, int Wafer, double SiteNumber, string Site,
+        double SerialNumber, string Serial);
+
+    public static ScatterSeries BuildSorted(IReadOnlyList<TestValue> values, double? lsl, double? usl,
+        ScatterOrder order, CancellationToken token = default, IReadOnlyList<string>? waferOrder = null)
+    {
+        token.ThrowIfCancellationRequested();
+        var keys = new SortKey[values.Count];
+        var wafers = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (waferOrder != null)
+            foreach (string wafer in waferOrder) wafers.TryAdd(wafer, wafers.Count);
+        for (int i = 0; i < values.Count; i++)
+        {
+            if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
+            var value = values[i];
+            if (!wafers.TryGetValue(value.WaferId, out int wafer))
+                wafers[value.WaferId] = wafer = wafers.Count;
+            string site = string.IsNullOrWhiteSpace(value.Site) ? "(空)" : value.Site;
+            keys[i] = new(i, wafer, NumericText.SortKey(site), site,
+                NumericText.SortKey(value.SerialNumber), value.SerialNumber);
+        }
+        int comparisons = 0;
+        try
+        {
+            Array.Sort(keys, (a, b) =>
+            {
+                if ((++comparisons & 4095) == 0) token.ThrowIfCancellationRequested();
+                int result = 0;
+                if (order == ScatterOrder.Site)
+                {
+                    result = a.SiteNumber.CompareTo(b.SiteNumber);
+                    if (result == 0) result = StringComparer.OrdinalIgnoreCase.Compare(a.Site, b.Site);
+                    if (result == 0) result = StringComparer.Ordinal.Compare(a.Site, b.Site);
+                }
+                else if (order == ScatterOrder.Wafer) result = a.Wafer.CompareTo(b.Wafer);
+                if (result == 0) result = a.SerialNumber.CompareTo(b.SerialNumber);
+                if (result == 0) result = StringComparer.OrdinalIgnoreCase.Compare(a.Serial, b.Serial);
+                // Stable ties retain acquisition order, including repeated test records.
+                return result != 0 ? result : a.SourceIndex.CompareTo(b.SourceIndex);
+            });
+        }
+        catch (InvalidOperationException) when (token.IsCancellationRequested) { token.ThrowIfCancellationRequested(); throw; }
+        token.ThrowIfCancellationRequested();
+        var indices = new int[keys.Length];
+        for (int i = 0; i < keys.Length; i++) indices[i] = keys[i].SourceIndex;
+        var series = Build(new IndexedTestValues(values, indices), lsl, usl, token);
+        if (order == ScatterOrder.SerialNumber) return series;
+        if (series.Points.Length == 0) return new ScatterSeries { Order = order };
+
+        // Only one small descriptor per contiguous group; measurement points retain their compact layout.
+        var groups = new List<ScatterGroup>();
+        int start = 0;
+        for (int i = 1; i <= keys.Length; i++)
+        {
+            if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
+            if (i < keys.Length && (order == ScatterOrder.Site
+                ? keys[i].Site == keys[start].Site : keys[i].Wafer == keys[start].Wafer)) continue;
+            string name = order == ScatterOrder.Site ? keys[start].Site : values[keys[start].SourceIndex].WaferId;
+            groups.Add(new(string.IsNullOrWhiteSpace(name) ? "(空)" : name, start + 1, i));
+            start = i;
+        }
+        token.ThrowIfCancellationRequested();
+        return new ScatterSeries { Points = series.Points, SampleCount = series.SampleCount,
+            Minimum = series.Minimum, Maximum = series.Maximum, Order = order, Groups = groups.ToArray() };
+    }
 
     public static ScatterSeries Build(IReadOnlyList<TestValue> values, double? lsl, double? usl,
         CancellationToken cancellationToken = default)
@@ -41,6 +110,17 @@ public sealed class ScatterSeries
         {
             int mid = lo + (hi - lo) / 2;
             if (points[mid].Index < index) lo = mid + 1; else hi = mid;
+        }
+        return lo;
+    }
+
+    public static int LowerBoundGroup(ScatterGroup[] groups, double index)
+    {
+        int lo = 0, hi = groups.Length;
+        while (lo < hi)
+        {
+            int mid = lo + (hi - lo) / 2;
+            if (groups[mid].EndIndex + 0.5 < index) lo = mid + 1; else hi = mid;
         }
         return lo;
     }

@@ -11,15 +11,17 @@ public static class IntegratedCsvService
     private const string Marker = "#CSVAnalyzerIntegrated,1";
     private const string Marker2 = "#CSVAnalyzerIntegrated,2";
     private const string Marker3 = "#CSVAnalyzerIntegrated,3";
+    private const string Marker4 = "#CSVAnalyzerIntegrated,4";
     private const int IdentityColumns = 10;
     private static readonly string[] ContextHeaders = { "Product", "Program", "Lot" };
     private static readonly string[] SourceSerialHeaders = { "OriginalSerialNumber", "SerialNumberReassigned" };
+    private static readonly string[] UuidHeaders = { "FtUuid", "UuidTestNumbers" };
     private static readonly string[] Headers = { "Wafer", "RecordId", "SerialNumber", "X", "Y", "Site", "Result", "SBIN", "HBIN", "MeasuredTests" };
 
     public static bool IsIntegrated(string path)
     {
         using var reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        return reader.ReadLine() is Marker or Marker2 or Marker3;
+        return reader.ReadLine() is Marker or Marker2 or Marker3 or Marker4;
     }
 
     public static void Save(string path, CsvParseResult data)
@@ -77,15 +79,17 @@ public static class IntegratedCsvService
         {
             using (var writer = new StreamWriter(temp, false, new UTF8Encoding(true)))
             {
-                bool sourceSerial = records.Any(r => r.OriginalSerialNumber != null);
+                bool ftIdentity = records.Any(r => r.RetestUuid != null);
+                bool sourceSerial = ftIdentity || records.Any(r => r.OriginalSerialNumber != null);
                 bool context = sourceSerial || records.Any(r => r.Product.Length + r.Program.Length + r.Lot.Length > 0);
-                int identityCount = IdentityColumns + (context ? 3 : 0) + (sourceSerial ? 2 : 0);
-                writer.WriteLine(sourceSerial ? Marker3 : context ? Marker2 : Marker);
+                int identityCount = IdentityColumns + (context ? 3 : 0) + (sourceSerial ? 2 : 0) + (ftIdentity ? 2 : 0);
+                writer.WriteLine(ftIdentity ? Marker4 : sourceSerial ? Marker3 : context ? Marker2 : Marker);
                 void Row(IEnumerable<string> fields) => writer.WriteLine(string.Join(",", fields.Select(Escape)));
                 void Metadata(string label, Func<TestItemData, string> value) =>
                     Row(new[] { label }.Concat(Enumerable.Repeat("", identityCount - 1)).Concat(items.Select(value)));
                 Row(Headers.Concat(context ? ContextHeaders : Array.Empty<string>())
-                    .Concat(sourceSerial ? SourceSerialHeaders : Array.Empty<string>()).Concat(items.Select(i => i.Name)));
+                    .Concat(sourceSerial ? SourceSerialHeaders : Array.Empty<string>())
+                    .Concat(ftIdentity ? UuidHeaders : Array.Empty<string>()).Concat(items.Select(i => i.Name)));
                 Metadata("#TestNumber", i => i.TestNumber);
                 Metadata("#LSL", i => Number(i.LowLimit));
                 Metadata("#USL", i => Number(i.HighLimit));
@@ -110,7 +114,8 @@ public static class IntegratedCsvService
                     Row(new[] { record.WaferId, record.Id, record.SerialNumber, record.X?.ToString(CultureInfo.InvariantCulture) ?? "",
                         record.Y?.ToString(CultureInfo.InvariantCulture) ?? "", record.Site, record.Result, record.SBin, record.HBin, new string(presence) }
                         .Concat(context ? new[] { record.Product, record.Program, record.Lot } : Array.Empty<string>())
-                        .Concat(sourceSerial ? new[] { record.OriginalSerialNumber ?? "", record.OriginalSerialNumber != null ? "1" : "0" } : Array.Empty<string>()).Concat(values));
+                        .Concat(sourceSerial ? new[] { record.OriginalSerialNumber ?? "", record.OriginalSerialNumber != null ? "1" : "0" } : Array.Empty<string>())
+                        .Concat(ftIdentity ? new[] { record.RetestUuid ?? "", record.UuidTestNumbers } : Array.Empty<string>()).Concat(values));
                 }
             }
             File.Move(temp, path, overwrite: true);
@@ -124,13 +129,15 @@ public static class IntegratedCsvService
         { TextFieldType = FieldType.Delimited, HasFieldsEnclosedInQuotes = true, TrimWhiteSpace = false };
         reader.SetDelimiters(",");
         var marker = reader.ReadFields();
-        bool sourceSerial = marker != null && string.Join(",", marker) == Marker3;
+        bool ftIdentity = marker != null && string.Join(",", marker) == Marker4;
+        bool sourceSerial = ftIdentity || marker != null && string.Join(",", marker) == Marker3;
         bool context = sourceSerial || marker != null && string.Join(",", marker) == Marker2;
-        int identityCount = IdentityColumns + (context ? 3 : 0) + (sourceSerial ? 2 : 0);
+        int identityCount = IdentityColumns + (context ? 3 : 0) + (sourceSerial ? 2 : 0) + (ftIdentity ? 2 : 0);
         if (marker == null || (!context && string.Join(",", marker) != Marker)) throw new InvalidDataException("不支持的整合 CSV 格式。");
         var header = reader.ReadFields() ?? throw new InvalidDataException("整合 CSV 缺少表头。");
         if (header.Length < identityCount || !header.Take(identityCount).SequenceEqual(Headers.Concat(context ? ContextHeaders : Array.Empty<string>())
-            .Concat(sourceSerial ? SourceSerialHeaders : Array.Empty<string>())))
+            .Concat(sourceSerial ? SourceSerialHeaders : Array.Empty<string>())
+            .Concat(ftIdentity ? UuidHeaders : Array.Empty<string>())))
             throw new InvalidDataException("整合 CSV 表头不完整。");
         string[] Metadata(string name)
         {
@@ -166,6 +173,7 @@ public static class IntegratedCsvService
                 {
                     WaferId = row[0], Id = row[1], SerialNumber = row[2], X = Coordinate(row[3]), Y = Coordinate(row[4]),
                     OriginalSerialNumber = sourceSerial && row[14] == "1" ? row[13] : null,
+                    IsFtIdentity = ftIdentity, RetestUuid = ftIdentity ? row[15] : null, UuidTestNumbers = ftIdentity ? row[16] : "",
                     Site = row[5], Result = row[6], SBin = row[7], HBin = row[8],
                     Product = context ? row[10] : "", Program = context ? row[11] : "", Lot = context ? row[12] : ""
                 };

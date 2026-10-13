@@ -5,4 +5,7 @@ public sealed partial class CsvParseResult
     public string SerialNumberNotice { get; set; } = "";
     public int ReassignedSerialNumberCount { get; set; }
     public bool SerialNumbersRenumbered => ReassignedSerialNumberCount > 0;
+    public string RetestIdentitySignature { get; set; } = "";
+    public string RetestIdentityNotice { get; set; } = "";
+    public int MissingUuidCount { get; set; }
 }
