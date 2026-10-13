@@ -94,10 +94,17 @@ public sealed class IndexedTestValues : IReadOnlyList<TestValue>
     public int Count => _indices.Count;
     public TestValue this[int index] => _source[_indices[index]];
     public static IndexedTestValues ForSite(IReadOnlyList<TestValue> source, string site)
+        => ForScope(source, site, null);
+
+    public static IndexedTestValues ForScope(IReadOnlyList<TestValue> source, string? site, string? wafer)
     {
         var indices = new List<int>();
         for (int i = 0; i < source.Count; i++)
-            if ((string.IsNullOrWhiteSpace(source[i].Site) ? "(空)" : source[i].Site) == site) indices.Add(i);
+        {
+            var value = source[i];
+            if ((site == null || (string.IsNullOrWhiteSpace(value.Site) ? "(空)" : value.Site) == site) &&
+                (wafer == null || value.WaferId == wafer)) indices.Add(i);
+        }
         return new(source, indices);
     }
     public IEnumerator<TestValue> GetEnumerator() { for (int i = 0; i < Count; i++) yield return this[i]; }

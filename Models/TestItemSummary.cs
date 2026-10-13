@@ -5,6 +5,7 @@ namespace SemiconductorCsvAnalyzer.Models;
 public sealed class TestItemSummary : INotifyPropertyChanged
 {
     public const string CombinedSite = "ALL";
+    public const string CombinedWafer = "ALL";
 
     public TestItemData Data { get; set; } = null!;
 
@@ -15,11 +16,17 @@ public sealed class TestItemSummary : INotifyPropertyChanged
     public string Unit => Data.Unit;
 
     public string Site { get; set; } = "";
+    public string Wafer { get; set; } = CombinedWafer;
+    // Keep this explicit: a source wafer may itself be named "ALL".
+    public bool IsWaferCombined { get; set; } = true;
     public string LslText { get; set; } = "-";
     public string UslText { get; set; } = "-";
 
     public long TestNumberValue { get; set; }
     public int Count { get; set; }
+    public int Fails { get; set; }
+    public double? Max { get; set; }
+    public double? Min { get; set; }
     public double Mean { get; set; }
     private double? _runValue;
     // Only this cell changes when browsing a Run. Statistical bindings stay OneTime.

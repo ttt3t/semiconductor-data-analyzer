@@ -13,6 +13,10 @@ public sealed class CsvRecord
     // Null means the source serial has never been replaced, while empty means it was absent.
     public string? OriginalSerialNumber { get; set; }
     public string ChipSerialNumber => OriginalSerialNumber ?? SerialNumber;
+    // Keep derived UUID metadata when switching back to CP; never overwrite the source SN.
+    public bool IsFtIdentity { get; set; }
+    public string? RetestUuid { get; set; }
+    public string UuidTestNumbers { get; set; } = "";
     public int? X { get; set; }
     public int? Y { get; set; }
     public string Site { get; set; } = "";

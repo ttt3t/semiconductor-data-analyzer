@@ -24,6 +24,7 @@ public struct TestValue
             {
                 Id = _record.Id, WaferId = _record.WaferId, SerialNumber = _record.SerialNumber,
                 OriginalSerialNumber = _record.OriginalSerialNumber,
+                IsFtIdentity = _record.IsFtIdentity, RetestUuid = _record.RetestUuid, UuidTestNumbers = _record.UuidTestNumbers,
                 Site = _record.Site, Result = _record.Result, SBin = _record.SBin, HBin = _record.HBin,
                 Product = _record.Product, Program = _record.Program, Lot = _record.Lot,
                 X = _record.X, Y = _record.Y

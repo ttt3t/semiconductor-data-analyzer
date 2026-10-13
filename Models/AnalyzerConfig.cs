@@ -26,6 +26,9 @@ public sealed class AnalyzerConfig
     public int SBinColumn { get; set; } = 0;
     public int HBinColumn { get; set; } = 0;
 
+    public TestAnalysisMode TestMode { get; set; } = TestAnalysisMode.CP;
+    public List<string> UuidTestNumbers { get; set; } = new();
+
     // Original disposition comes exclusively from HBIN; failed records are never filtered.
     public List<string> PassHBins { get; set; } = new() { "1" };
     public List<string> PartialPassHBins { get; set; } = new();
