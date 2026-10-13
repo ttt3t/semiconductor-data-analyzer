@@ -110,6 +110,28 @@
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
+            <TabItem x:Name="IdentityTab" Header="CP / FT">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="24">
+                        <TextBlock Text="测试与复测识别模式" Style="{StaticResource SectionTitle}"/>
+                        <RadioButton x:Name="ModeCP" Content="CP（默认）：沿用晶圆、坐标和原序列号识别" GroupName="TestMode" Margin="0,0,0,14" Checked="IdentityControlChanged"/>
+                        <RadioButton x:Name="ModeFT" Content="FT：读取 eFuse / OTP 芯片 UUID 识别复测" GroupName="TestMode" Margin="0,0,0,18" Checked="IdentityControlChanged"/>
+                        <TextBlock Style="{StaticResource HelpText}" Text="CP 沿用当前逻辑：同晶圆优先按完整 X/Y 坐标，无完整坐标时按原序列号。FT 按 UUID 识别同一颗芯片，跨 Site、坐标或晶圆标签仍可识别复测。"/>
+                        <StackPanel x:Name="FtIdentityPanel" Margin="0,22,0,0">
+                            <StackPanel.Style><Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers><DataTrigger Binding="{Binding IsChecked, ElementName=ModeFT}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                            </Style></StackPanel.Style>
+                            <TextBlock Text="eFuse / OTP UUID" Style="{StaticResource SectionTitle}"/>
+                            <TextBlock Text="Test Num（多个按填写顺序拼接，以逗号分隔）" Margin="0,0,0,8"/>
+                            <TextBox x:Name="TxtUuidTestNumbers" TextChanged="IdentityTextChanged" Margin="0,0,0,12"/>
+                            <Button Content="配置 / 预览芯片 UUID…" Click="BtnUuid_Click" HorizontalAlignment="Left" Style="{StaticResource WorkspaceButton}" Margin="0,0,0,14"/>
+                            <TextBlock Style="{StaticResource HelpText}" Text="一个测项直接作为 UUID；多个测项按填写顺序直接拼接。例如 101、102 读到 E8、A9，UUID 为 E8A9。保留十六进制原文与前导零，仅去除首尾空格。读不完整的记录独立保留并提示，不回退到序列号或坐标。"/>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HelpText}" Margin="0,20,0,0" Text="点击下方“应用分析配置并重算”生效，也会保存到 config.ini。四种复测口径继续可用；原始测量值和 Run 序列号保留。"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
             <TabItem x:Name="AppearanceTab" Header="界面与习惯">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="24">
@@ -118,6 +140,10 @@
                         <CheckBox x:Name="ChkShowColumnFilters" Content="显示表头的关键字筛选输入框"/>
                         <CheckBox x:Name="ChkAlternateRows" Content="显示交替行底色"/>
                         <TextBlock Style="{StaticResource HelpText}" Text="关闭紧凑行高后，使用更舒展的字号和行间距。隐藏输入框时清除关键字条件；右键勾选条件保留，仍可通过表头修改。"/>
+                        <TextBlock Text="Run 选取方式" Style="{StaticResource SectionTitle}" Margin="0,18,0,10"/>
+                        <RadioButton x:Name="RunBySerial" Content="序列号" GroupName="RunSelection" Margin="0,0,0,10"/>
+                        <RadioButton x:Name="RunByCoordinates" Content="晶圆 + X/Y 坐标" GroupName="RunSelection"/>
+                        <TextBlock Style="{StaticResource HelpText}" Text="晶圆通过输入框和上下按钮切换，不使用下拉框。坐标定位默认显示末次记录，上下按钮按导入顺序浏览该晶圆有完整坐标的记录；无坐标的数据请使用序列号模式。"/>
                         <Border Height="1" Background="{StaticResource BorderSoft}" Margin="0,22"/>
                         <TextBlock Text="导入习惯" Style="{StaticResource SectionTitle}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,12">

@@ -27,12 +27,13 @@ public partial class ExportDataWindow : Window
     public int HistogramMode => ReportHistogramMode.SelectedIndex;
     public event Action<int>? HistogramModeChanged;
     public bool CombineSites => ReportCombineSites.IsChecked == true;
+    public bool CombineWafers => ReportCombineWafers.IsChecked == true;
     public bool ShowBinNumbers => ReportBinNumbers.IsChecked == true;
     public bool ShowSiteBorders => ReportSiteBorders.IsChecked == true;
     public RetestMode Mode => KeepFirst.IsChecked == true ? RetestMode.First : KeepLast.IsChecked == true ? RetestMode.Last
         : KeepRetests.IsChecked == true ? RetestMode.OnlyRetests : RetestMode.All;
     public ExportDataWindow(IEnumerable<string> wafers, double defaultOutlierSigma = 6,
-        bool report = false, int histogramMode = 0, bool combineSites = false, int focusedCount = 0)
+        bool report = false, int histogramMode = 0, bool combineSites = false, int focusedCount = 0, bool combineWafers = true)
     {
         InitializeComponent();
         TxtOutlierSigma.Text = (double.IsFinite(defaultOutlierSigma) && defaultOutlierSigma > 0
@@ -47,7 +48,8 @@ public partial class ExportDataWindow : Window
             ReportSettings.Visibility = Visibility.Visible;
             ReportHistogramMode.SelectedIndex = Math.Clamp(histogramMode, 0, 2);
             ReportCombineSites.IsChecked = combineSites;
-            ReportFocusInfo.Text = $"已关注 {focusedCount} 个测项，关注图表合并 Site。BIN 图与统计：仅首测时用首测，其余用末测；只保留复测时仅统计有复测测项的芯片。多个晶圆分别绘图。";
+            ReportCombineWafers.IsChecked = combineWafers;
+            ReportFocusInfo.Text = $"已关注 {focusedCount} 个测项，关注图表合并 Site 和 Wafer，散点排序沿用主窗口。BIN 图与统计：仅首测时用首测，其余用末测；只保留复测时仅统计有复测测项的芯片。多个晶圆分别绘图。";
         }
         _wafers = wafers.Select(w => new WaferChoice(w)).ToList();
         WaferList.ItemsSource = new ListCollectionView(_wafers);

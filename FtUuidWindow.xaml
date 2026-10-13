@@ -1,0 +1,34 @@
+<Window x:Class="SemiconductorCsvAnalyzer.FtUuidWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="FT · eFuse / OTP 芯片 UUID" Width="820" Height="590" MinWidth="680" MinHeight="440"
+        FontFamily="Microsoft YaHei UI" FontSize="13" WindowStartupLocation="CenterOwner" Background="#F4F7FC">
+    <Window.Resources><ResourceDictionary><ResourceDictionary.MergedDictionaries><ResourceDictionary Source="Styles/WorkspaceTheme.xaml"/></ResourceDictionary.MergedDictionaries></ResourceDictionary></Window.Resources>
+    <DockPanel Margin="24">
+        <StackPanel DockPanel.Dock="Top">
+            <TextBlock Text="eFuse / OTP 芯片 UUID" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,14"/>
+            <TextBlock Text="填写一个或多个 Test Num，按此顺序拼接读取值" Margin="0,0,0,8"/>
+            <Grid Margin="0,0,0,12"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBox x:Name="TxtNumbers" Padding="8,6"/>
+                <Button x:Name="BtnPreview" Grid.Column="1" Content="预览" Click="Preview_Click" Style="{StaticResource WorkspaceButton}" Margin="10,0,0,0"/>
+            </Grid>
+            <TextBlock Text="例：101,102 → E8 + A9 → E8A9。保留原文、大小写和前导零，仅去除首尾空格。预览最多显示前 100 条记录。" TextWrapping="Wrap" Foreground="#64748B" Margin="0,0,0,12"/>
+        </StackPanel>
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,14,0,0">
+            <TextBlock x:Name="TxtNotice" TextWrapping="Wrap" Foreground="#64748B" Margin="0,0,0,12"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="取消" IsCancel="True" Style="{StaticResource WorkspaceButton}"/>
+                <Button Content="使用这些测试项" Click="Apply_Click" Style="{StaticResource PrimaryButton}" Margin="10,0,0,0"/>
+            </StackPanel>
+        </StackPanel>
+        <DataGrid x:Name="DgPreview" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                  EnableRowVirtualization="True" EnableColumnVirtualization="True" VirtualizingPanel.VirtualizationMode="Recycling">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="记录" Binding="{Binding Row}" Width="60" MinWidth="60"/>
+                <DataGridTextColumn Header="原序列号" Binding="{Binding SerialNumber}" Width="150" MinWidth="150"/>
+                <DataGridTextColumn Header="芯片 UUID" Binding="{Binding Uuid}" Width="*" MinWidth="150"/>
+                <DataGridTextColumn Header="状态" Binding="{Binding Status}" Width="160" MinWidth="160"/>
+            </DataGrid.Columns>
+        </DataGrid>
+    </DockPanel>
+</Window>

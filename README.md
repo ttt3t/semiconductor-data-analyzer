@@ -1,11 +1,20 @@
 # Semiconductor Data Analyzer
 
-**CSV Analyzer V2.0.1 · GYF**
+**CSV Analyzer V2.0.4 · GYF**
 
 A Windows desktop application for semiconductor CSV / STDF test-data analysis, built with .NET 8 and WPF.
 
 面向半导体测试数据的本地分析工具，支持 CSV、STDF V4、晶圆 Map、良率统计、阈值模拟和 Excel 报告。分析在本机进行，使用软件不需要上传测试文件。
 
+## V2.0.4 更新
+
+- **CP / FT**：默认 CP；FT 按指定的一个或多个 Test Num 读取 eFuse / OTP 原文，按顺序拼接 UUID 识别复测，支持预览与 INI 保存。UUID 缺失的记录独立保留并提示，原始测量值及 Run 序列号不改写。部分复测导出的整合 CSV 同时保存派生身份。
+- **图表性能**：静态图仅保留当前位图，游标独立更新；拉伸时显示缓存，停下后清晰重绘，缩放仍按真实数据绘制。切换测项保留旧图直至最新结果就绪，避免闪白。
+- **主表与散点**：Fails、Max、Min；粉红色超限 Value、良率热力底色；Combine Site / Wafer；按 SN、Site、Wafer 排序；组间交替蓝色、组名与分隔线；可锁定纵轴对比测项。
+- **BIN Map**：图例单项勾选或点击列头全选 / 取消；未勾选以灰色显示，统计不变。仅 SBIN 1 / HBIN 1 使用绿色，其他 BIN 的 50 色配色避开灰色和绿色系，报告颜色一致。
+- **热力图与 Run**：自定义蓝 / 绿 / 红色标，多晶圆统一范围；Run 可按序列号或晶圆 + X/Y 定位。
+
+当前源码版本为 V2.0.4；已发布的运行包版本以 Releases 页面为准。详细操作和统计口径见 [使用手册](Docs/UserGuide.md)。
 ## 功能
 
 - **CSV / STDF 导入**：INI 配置 CSV 布局；读取 STDF V4 的 PTR、MPR、FTR，支持大小端及 `.std.gz` / `.stdf.gz`；93k 模式优先使用 TSR 的完整测项名称。
@@ -75,3 +84,4 @@ STDF 支持范围以手册为准；不支持的版本或部分记录会明确报
 [MIT](LICENSE) · Copyright (c) 2026 **GYF**.
 
 第三方依赖保留各自许可证；本项目的 MIT 许可证不替代其许可证。
+

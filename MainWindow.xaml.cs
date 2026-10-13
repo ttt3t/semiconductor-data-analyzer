@@ -28,6 +28,7 @@ public partial class MainWindow : Window
     private List<string> _allSites = new();
     private TestItemData? _currentItem;
     private string _currentSite = TestItemSummary.CombinedSite;
+    private string? _currentWafer;
     private string _lastConfigPath = "";
     private string _currentCsvPath = "";
     private string _currentDataName = "尚未打开文件";
@@ -36,6 +37,8 @@ public partial class MainWindow : Window
     private readonly List<(WaferMapWindow Window, Func<CsvParseResult, IReadOnlyList<WaferMapPage>> Pages)> _openMaps = new();
     private int _binMode;
     private bool _combineSites;
+    private bool _combineWafers;
+    private ScatterOrder _scatterOrder;
     private RetestMode _retestMode = RetestMode.All;
     private bool _isBusy;
     private readonly Dictionary<string, string> _columnFilters = new(StringComparer.OrdinalIgnoreCase);
@@ -49,6 +52,8 @@ public partial class MainWindow : Window
     private DetailCache _detailCache = new();
     private TestItemData? _displayedItem;
     private string? _displayedSite;
+    private string? _displayedWafer;
+    private List<HistogramBin>? _displayedBins;
     private ScatterSeries? _displayedScatter;
     private long _detailVersion;
     private bool _closing;
@@ -64,7 +69,7 @@ public partial class MainWindow : Window
         _filterTimer.Tick += (_, _) =>
         {
             _filterTimer.Stop();
-            ApplySearchFilter(_currentItem?.DisplayName, _currentSite);
+            ApplySearchFilter(_currentItem?.DisplayName, _currentSite, _currentWafer);
         };
 
         _detailTimer = new DispatcherTimer(DispatcherPriority.Background)
@@ -100,6 +105,10 @@ public partial class MainWindow : Window
             RunValueColumn.DisplayIndex = meanIndex + 1;
         if (settings.Get("Main")?.Tables?.GetValueOrDefault("TestItems")?.Columns?
             .Any(c => c.Key == "Data.Focus.IsFocused") != true) FocusColumn.DisplayIndex = 0;
+        if (settings.Get("Main")?.Tables?.GetValueOrDefault("TestItems")?.Columns?
+            .Any(c => c.Key == nameof(TestItemSummary.Wafer)) != true)
+            DgTestItems.Columns.First(c => c.SortMemberPath == "Wafer").DisplayIndex =
+                DgTestItems.Columns.First(c => c.SortMemberPath == "SiteSort").DisplayIndex + 1;
         layout.TrackColumns("ListAndCharts", MainListColumn, ChartsColumn);
         layout.TrackRows("HistogramAndScatter", HistogramRow, ScatterRow);
         settings.SaveFailed += OnLayoutSaveFailed;
@@ -121,8 +130,10 @@ public partial class MainWindow : Window
             _allItems = new();
             _devices = new();
             _data = new();
+            _runIndex = -1;
             _runBySerial = new(StringComparer.Ordinal);
             _runItems = new(StringComparer.Ordinal);
+            ClearCoordinateRunIndex();
             DgTestItems.ScrollActivityChanged -= OnListScrollActivityChanged;
             settings.SaveFailed -= OnLayoutSaveFailed;
             _uiPreferences.Changed -= OnUiPreferencesChanged;
@@ -137,7 +148,7 @@ public partial class MainWindow : Window
         TextCompositionManager.AddPreviewTextInputHandler(this, (_, _) =>
         {
             _imeComposing = false;
-            if (!RunTextBox.IsKeyboardFocusWithin) ScheduleFilter();
+            if (!RunSelector.IsKeyboardFocusWithin) ScheduleFilter();
         });
 
         TryLoadDefaultConfig();
@@ -174,6 +185,7 @@ public partial class MainWindow : Window
                     if (!preferences.ShowColumnFilters) box.Clear();
                     box.Visibility = preferences.ShowColumnFilters ? Visibility.Visible : Visibility.Collapsed;
                 }
+        ApplyRunSelectionMode(preferences.RunSelection);
     }
 
     private void TryLoadDefaultConfig()
@@ -212,7 +224,7 @@ public partial class MainWindow : Window
     private void BtnSettings_Click(object sender, RoutedEventArgs e)
     {
         if (_isBusy) return;
-        new SettingsWindow(_config, ApplySettings, OpenCsvAsync, _recentFiles, _uiPreferences) { Owner = this }.ShowDialog();
+        new SettingsWindow(_config, ApplySettings, OpenCsvAsync, _recentFiles, _uiPreferences, _data) { Owner = this }.ShowDialog();
     }
 
     private async Task ApplySettings(AnalyzerConfig config)
@@ -230,14 +242,15 @@ public partial class MainWindow : Window
             CommitAnalysis(data, prepared);
             RefreshOpenMaps();
             TxtStatus.Text = "设置已保存，统计已重算" + (reload ? "，数据文件已重新解析" : "");
-            if (reload) ShowSerialNumberNotice(data);
+            if (reload) ShowSerialNumberNotice(_data);
+            else ShowRetestIdentityNotice(_data);
         });
     }
 
     private void UpdateWindowTitle()
     {
         string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
-        Title = $"CSV Analyzer · V2.0.1 | 当前数据：{_currentDataName} | 配置：{configName}";
+        Title = $"CSV Analyzer · V2.0.4 | 当前数据：{_currentDataName} | 配置：{configName}";
     }
 
     private void UpdateConfigInfo()
@@ -340,7 +353,7 @@ public partial class MainWindow : Window
             RefreshOpenMaps();
             TxtStatus.Text = _recentFiles.RememberCsv(path) ? "解析完成" : "解析完成（最近文件记录未能保存）";
             if (result.SourceDescription.Length > 0) TxtStatus.Text += " | " + result.SourceDescription;
-            ShowSerialNumberNotice(result);
+            ShowSerialNumberNotice(_data);
         });
     }
 
@@ -373,7 +386,7 @@ public partial class MainWindow : Window
                 RefreshOpenMaps();
                 foreach (string path in paths) _recentFiles.RememberCsv(path);
                 TxtStatus.Text = $"已导入 {paths.Length} 个文件，原始测试记录全部保留";
-                ShowSerialNumberNotice(merged);
+                ShowSerialNumberNotice(_data);
             });
         }
         catch (Exception ex) { MessageBox.Show(ex.Message, "导入失败", MessageBoxButton.OK, MessageBoxImage.Error); }
@@ -411,14 +424,16 @@ public partial class MainWindow : Window
         { MessageBox.Show("请先打开 CSV / STDF 数据。", "导出报告", MessageBoxButton.OK, MessageBoxImage.Information); return; }
         var focused = _data.Items.Where(i => i.Focus.IsFocused).Select(i => i.Id).ToArray();
         var options = new ExportDataWindow(_data.Wafers, _config.OutlierSigma, report: true,
-            histogramMode: _binMode, combineSites: _combineSites, focusedCount: focused.Length) { Owner = this };
+            histogramMode: _binMode, combineSites: _combineSites, focusedCount: focused.Length,
+            combineWafers: _combineWafers) { Owner = this };
         options.HistogramModeChanged += mode => CmbBinMode.SelectedIndex = mode;
         if (options.ShowDialog() != true) return;
         var file = new SaveFileDialog { Filter = "Excel 报告 (*.xlsx)|*.xlsx", DefaultExt = ".xlsx", AddExtension = true,
             FileName = "测试分析报告.xlsx", Title = "导出 XLSX 报告" };
         if (file.ShowDialog(this) != true) return;
         var report = new XlsxReportOptions(options.SelectedWafers, options.Mode, options.OutlierSigma,
-            options.HistogramMode, options.CombineSites, focused, options.ShowBinNumbers, options.ShowSiteBorders);
+            options.HistogramMode, options.CombineSites, focused, options.ShowBinNumbers, options.ShowSiteBorders,
+            options.CombineWafers, _scatterOrder);
         try
         {
             await RunBusyAsync(async () =>
@@ -460,17 +475,33 @@ public partial class MainWindow : Window
         }
     }
 
-    private sealed record PreparedAnalysis(CsvParseResult Data, List<string> Sites, List<TestItemSummary> Summaries);
+    private async void BtnCombineWafer_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isBusy) return;
+        bool previous = _combineWafers;
+        _combineWafers = BtnCombineWafer.IsChecked == true;
+        try { await RunBusyAsync(RefreshTestItemList); }
+        catch (Exception ex)
+        {
+            _combineWafers = previous; BtnCombineWafer.IsChecked = previous;
+            MessageBox.Show(ex.Message, "重算失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private sealed record PreparedAnalysis(CsvParseResult Data, List<string> Sites, List<TestItemSummary> Summaries, CsvParseResult Source);
 
     private Task<PreparedAnalysis> PrepareAnalysisAsync(CsvParseResult data, AnalyzerConfig config)
     {
         var mode = _retestMode;
         bool combine = _combineSites;
+        bool combineWafers = _combineWafers;
         return Task.Run(() =>
         {
+            data = RetestIdentityService.Prepare(data, config);
             var analysis = DatasetService.SelectRetests(data, mode);
-            var sites = CollectSites(analysis.Items);
-            return new PreparedAnalysis(analysis, sites, SummaryService.Build(analysis.Items, sites, combine, config));
+            var sites = CollectSites(data.Items);
+            return new PreparedAnalysis(analysis, sites,
+                SummaryService.Build(analysis.Items, sites, data.Wafers, combine, combineWafers, config), data);
         });
     }
 
@@ -482,8 +513,10 @@ public partial class MainWindow : Window
 
     private void CommitAnalysis(CsvParseResult data, PreparedAnalysis prepared)
     {
+        data = prepared.Source;
         string? keepName = _currentItem?.DisplayName;
         string keepSite = _combineSites ? TestItemSummary.CombinedSite : _currentSite;
+        string? keepWafer = _combineWafers ? null : _currentWafer;
         ClearDetail();
         bool changedData = !ReferenceEquals(_data, data);
         _data = data;
@@ -492,7 +525,7 @@ public partial class MainWindow : Window
         _allSites = prepared.Sites;
         _summaries = prepared.Summaries;
         InitializeRun(changedData);
-        ApplySearchFilter(keepName, keepSite);
+        ApplySearchFilter(keepName, keepSite, keepWafer);
         UpdateBottomInfo();
         ScheduleDetail();
     }
@@ -597,7 +630,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ApplySearchFilter(string? keepName = null, string? keepSite = null)
+    private void ApplySearchFilter(string? keepName = null, string? keepSite = null, string? keepWafer = null)
     {
         if (_summaryView == null || !ReferenceEquals(_summaryView.SourceCollection, _summaries))
         {
@@ -613,16 +646,22 @@ public partial class MainWindow : Window
         }
 
         TestItemSummary? match = null;
+        int matchScore = -1;
         if (!string.IsNullOrEmpty(keepName) && view != null)
         {
             foreach (TestItemSummary s in view)
             {
-                if (s.DisplayName == keepName && s.Site == keepSite)
+                if (s.DisplayName == keepName && s.Site == keepSite &&
+                    (s.IsWaferCombined ? null : s.Wafer) == keepWafer)
                 {
                     match = s;
                     break;
                 }
-                match ??= s.DisplayName == keepName ? s : null;
+                if (s.DisplayName == keepName)
+                {
+                    int score = (s.Site == keepSite ? 1 : 0) + ((s.IsWaferCombined ? null : s.Wafer) == keepWafer ? 2 : 0);
+                    if (score > matchScore) { match = s; matchScore = score; }
+                }
             }
         }
 
@@ -659,12 +698,16 @@ public partial class MainWindow : Window
         "TestNumber" => s.TestNumberValue.ToString(),
         "DisplayName" => s.DisplayName ?? "",
         "Site" => s.Site ?? "",
+        "Wafer" => s.Wafer ?? "",
         "SBin" => s.SBin ?? "",
         "HBin" => s.HBin ?? "",
         "Unit" => s.Unit ?? "",
         "Lsl" => s.LslText ?? "",
         "Usl" => s.UslText ?? "",
         "Count" => s.Count.ToString(),
+        "Fails" => s.Fails.ToString(),
+        "Max" => s.Max?.ToString("G6") ?? "-",
+        "Min" => s.Min?.ToString("G6") ?? "-",
         "Eorr" => s.Eorr.ToString(),
         "SiteSigma" => s.SiteSigma?.ToString("G6") ?? "-",
         "Mean" => s.Mean.ToString("G6"),
@@ -700,7 +743,7 @@ public partial class MainWindow : Window
     {
         if (_allItems.Count == 0) return;
         TxtBottomInfo.Text =
-            $"测试项 {_allItems.Count} 个 | Site {_allSites.Count} 个 | 表格 {_summaries.Count} 行 | 唯一芯片 {_devices.Count} 颗";
+            $"测试项 {_allItems.Count} 个 | Site {_allSites.Count} 个 | Wafer {_data.Wafers.Count} 个 | 表格 {_summaries.Count} 行 | 唯一芯片 {_devices.Count} 颗";
     }
 
     #endregion
@@ -711,11 +754,13 @@ public partial class MainWindow : Window
     {
         if (DgTestItems.SelectedItem is TestItemSummary summary)
         {
-            if (ReferenceEquals(_currentItem, summary.Data) && _currentSite == summary.Site)
+            string? wafer = summary.IsWaferCombined ? null : summary.Wafer;
+            if (ReferenceEquals(_currentItem, summary.Data) && _currentSite == summary.Site && _currentWafer == wafer)
                 return;
 
             _currentItem = summary.Data;
             _currentSite = summary.Site;
+            _currentWafer = wafer;
             ScheduleDetail();
         }
         else
@@ -741,6 +786,15 @@ public partial class MainWindow : Window
         if (!_closing && !_isBusy && _detailPending && !DgTestItems.IsScrollActive) _detailTimer.Start();
     }
 
+    private void ScatterSortMode_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ScatterSortMode?.SelectedIndex is not (>= 0 and <= 2)) return;
+        var order = (ScatterOrder)ScatterSortMode.SelectedIndex;
+        if (_scatterOrder == order) return;
+        _scatterOrder = order;
+        ScheduleDetail();
+    }
+
     private void OnListScrollActivityChanged(object? sender, EventArgs e)
     {
         if (_closing || _isBusy || !_detailPending) return;
@@ -759,10 +813,11 @@ public partial class MainWindow : Window
         if (_currentItem == null)
             return Array.Empty<TestValue>();
 
-        if (_combineSites || _currentSite == TestItemSummary.CombinedSite)
+        string? site = _combineSites || _currentSite == TestItemSummary.CombinedSite ? null : _currentSite;
+        if (site == null && _currentWafer == null)
             return _currentItem.Values;
 
-        return IndexedTestValues.ForSite(_currentItem.Values, _currentSite);
+        return IndexedTestValues.ForScope(_currentItem.Values, site, _currentWafer);
     }
 
     private async Task UpdateDetailAsync()
@@ -772,17 +827,17 @@ public partial class MainWindow : Window
         var request = new DetailRequest(_currentItem,
             _combineSites || _currentSite == TestItemSummary.CombinedSite ? null : _currentSite,
             _binMode, _config.BinCount, _config.IncludeOutOfLimitData,
-            _config.ShowLowLimit, _config.ShowHighLimit, _config.ShowMean, _config.ShowThreeSigma);
+            _config.ShowLowLimit, _config.ShowHighLimit, _config.ShowMean, _config.ShowThreeSigma,
+            _currentWafer, _scatterOrder, _data.Wafers);
         using var cancellation = new CancellationTokenSource();
         _detailCancellation = cancellation;
         string siteLabel = request.Site == null ? "ALL Sites" : $"Site {request.Site}";
-        TxtItemTitle.Text = $"{request.Item.DisplayName}  ·  {siteLabel}";
-        if (!ReferenceEquals(_displayedItem, request.Item) || _displayedSite != request.Site)
+        string waferLabel = request.Wafer == null ? "ALL Wafers" : $"Wafer {request.Wafer}";
+        string itemTitle = $"{request.Item.DisplayName} · {waferLabel} · {siteLabel}";
+        if (!ReferenceEquals(_displayedItem, request.Item) || _displayedSite != request.Site || _displayedWafer != request.Wafer)
         {
-            TxtUnit.Text = "正在计算图表…";
-            Histogram.Apply(null, null, null, null, null, true, true, true, true);
-            ScatterPlot.SetSeries(ScatterSeries.Empty, null, null, "");
-            _displayedScatter = null;
+            // Keep the last complete pair until the newest result can replace it in one UI turn.
+            TxtUnit.Text = $"正在计算：{request.Item.DisplayName}…";
         }
         bool entered = false;
         try
@@ -795,16 +850,20 @@ public partial class MainWindow : Window
             if (_closing || cancellation.IsCancellationRequested || version != _detailVersion ||
                 DgTestItems.IsScrollActive) return;
             var stats = result.Statistics;
+            TxtItemTitle.Text = itemTitle;
             TxtUnit.Text = string.IsNullOrWhiteSpace(request.Item.Unit)
                 ? $"Count={stats.Count}  InSpec%={stats.InSpecPercent:F1}"
                 : $"Unit：{request.Item.Unit}    Count={stats.Count}  InSpec%={stats.InSpecPercent:F1}";
-            Histogram.Apply(result.Bins, request.Item.LowLimit, request.Item.HighLimit,
-                result.Mean, result.Sigma, request.ShowLsl, request.ShowUsl, request.ShowMean,
-                request.ShowThreeSigma, request.Item.Unit);
+            if (!ReferenceEquals(_displayedBins, result.Bins))
+                Histogram.Apply(result.Bins, request.Item.LowLimit, request.Item.HighLimit,
+                    result.Mean, result.Sigma, request.ShowLsl, request.ShowUsl, request.ShowMean,
+                    request.ShowThreeSigma, request.Item.Unit);
             if (!ReferenceEquals(_displayedScatter, result.Scatter))
                 ScatterPlot.SetSeries(result.Scatter, request.Item.LowLimit, request.Item.HighLimit, request.Item.Unit);
             _displayedItem = request.Item;
             _displayedSite = request.Site;
+            _displayedWafer = request.Wafer;
+            _displayedBins = result.Bins;
             _displayedScatter = result.Scatter;
             _detailPending = false;
         }
@@ -828,6 +887,7 @@ public partial class MainWindow : Window
         _detailPending = false;
         _displayedItem = null;
         _displayedScatter = null;
+        _displayedBins = null;
         _detailVersion++;
         _detailTimer.Stop();
         _detailCancellation?.Cancel();
@@ -859,7 +919,7 @@ public partial class MainWindow : Window
         string siteLabel = _combineSites || _currentSite == TestItemSummary.CombinedSite
             ? "ALL Sites"
             : $"Site {_currentSite}";
-        string title = $"Value 表  {_currentItem.DisplayName}  ({siteLabel})";
+        string title = $"Value 表  {_currentItem.DisplayName}  ({(_currentWafer == null ? "ALL Wafers" : "Wafer " + _currentWafer)} · {siteLabel})";
 
         var window = new ValuesWindow(title, filtered) { Owner = this };
         window.Closed += (_, _) => _memoryReclaimer.Request();
@@ -880,22 +940,26 @@ public partial class MainWindow : Window
         }
 
         var sb = new StringBuilder();
-        sb.AppendLine("序号\t测试项\tSite\tSBIN\tHBIN\t单位\tLSL\tUSL\tCount\tEorr\tSite σ\tMean\tValue\t中位数\tσ\tRobust Mean\tRobust Sigma\tCpk\tInSpec%");
+        sb.AppendLine("Test Num\tTest Item\tSite\tWafer\tSBIN\tHBIN\tUnit\tLSL\tUSL\tCount\tFails\tEorr\tSite σ\tMean\tMax\tMin\tValue\tMedian\tσ\tRobust Mean\tRobust Sigma\tCpk\tInSpec%");
 
         foreach (var s in list)
         {
             sb.Append(s.TestNumberValue).Append('\t')
               .Append(s.DisplayName).Append('\t')
               .Append(s.Site).Append('\t')
+              .Append(s.Wafer).Append('\t')
               .Append(s.SBin).Append('\t')
               .Append(s.HBin).Append('\t')
               .Append(s.Unit).Append('\t')
               .Append(s.LslText).Append('\t')
               .Append(s.UslText).Append('\t')
               .Append(s.Count).Append('\t')
+              .Append(s.Fails).Append('\t')
               .Append(s.Eorr).Append('\t')
               .Append(s.SiteSigma?.ToString("G6") ?? "-").Append('\t')
               .Append(s.Mean.ToString("G6")).Append('\t')
+              .Append(s.Max?.ToString("G6") ?? "-").Append('\t')
+              .Append(s.Min?.ToString("G6") ?? "-").Append('\t')
               .Append(s.RunValue?.ToString("G9") ?? "-").Append('\t')
               .Append(s.Median?.ToString("G6") ?? "-").Append('\t')
               .Append(s.Sigma.ToString("G6")).Append('\t')
@@ -1029,12 +1093,12 @@ public partial class MainWindow : Window
 
     private void BtnSbinMap_Click(object sender, RoutedEventArgs e)
     {
-        ShowBinMap("SBIN", d => string.IsNullOrWhiteSpace(d.SBin) ? "(空)" : d.SBin);
+        ShowBinMap("SBIN", true);
     }
 
     private void BtnHbinMap_Click(object sender, RoutedEventArgs e)
     {
-        ShowBinMap("HBIN", d => string.IsNullOrWhiteSpace(d.HBin) ? "(空)" : d.HBin);
+        ShowBinMap("HBIN", false);
     }
 
     private void BtnPfMap_Click(object sender, RoutedEventArgs e)
@@ -1058,7 +1122,9 @@ public partial class MainWindow : Window
         // Keep only the matching keys; retaining the old item would also retain its
         // entire raw snapshot after a new dataset refreshes this still-open Map.
         string selectedId = _currentItem.Id, selectedName = _currentItem.Name, selectedNumber = _currentItem.TestNumber;
-        ShowMapWindow(new WaferMapWindow($"P/F Map  {_currentItem.DisplayName}  ({siteLabel})", pages), data =>
+        var mapWindow = new WaferMapWindow($"P/F Map  {_currentItem.DisplayName}  ({siteLabel})", pages);
+        if (_currentWafer != null) mapWindow.SelectWafer(_currentWafer);
+        ShowMapWindow(mapWindow, data =>
         {
             var item = data.Items.FirstOrDefault(i => i.Id == selectedId) ??
                 data.Items.FirstOrDefault(i => i.Name == selectedName && i.TestNumber == selectedNumber);
@@ -1067,7 +1133,7 @@ public partial class MainWindow : Window
         });
     }
 
-    private void ShowBinMap(string binName, Func<DeviceInfo, string> selector)
+    private void ShowBinMap(string binName, bool soft)
     {
         if (_devices.Count == 0)
         {
@@ -1075,7 +1141,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var pages = MapDataService.BinPages(_data, selector);
+        var pages = MapDataService.BinPages(_data, soft);
         if (pages.All(p => p.Dies.Count == 0))
         {
             MessageBox.Show("没有有效的 X/Y 坐标，无法绘制 Map", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -1083,7 +1149,7 @@ public partial class MainWindow : Window
         }
 
         ShowMapWindow(new WaferMapWindow($"{binName} Map  （按 wafer 分开，同坐标取最新）", pages, binName),
-            data => MapDataService.BinPages(data, selector));
+            data => MapDataService.BinPages(data, soft));
     }
 
     private void ShowMapWindow(WaferMapWindow window, Func<CsvParseResult, IReadOnlyList<WaferMapPage>> pages)

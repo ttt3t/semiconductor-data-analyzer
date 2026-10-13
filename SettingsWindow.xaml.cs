@@ -20,6 +20,8 @@ public partial class SettingsWindow : Window
     private readonly UiPreferencesService _uiPreferences;
     private bool _syncing = true;
     private bool _analysisDirty;
+    private bool _identityDirty;
+    private readonly CsvParseResult? _data;
     private TabItem? _lastTab;
 
     public SettingsWindow(AnalyzerConfig config, Action<AnalyzerConfig> apply)
@@ -27,13 +29,14 @@ public partial class SettingsWindow : Window
 
     public SettingsWindow(AnalyzerConfig config, Func<AnalyzerConfig, Task> apply,
         Func<string, Task>? openCsv = null, RecentFilesService? recentFiles = null,
-        UiPreferencesService? uiPreferences = null)
+        UiPreferencesService? uiPreferences = null, CsvParseResult? data = null)
     {
         InitializeComponent();
         _apply = apply;
         _openCsv = openCsv;
         _recentFiles = recentFiles ?? RecentFilesService.Current;
         _uiPreferences = uiPreferences ?? UiPreferencesService.Current;
+        _data = data;
         _fileName = "config.ini";
         ShowConfig(config);
         ShowPreferences(_uiPreferences.Value);
@@ -103,10 +106,19 @@ public partial class SettingsWindow : Window
         _fileName = string.IsNullOrEmpty(config.ConfigFileName) ? "config.ini" : Path.ChangeExtension(config.ConfigFileName, ".ini");
         TxtConfig.Text = ConfigLoader.Serialize(config);
         ShowAnalysisControls(config);
+        ShowIdentityControls(config);
     }
 
     private AnalyzerConfig ReadConfig()
     {
+        if (_identityDirty)
+        {
+            var numbers = RetestIdentityService.ParseTestNumbers(TxtUuidTestNumbers.Text);
+            var editedIdentity = UpdateIdentityFields(TxtConfig.Text, ModeFT.IsChecked == true ? "FT" : "CP", string.Join(",", numbers));
+            _ = ConfigLoader.Parse(editedIdentity, _fileName);
+            TxtConfig.Text = editedIdentity;
+            _identityDirty = false;
+        }
         var config = ConfigLoader.Parse(TxtConfig.Text, _fileName);
         if (!_analysisDirty) return config;
         // The INI remains authoritative; only the controls actually edited in the analysis tab
@@ -183,8 +195,9 @@ public partial class SettingsWindow : Window
         var selected = SettingsTabs.SelectedItem as TabItem;
         try
         {
-            if (ReferenceEquals(_lastTab, AnalysisTab)) _ = ReadConfig();
+            if (ReferenceEquals(_lastTab, AnalysisTab) || ReferenceEquals(_lastTab, IdentityTab)) _ = ReadConfig();
             if (ReferenceEquals(selected, AnalysisTab)) ShowAnalysisControls(ConfigLoader.Parse(TxtConfig.Text, _fileName));
+            if (ReferenceEquals(selected, IdentityTab)) ShowIdentityControls(ConfigLoader.Parse(TxtConfig.Text, _fileName));
             _lastTab = selected;
             BtnApplyAnalysis.Visibility = ReferenceEquals(selected, AppearanceTab) ? Visibility.Collapsed : Visibility.Visible;
         }
@@ -201,11 +214,56 @@ public partial class SettingsWindow : Window
     private void AnalysisTextChanged(object sender, TextChangedEventArgs e) { if (!_syncing) _analysisDirty = true; }
     private void AnalysisSelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_syncing) _analysisDirty = true; }
 
+    private void IdentityControlChanged(object sender, RoutedEventArgs e) { if (!_syncing) _identityDirty = true; }
+    private void IdentityTextChanged(object sender, TextChangedEventArgs e) { if (!_syncing) _identityDirty = true; }
+
+    private void ShowIdentityControls(AnalyzerConfig config)
+    {
+        bool wasSyncing = _syncing; _syncing = true;
+        try
+        {
+            ModeCP.IsChecked = config.TestMode == TestAnalysisMode.CP;
+            ModeFT.IsChecked = config.TestMode == TestAnalysisMode.FT;
+            TxtUuidTestNumbers.Text = string.Join(",", config.UuidTestNumbers);
+            _identityDirty = false;
+        }
+        finally { _syncing = wasSyncing; }
+    }
+
+    private void BtnUuid_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var window = new FtUuidWindow(TxtUuidTestNumbers.Text, _data, ConfigLoader.Parse(TxtConfig.Text, _fileName)) { Owner = this };
+            if (window.ShowDialog() == true) TxtUuidTestNumbers.Text = window.TestNumbers;
+        }
+        catch (Exception ex) { TxtStatus.Text = ex.Message; }
+    }
+
+    private static string UpdateIdentityFields(string text, string mode, string numbers)
+    {
+        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["TestMode"] = mode, ["UuidTestNumbers"] = numbers };
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        string section = "";
+        foreach (int index in Enumerable.Range(0, lines.Length))
+        {
+            string line = lines[index].Trim();
+            if (line.StartsWith('[') && line.EndsWith(']')) { section = line[1..^1].Trim(); continue; }
+            if (!section.Equals("RetestIdentity", StringComparison.OrdinalIgnoreCase) || line.StartsWith(';') || line.StartsWith('#')) continue;
+            int eq = line.IndexOf('=');
+            if (eq > 0 && fields.Remove(line[..eq].Trim(), out var value)) lines[index] = line[..eq].Trim() + "=" + value;
+        }
+        return string.Join(Environment.NewLine, lines) + (fields.Count == 0 ? "" : Environment.NewLine + "[RetestIdentity]" + Environment.NewLine +
+            string.Join(Environment.NewLine, fields.Select(p => p.Key + "=" + p.Value)));
+    }
+
     private void ShowPreferences(UiPreferences preferences)
     {
         ChkCompactTable.IsChecked = preferences.CompactTable;
         ChkShowColumnFilters.IsChecked = preferences.ShowColumnFilters;
         ChkAlternateRows.IsChecked = preferences.AlternateRows;
+        RunBySerial.IsChecked = preferences.RunSelection == RunSelectionMode.SerialNumber;
+        RunByCoordinates.IsChecked = preferences.RunSelection == RunSelectionMode.WaferCoordinates;
         CmbDefaultStdfMode.SelectedIndex = preferences.DefaultStdfMode == StdfImportMode.Advantest93K ? 1 : 0;
     }
 
@@ -218,6 +276,7 @@ public partial class SettingsWindow : Window
                 CompactTable = ChkCompactTable.IsChecked == true,
                 ShowColumnFilters = ChkShowColumnFilters.IsChecked == true,
                 AlternateRows = ChkAlternateRows.IsChecked == true,
+                RunSelection = RunByCoordinates.IsChecked == true ? RunSelectionMode.WaferCoordinates : RunSelectionMode.SerialNumber,
                 DefaultStdfMode = CmbDefaultStdfMode.SelectedIndex == 1 ? StdfImportMode.Advantest93K : StdfImportMode.Standard
             });
             TxtStatus.Text = "界面设置已保存并生效；当前数据与分析配置保持不变。";

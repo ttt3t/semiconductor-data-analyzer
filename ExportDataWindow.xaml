@@ -40,7 +40,10 @@
                         <ListBoxItem Content="规格区间"/>
                         <ListBoxItem Content="中位数中心"/>
                     </ListBox>
-                    <CheckBox x:Name="ReportCombineSites" Content="Testitem 统计合并 Site"/>
+                    <WrapPanel>
+                        <CheckBox x:Name="ReportCombineSites" Content="合并 Site" Margin="0,0,18,0"/>
+                        <CheckBox x:Name="ReportCombineWafers" Content="合并 Wafer"/>
+                    </WrapPanel>
                     <TextBlock Text="SBIN / HBIN Map" Margin="0,10,0,6"/>
                     <WrapPanel>
                         <CheckBox x:Name="ReportBinNumbers" Content="显示 BIN 数字" Margin="0,0,18,4"/>

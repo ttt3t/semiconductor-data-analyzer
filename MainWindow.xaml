@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="clr-namespace:SemiconductorCsvAnalyzer.Controls"
-        Title="CSV Analyzer · V2.0.1" Height="850" Width="1440" MinWidth="900" MinHeight="680"
+        Title="CSV Analyzer · V2.0.4" Height="850" Width="1440" MinWidth="900" MinHeight="680"
         FontFamily="Microsoft YaHei UI, Segoe UI" FontSize="12"
         Background="{DynamicResource WorkspaceBackground}" Foreground="{DynamicResource TextPrimary}"
         WindowStartupLocation="CenterScreen" UseLayoutRounding="True">
@@ -47,6 +47,10 @@
             <Style x:Key="GroupLabel" TargetType="TextBlock">
                 <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/><Setter Property="FontSize" Value="10"/>
                 <Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Margin" Value="8,0,0,3"/>
+            </Style>
+            <Style x:Key="ChartSegmentOption" TargetType="ListBoxItem" BasedOn="{StaticResource SegmentOption}">
+                <Setter Property="Padding" Value="7,3"/><Setter Property="FontSize" Value="11"/>
+                <Setter Property="Margin" Value="0,0,4,0"/>
             </Style>
             <Style x:Key="SiteToggle" TargetType="ToggleButton">
                 <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/><Setter Property="Padding" Value="9,5"/>
@@ -123,6 +127,10 @@
                         <ToggleButton x:Name="BtnCombineSite" Click="BtnCombineSite_Click" Style="{StaticResource SiteToggle}" Margin="0,0,10,3">
                             <StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Combine" Width="14" Height="14" Margin="0,0,5,0" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/><TextBlock Text="Combine Site"/></StackPanel>
                         </ToggleButton>
+                        <ToggleButton x:Name="BtnCombineWafer" Click="BtnCombineWafer_Click" Style="{StaticResource SiteToggle}" Margin="0,0,10,3"
+                                      AutomationProperties.HelpText="合并所有晶圆；关闭时按晶圆分行，可与 Combine Site 独立切换">
+                            <StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Combine" Width="14" Height="14" Margin="0,0,5,0" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/><TextBlock Text="Combine Wafer"/></StackPanel>
+                        </ToggleButton>
                         <ListBox x:Name="LstRetestMode" SelectedIndex="0" BorderThickness="0" Background="Transparent"
                                  SelectionChanged="RetestMode_Changed" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled"
                                  AutomationProperties.Name="复测统计口径">
@@ -134,7 +142,8 @@
                         </ListBox>
                         <StackPanel Orientation="Horizontal" Margin="5,0,3,3" VerticalAlignment="Center">
                             <TextBlock Text="Run" Margin="0,0,5,0" VerticalAlignment="Center" Foreground="{StaticResource TextSecondary}"/>
-                            <Grid x:Name="RunSelector" IsEnabled="False" Height="26">
+                            <StackPanel x:Name="RunSelector" IsEnabled="False" Orientation="Horizontal" Height="26">
+                            <Grid x:Name="SerialRunSelector">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="72"/><ColumnDefinition Width="18"/></Grid.ColumnDefinitions>
                                 <TextBox x:Name="RunTextBox" VerticalContentAlignment="Center" Padding="4,0" BorderBrush="#D7E0ED"
                                          KeyDown="RunTextBox_KeyDown" LostKeyboardFocus="RunTextBox_LostKeyboardFocus" AutomationProperties.Name="Run 序列号"/>
@@ -143,6 +152,30 @@
                                     <RepeatButton x:Name="PreviousRunButton" Grid.Row="1" Content="▾" Padding="0" FontSize="9" Click="PreviousRun_Click" Delay="350" Interval="100" AutomationProperties.Name="上一条 Run"/>
                                 </Grid>
                             </Grid>
+                            <StackPanel x:Name="CoordinateRunSelector" Visibility="Collapsed" Orientation="Horizontal">
+                                <TextBlock Text="Wafer" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                <Grid Width="104" Margin="0,0,3,0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="18"/></Grid.ColumnDefinitions>
+                                    <TextBox x:Name="RunWaferTextBox" Padding="4,0" VerticalContentAlignment="Center" BorderBrush="#D7E0ED"
+                                             KeyDown="RunWaferTextBox_KeyDown" LostKeyboardFocus="RunWaferTextBox_LostKeyboardFocus" AutomationProperties.Name="Run 晶圆"/>
+                                    <Grid Grid.Column="1"><Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                                        <RepeatButton x:Name="NextRunWaferButton" Content="▴" Padding="0" FontSize="9" Click="NextRunWafer_Click" Delay="350" Interval="100" AutomationProperties.Name="下一片晶圆"/>
+                                        <RepeatButton x:Name="PreviousRunWaferButton" Grid.Row="1" Content="▾" Padding="0" FontSize="9" Click="PreviousRunWafer_Click" Delay="350" Interval="100" AutomationProperties.Name="上一片晶圆"/>
+                                    </Grid>
+                                </Grid>
+                                <Grid x:Name="RunCoordinatesInput" LostKeyboardFocus="RunCoordinatesInput_LostKeyboardFocus">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="14"/><ColumnDefinition Width="40"/><ColumnDefinition Width="18"/><ColumnDefinition Width="40"/><ColumnDefinition Width="18"/></Grid.ColumnDefinitions>
+                                    <TextBlock Text="X" VerticalAlignment="Center"/>
+                                    <TextBox x:Name="RunXTextBox" Grid.Column="1" Padding="4,0" VerticalContentAlignment="Center" BorderBrush="#D7E0ED" KeyDown="RunCoordinates_KeyDown" AutomationProperties.Name="Run X 坐标"/>
+                                    <TextBlock Grid.Column="2" Text="Y" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <TextBox x:Name="RunYTextBox" Grid.Column="3" Padding="4,0" VerticalContentAlignment="Center" BorderBrush="#D7E0ED" KeyDown="RunCoordinates_KeyDown" AutomationProperties.Name="Run Y 坐标"/>
+                                    <Grid Grid.Column="4"><Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                                        <RepeatButton x:Name="NextCoordinateRunButton" Content="▴" Padding="0" FontSize="9" Click="NextRun_Click" Delay="350" Interval="100" AutomationProperties.Name="下一条晶圆记录"/>
+                                        <RepeatButton x:Name="PreviousCoordinateRunButton" Grid.Row="1" Content="▾" Padding="0" FontSize="9" Click="PreviousRun_Click" Delay="350" Interval="100" AutomationProperties.Name="上一条晶圆记录"/>
+                                    </Grid>
+                                </Grid>
+                            </StackPanel>
+                            </StackPanel>
                         </StackPanel>
                         <Button x:Name="ValueTableButton" Click="BtnShowValues_Click" Style="{StaticResource ToolbarAction}" Margin="0,0,0,3"><StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Table" Style="{StaticResource ButtonIcon}"/><TextBlock Text="原始值" VerticalAlignment="Center"/></StackPanel></Button>
                         <Button x:Name="CopyStatsButton" Click="BtnCopyAllStats_Click" Style="{StaticResource ToolbarAction}" Margin="0,0,0,3"><StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Copy" Style="{StaticResource ButtonIcon}"/><TextBlock Text="复制" VerticalAlignment="Center"/></StackPanel></Button>
@@ -175,12 +208,22 @@
                         <Setter Property="Margin" Value="4,0"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/>
                         <Setter Property="VerticalAlignment" Value="Center"/>
                     </Style>
-                    <Style x:Key="RunValueText" TargetType="TextBlock" BasedOn="{StaticResource SummaryCellText}">
+                    <Style x:Key="RunValueCell" TargetType="DataGridCell">
+                        <Setter Property="BorderThickness" Value="0"/><Setter Property="Padding" Value="3,0"/>
+                        <Setter Property="Foreground" Value="#1E293B"/>
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding RunValueFails, Mode=OneWay}" Value="True">
-                                <Setter Property="Foreground" Value="#B91C1C"/>
-                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                <Setter Property="Background" Value="#FCE0E8"/>
                             </DataTrigger>
+                            <Trigger Property="IsSelected" Value="True"><Setter Property="BorderBrush" Value="#2563EB"/><Setter Property="BorderThickness" Value="1"/></Trigger>
+                        </Style.Triggers>
+                    </Style>
+                    <Style x:Key="FailsCell" TargetType="DataGridCell">
+                        <Setter Property="BorderThickness" Value="0"/><Setter Property="Padding" Value="3,0"/>
+                        <Setter Property="Foreground" Value="#1E293B"/><Setter Property="Background" Value="#FCE0E8"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Fails, Mode=OneTime}" Value="0"><Setter Property="Background" Value="#DCF3E2"/></DataTrigger>
+                            <Trigger Property="IsSelected" Value="True"><Setter Property="BorderBrush" Value="#2563EB"/><Setter Property="BorderThickness" Value="1"/></Trigger>
                         </Style.Triggers>
                     </Style>
                     <Style x:Key="YieldHeatCell" TargetType="DataGridCell">
@@ -223,7 +266,7 @@
                         <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding TestNumberValue, Mode=OneTime}" SortMemberPath="TestNumberValue" Width="78">
                             <DataGridTextColumn.Header>
                                 <StackPanel>
-                                    <TextBlock Text="序号" Style="{StaticResource ColHeaderLabel}"/>
+                                    <TextBlock Text="Test Num" Style="{StaticResource ColHeaderLabel}"/>
                                     <TextBox Style="{StaticResource ColFilterBox}" Tag="TestNumber"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
@@ -233,7 +276,7 @@
                         <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding DisplayName, Mode=OneTime}" SortMemberPath="DisplayName" Width="150">
                             <DataGridTextColumn.Header>
                                 <StackPanel>
-                                    <TextBlock Text="测试项" Style="{StaticResource ColHeaderLabel}"/>
+                                    <TextBlock Text="Test Item" Style="{StaticResource ColHeaderLabel}"/>
                                     <TextBox Style="{StaticResource ColFilterBox}" Tag="DisplayName"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
@@ -246,6 +289,15 @@
                                     <TextBlock Text="Site" Style="{StaticResource ColHeaderLabel}"/>
                                     <TextBox Style="{StaticResource ColFilterBox}" Tag="Site"
                                              TextChanged="ColumnFilter_Changed"
+                                             PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                </StackPanel>
+                            </DataGridTextColumn.Header>
+                        </DataGridTextColumn>
+                        <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding Wafer, Mode=OneTime}" SortMemberPath="Wafer" Width="90">
+                            <DataGridTextColumn.Header>
+                                <StackPanel>
+                                    <TextBlock Text="Wafer" Style="{StaticResource ColHeaderLabel}"/>
+                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="Wafer" TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
@@ -273,7 +325,7 @@
                         <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding Unit, Mode=OneTime}" SortMemberPath="Unit" Width="50">
                             <DataGridTextColumn.Header>
                                 <StackPanel>
-                                    <TextBlock Text="单位" Style="{StaticResource ColHeaderLabel}"/>
+                                    <TextBlock Text="Unit" Style="{StaticResource ColHeaderLabel}"/>
                                     <TextBox Style="{StaticResource ColFilterBox}" Tag="Unit"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
@@ -310,6 +362,14 @@
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
+                        <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" CellStyle="{StaticResource FailsCell}"
+                                            Binding="{Binding Fails, Mode=OneTime}" SortMemberPath="Fails" Width="60">
+                            <DataGridTextColumn.Header><StackPanel>
+                                <TextBlock Text="Fails" Style="{StaticResource ColHeaderLabel}" AutomationProperties.HelpText="超出 LSL 或 USL 的有效测量样品数；缺测和无效值计入 Eorr"/>
+                                <TextBox Style="{StaticResource ColFilterBox}" Tag="Fails" TextChanged="ColumnFilter_Changed"
+                                         PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                            </StackPanel></DataGridTextColumn.Header>
+                        </DataGridTextColumn>
                         <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding Eorr, Mode=OneTime}" SortMemberPath="Eorr" Width="60">
                             <DataGridTextColumn.Header>
                                 <StackPanel>
@@ -338,7 +398,21 @@
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
-                        <DataGridTextColumn x:Name="RunValueColumn" ElementStyle="{StaticResource RunValueText}" Binding="{Binding RunValue, StringFormat=G9, TargetNullValue=-, Mode=OneWay}" SortMemberPath="RunValue" Width="90">
+                        <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding Max, StringFormat=G6, TargetNullValue=-, Mode=OneTime}" SortMemberPath="Max" Width="80">
+                            <DataGridTextColumn.Header><StackPanel>
+                                <TextBlock Text="Max" Style="{StaticResource ColHeaderLabel}"/>
+                                <TextBox Style="{StaticResource ColFilterBox}" Tag="Max" TextChanged="ColumnFilter_Changed"
+                                         PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                            </StackPanel></DataGridTextColumn.Header>
+                        </DataGridTextColumn>
+                        <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding Min, StringFormat=G6, TargetNullValue=-, Mode=OneTime}" SortMemberPath="Min" Width="80">
+                            <DataGridTextColumn.Header><StackPanel>
+                                <TextBlock Text="Min" Style="{StaticResource ColHeaderLabel}"/>
+                                <TextBox Style="{StaticResource ColFilterBox}" Tag="Min" TextChanged="ColumnFilter_Changed"
+                                         PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                            </StackPanel></DataGridTextColumn.Header>
+                        </DataGridTextColumn>
+                        <DataGridTextColumn x:Name="RunValueColumn" ElementStyle="{StaticResource SummaryCellText}" CellStyle="{StaticResource RunValueCell}" Binding="{Binding RunValue, StringFormat=G9, TargetNullValue=-, Mode=OneWay}" SortMemberPath="RunValue" Width="90">
                             <DataGridTextColumn.Header><StackPanel>
                                 <TextBlock Text="Value" Style="{StaticResource ColHeaderLabel}" ToolTip="Run 对应的原始测量值；其他 Site、缺测或无效值显示 -"/>
                                 <TextBox Style="{StaticResource ColFilterBox}" Tag="RunValue" TextChanged="ColumnFilter_Changed" PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
@@ -347,7 +421,7 @@
                         <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding Median, StringFormat=G6, TargetNullValue=-, Mode=OneTime}" SortMemberPath="Median" Width="80">
                             <DataGridTextColumn.Header>
                                 <StackPanel>
-                                    <TextBlock Text="中位数" Style="{StaticResource ColHeaderLabel}"/>
+                                    <TextBlock Text="Median" Style="{StaticResource ColHeaderLabel}"/>
                                     <TextBox Style="{StaticResource ColFilterBox}" Tag="Median"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
@@ -417,25 +491,30 @@
                     <RowDefinition Height="8"/>
                     <RowDefinition x:Name="ScatterRow" Height="*" MinHeight="158"/>
                 </Grid.RowDefinitions>
-                <Border Grid.Row="0" Background="White" BorderBrush="{StaticResource BorderSoft}" BorderThickness="1" CornerRadius="9" Padding="12,8" Margin="0,0,0,8">
-                    <StackPanel>
-                        <TextBlock x:Name="TxtItemTitle" Text="选择测试项查看分布" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                        <TextBlock x:Name="TxtUnit" Text="从左侧列表选择一行" Margin="0,3,0,4" FontSize="11" Foreground="{StaticResource TextSecondary}" TextTrimming="CharacterEllipsis"/>
-                        <ListBox x:Name="CmbBinMode" SelectedIndex="0" BorderThickness="0" Background="Transparent" Padding="0"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled"
-                                 AutomationProperties.Name="直方图模式" SelectionChanged="CmbBinMode_SelectionChanged"
-                                 ItemContainerStyle="{StaticResource SegmentOption}">
-                            <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
-                            <ListBoxItem Content="固定等宽"/><ListBoxItem Content="规格区间"/><ListBoxItem Content="中位数中心"/>
-                        </ListBox>
-                    </StackPanel>
+                <Border Grid.Row="0" Background="White" BorderBrush="{StaticResource BorderSoft}" BorderThickness="1" CornerRadius="7" Padding="9,4" Margin="0,0,0,5">
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="1.3*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock x:Name="TxtItemTitle" Text="选择测试项查看分布" FontSize="11" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" AutomationProperties.HelpText="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                        <TextBlock x:Name="TxtUnit" Grid.Column="1" Text="从左侧列表选择一行" Margin="10,0,0,0" FontSize="10" Foreground="{StaticResource TextSecondary}" TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" TextAlignment="Right" AutomationProperties.HelpText="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                    </Grid>
                 </Border>
                 <Border Grid.Row="1" BorderBrush="{StaticResource BorderSoft}" BorderThickness="1" Background="White" CornerRadius="9" Padding="4">
                     <DockPanel>
-                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8,4,0,2">
-                            <controls:ActionIcon Kind="Chart" Width="14" Height="14" Stroke="#64748B" Margin="0,0,6,0"/>
-                            <TextBlock Text="直方图" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
-                        </StackPanel>
+                        <WrapPanel DockPanel.Dock="Top" Margin="8,1,0,0">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
+                                <controls:ActionIcon Kind="Chart" Width="14" Height="14" Stroke="#64748B" Margin="0,0,6,0"/>
+                                <TextBlock Text="直方图" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
+                            </StackPanel>
+                        <ListBox x:Name="CmbBinMode" SelectedIndex="0" BorderThickness="0" Background="Transparent" Padding="0"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                 AutomationProperties.Name="直方图模式" SelectionChanged="CmbBinMode_SelectionChanged"
+                                 ItemContainerStyle="{StaticResource ChartSegmentOption}">
+                            <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
+                            <ListBoxItem Content="固定等宽"/><ListBoxItem Content="规格区间"/><ListBoxItem Content="中位数中心"/>
+                        </ListBox>
+                        </WrapPanel>
                         <controls:HistogramControl x:Name="Histogram"/>
                     </DockPanel>
                 </Border>
@@ -443,10 +522,30 @@
                               ResizeDirection="Rows" ResizeBehavior="PreviousAndNext" Background="Transparent" Cursor="SizeNS"/>
                 <Border Grid.Row="3" BorderBrush="{StaticResource BorderSoft}" BorderThickness="1" Background="White" CornerRadius="9" Padding="4">
                     <DockPanel>
-                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8,4,0,2">
-                            <controls:ActionIcon Kind="Scatter" Width="14" Height="14" Stroke="#64748B" Margin="0,0,6,0"/>
-                            <TextBlock Text="散点图" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
-                        </StackPanel>
+                        <WrapPanel DockPanel.Dock="Top" Margin="8,1,0,0">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
+                                <controls:ActionIcon Kind="Scatter" Width="14" Height="14" Stroke="#64748B" Margin="0,0,6,0"/>
+                                <TextBlock Text="散点图" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
+                            </StackPanel>
+                            <ListBox x:Name="ScatterSortMode" SelectedIndex="0" BorderThickness="0" Background="Transparent" Padding="0"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                     AutomationProperties.Name="散点图排序" SelectionChanged="ScatterSortMode_SelectionChanged"
+                                     ItemContainerStyle="{StaticResource ChartSegmentOption}">
+                                <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
+                                <ListBoxItem Content="按 SN" AutomationProperties.HelpText="按序列号排序；相同序列号保留原始记录先后"/>
+                                <ListBoxItem Content="按 Site" AutomationProperties.HelpText="先按 Site，再按 SN；数值序号按数值排序"/>
+                                <ListBoxItem Content="按晶圆" AutomationProperties.HelpText="按晶圆在源数据中的先后分组，同晶圆按 SN 排序"/>
+                            </ListBox>
+                            <ToggleButton x:Name="BtnLockScatterY" Style="{StaticResource SiteToggle}" Padding="7,3" Margin="3,0,0,0"
+                                          VerticalAlignment="Center" IsChecked="{Binding IsYAxisLocked, ElementName=ScatterPlot, Mode=TwoWay}"
+                                          AutomationProperties.Name="锁定散点图纵轴" AutomationProperties.HelpText="保留当前纵轴范围；切换测项、排序和缩放时保持一致，取消勾选恢复自动范围">
+                                <StackPanel Orientation="Horizontal">
+                                    <CheckBox IsHitTestVisible="False" Focusable="False" VerticalAlignment="Center" Margin="0,0,5,0"
+                                              IsChecked="{Binding IsChecked, RelativeSource={RelativeSource AncestorType=ToggleButton}, Mode=OneWay}"/>
+                                    <TextBlock Text="锁定纵轴" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </ToggleButton>
+                        </WrapPanel>
                         <controls:ScatterPlotControl x:Name="ScatterPlot"/>
                     </DockPanel>
                 </Border>

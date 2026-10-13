@@ -1,5 +1,6 @@
 using System.Text;
 using System.Globalization;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -12,22 +13,38 @@ namespace SemiconductorCsvAnalyzer;
 
 public partial class WaferMapWindow : Window
 {
-    public sealed class LegendRow
+    public sealed class LegendRow : INotifyPropertyChanged
     {
         public string Category { get; set; } = "";
         public int Count { get; set; }
         public double Percent { get; set; }
         public Brush Color { get; set; } = Brushes.Gray;
+        private bool _isDisplayed = true;
+        public bool IsDisplayed
+        {
+            get => _isDisplayed;
+            set
+            {
+                if (_isDisplayed == value) return;
+                _isDisplayed = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsDisplayed)));
+            }
+        }
+        public event PropertyChangedEventHandler? PropertyChanged;
     }
 
     private List<LegendRow> _legend = new();
+    private readonly bool _isBinMap;
+    private readonly HashSet<string> _dimmedBins = new(StringComparer.Ordinal);
+    private bool _updatingBinVisibility;
     private IList<WaferDie> _pfDies = Array.Empty<WaferDie>();
     private HeatmapScale? _heatmapScale;
     private string _unit = "";
     private IList<WaferDie>? _heatDies;
     private bool _ready;
-    private bool _useSigmaRange = true, _updatingHeatRange;
+    private bool _useSigmaRange = true, _useCustomRange, _updatingHeatRange;
     private double _heatSigma = 6;
+    private (double Blue, double Green, double Red)? _customRange;
 
     public WaferMapWindow(string title, IList<WaferDie> dies, HeatmapScale? heatmapScale = null, string unit = "")
         : this(title, new[] { new WaferMapPage(dies.FirstOrDefault()?.WaferId ?? "Wafer", dies, heatmapScale, unit, heatmapScale != null) })
@@ -36,8 +53,10 @@ public partial class WaferMapWindow : Window
     public WaferMapWindow(string title, IReadOnlyList<WaferMapPage> pages, string? binName = null)
     {
         InitializeComponent();
+        _isBinMap = binName != null;
         if (binName != null)
         {
+            BinVisibilityColumn.Visibility = Visibility.Visible;
             ChkBinNumbers.Content = $"显示 {binName} 数字";
             ChkBinNumbers.Visibility = Visibility.Visible;
         }
@@ -55,13 +74,17 @@ public partial class WaferMapWindow : Window
             _pfDies = Array.Empty<WaferDie>();
             _heatDies = null;
             _heatmapScale = null;
-            _legend.Clear();
+            ClearLegend();
+            _dimmedBins.Clear();
+            Map.DimmedCategories = null;
         };
         Title = title;
         TxtTitle.Text = title;
         SetPages(pages);
         var layout = new WindowLayoutPersistence(this, "WaferMap");
         layout.TrackTable("Legend", DgLegend);
+        // Map types share their saved layout, but this option belongs to BIN maps only.
+        BinVisibilityColumn.Visibility = _isBinMap ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void ShowHoverInfo(string text, Point position)
@@ -100,7 +123,7 @@ public partial class WaferMapWindow : Window
         if (pages.Count == 0)
         {
             Map.Dies = null; _pfDies = Array.Empty<WaferDie>(); _heatDies = null; _heatmapScale = null;
-            _legend = new(); DgLegend.ItemsSource = new ListCollectionView(_legend);
+            ClearLegend(); DgLegend.ItemsSource = new ListCollectionView(_legend);
             TxtMapInfo.Text = "没有可显示的 wafer。"; TxtHeatRange.Text = "";
             ModePanel.Visibility = HeatLegend.Visibility = Visibility.Collapsed;
             DgLegend.Visibility = Visibility.Visible;
@@ -110,10 +133,25 @@ public partial class WaferMapWindow : Window
     private void Wafer_Changed(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         => ApplySelectedPage();
 
+    public void SelectWafer(string wafer)
+    {
+        var page = WaferList.Items.OfType<WaferMapPage>().FirstOrDefault(p => p.WaferId == wafer);
+        if (page != null) WaferList.SelectedItem = page;
+    }
+
     private void ApplySelectedPage()
     {
         if (!_ready || WaferList.SelectedItem is not WaferMapPage page) return;
-        _pfDies = page.Dies; _heatmapScale = page.HeatmapScale?.WithSigmaRange(_useSigmaRange ? _heatSigma : null);
+        _pfDies = page.Dies;
+        _heatmapScale = _useCustomRange && _customRange is { } custom
+            ? page.HeatmapScale?.WithCustomRange(custom.Blue, custom.Green, custom.Red)
+            : page.HeatmapScale?.WithSigmaRange(_useSigmaRange ? _heatSigma : null);
+        if (_customRange == null && _heatmapScale != null)
+        {
+            TxtHeatBlue.Text = _heatmapScale.Minimum.ToString("G17", CultureInfo.InvariantCulture);
+            TxtHeatGreen.Text = _heatmapScale.Center.ToString("G17", CultureInfo.InvariantCulture);
+            TxtHeatRed.Text = _heatmapScale.Maximum.ToString("G17", CultureInfo.InvariantCulture);
+        }
         _unit = page.Unit; _heatDies = null;
         ModePanel.Visibility = page.AllowHeatmap ? Visibility.Visible : Visibility.Collapsed;
         HeatMode.IsEnabled = _heatmapScale != null;
@@ -121,6 +159,7 @@ public partial class WaferMapWindow : Window
         TxtHeatRange.Text = HeatRangeText();
         TxtMapInfo.Text = page.Dies.Count == 0 ? "此 wafer 在当前测试项 / Site 下没有可绘制坐标。" : $"{page.Dies.Count} 颗芯片；悬停查看详细信息";
         int total = Math.Max(1, _pfDies.Count);
+        ClearLegend();
         _legend = _pfDies
             .GroupBy(d => d.Category)
             .Select(g => new LegendRow
@@ -128,40 +167,108 @@ public partial class WaferMapWindow : Window
                 Category = g.Key,
                 Count = g.Count(),
                 Percent = 100.0 * g.Count() / total,
-                Color = g.First().Color
+                Color = g.First().Color,
+                IsDisplayed = !_dimmedBins.Contains(g.Key)
             })
             .OrderBy(r => ParseBinSortKey(r.Category))
             .ThenBy(r => r.Category)
             .ToList();
 
+        if (_isBinMap)
+            foreach (var row in _legend) row.PropertyChanged += LegendVisibility_Changed;
         DgLegend.ItemsSource = new ListCollectionView(_legend);
         MapMode_Changed(this, new RoutedEventArgs());
+    }
+
+    private void ClearLegend()
+    {
+        foreach (var row in _legend) row.PropertyChanged -= LegendVisibility_Changed;
+        _legend.Clear();
+    }
+
+    private void LegendVisibility_Changed(object? sender, PropertyChangedEventArgs e)
+    {
+        if (!_ready || !_isBinMap || _updatingBinVisibility || sender is not LegendRow row || e.PropertyName != nameof(LegendRow.IsDisplayed)) return;
+        if (row.IsDisplayed) _dimmedBins.Remove(row.Category);
+        else _dimmedBins.Add(row.Category);
+        ApplyBinVisibility();
+    }
+
+    private void BinVisibilityHeader_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_ready || !_isBinMap || _legend.Count == 0) return;
+        // A mixed selection becomes all checked; the next click becomes all unchecked.
+        bool show = _legend.Any(row => !row.IsDisplayed);
+        _updatingBinVisibility = true;
+        try
+        {
+            foreach (var row in _legend)
+            {
+                row.IsDisplayed = show;
+                if (show) _dimmedBins.Remove(row.Category);
+                else _dimmedBins.Add(row.Category);
+            }
+        }
+        finally { _updatingBinVisibility = false; }
+        ApplyBinVisibility();
+        e.Handled = true;
+    }
+
+    private void ApplyBinVisibility()
+    {
+        // Replace a small set once per click, rather than copying dies or rebuilding the wafer.
+        Map.DimmedCategories = _dimmedBins.Count == 0 ? null : new HashSet<string>(_dimmedBins, StringComparer.Ordinal);
     }
 
     private void HeatRangeMode_Changed(object sender, RoutedEventArgs e)
     {
         if (!_ready || _updatingHeatRange) return;
         bool sigma = SigmaRangeMode.IsChecked == true;
+        bool custom = CustomRangeMode.IsChecked == true;
         double multiple = _heatSigma;
-        if (sigma && (!double.TryParse(TxtHeatSigma.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out multiple)
-            || !double.IsFinite(multiple) || multiple <= 0))
+        string error = "";
+        var range = _customRange;
+        if (custom)
         {
-            TxtHeatError.Text = "N 必须为大于 0 的有限数字。";
+            if (!DatasetService.TryValue(TxtHeatBlue.Text, out double blue) ||
+                !DatasetService.TryValue(TxtHeatGreen.Text, out double green) ||
+                !DatasetService.TryValue(TxtHeatRed.Text, out double red) || blue >= green || green >= red)
+                error = "色标须为有限数字，且蓝标 < 绿标 < 红标。";
+            else range = (blue, green, red);
+        }
+        else if (sigma && (!double.TryParse(TxtHeatSigma.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out multiple)
+            || !double.IsFinite(multiple) || multiple <= 0))
+            error = "N 必须为大于 0 的有限数字。";
+        if (error.Length > 0)
+        {
+            TxtHeatError.Text = error;
             _updatingHeatRange = true;
-            SigmaRangeMode.IsChecked = _useSigmaRange; MinMaxRangeMode.IsChecked = !_useSigmaRange;
+            SigmaRangeMode.IsChecked = _useSigmaRange;
+            MinMaxRangeMode.IsChecked = !_useSigmaRange && !_useCustomRange;
+            CustomRangeMode.IsChecked = _useCustomRange;
             _updatingHeatRange = false;
             return;
         }
-        _useSigmaRange = sigma; _heatSigma = multiple; TxtHeatError.Text = "";
+        _useSigmaRange = sigma; _useCustomRange = custom; _customRange = range;
+        _heatSigma = multiple; TxtHeatError.Text = "";
         ApplySelectedPage();
+    }
+
+    private void ApplyCustomRange_Click(object sender, RoutedEventArgs e)
+    {
+        _updatingHeatRange = true;
+        CustomRangeMode.IsChecked = true;
+        _updatingHeatRange = false;
+        HeatRangeMode_Changed(sender, e);
     }
 
     private string HeatRangeText() => _heatmapScale == null ? "" :
         (WaferList.Items.Count > 1 ? "所有 wafer 共用色标（当前 Site）\n" : "") +
-        (_useSigmaRange ? $"色标：均值 ± {_heatSigma:G}σ\n" : "色标：最小值 / 均值 / 最大值\n") +
+        (_useCustomRange ? "色标：自定义\n" : _useSigmaRange ? $"色标：均值 ± {_heatSigma:G}σ\n" : "色标：最小值 / 均值 / 最大值\n") +
         $"蓝色：{ChartAxis.Format(_heatmapScale.Minimum)} {_unit}\n" +
-        $"均值：{ChartAxis.Format(_heatmapScale.Mean)} {_unit}\n" +
+        $"绿色{(_useCustomRange ? "" : "（均值）")}：{ChartAxis.Format(_heatmapScale.Center)} {_unit}\n" +
         $"红色：{ChartAxis.Format(_heatmapScale.Maximum)} {_unit}\n" +
+        (_useCustomRange ? $"实际均值：{ChartAxis.Format(_heatmapScale.Mean)} {_unit}\n" : "") +
         $"σ：{ChartAxis.Format(_heatmapScale.Sigma)} {_unit}";
 
     private void MapMode_Changed(object sender, RoutedEventArgs e)
@@ -213,60 +320,14 @@ public partial class WaferMapWindow : Window
         if (category.Equals("FAIL", StringComparison.OrdinalIgnoreCase))
             return FailBrush;
         if (category.Equals("Eorr", StringComparison.OrdinalIgnoreCase)) return Brushes.Gray;
-        if (IsBinOne(category))
-            return PassBrush;
         if (string.IsNullOrWhiteSpace(category) || category == "(空)")
             return Brushes.Gray;
 
-        return ColorFromPalette(category);
-    }
-
-    private static bool IsBinOne(string category)
-    {
-        var s = category.Trim();
-        if (s.Equals("1", StringComparison.OrdinalIgnoreCase)) return true;
-        if (s.Equals("01", StringComparison.OrdinalIgnoreCase)) return true;
-        if (s.Equals("BIN1", StringComparison.OrdinalIgnoreCase)) return true;
-        if (s.Equals("SBIN1", StringComparison.OrdinalIgnoreCase)) return true;
-        if (s.Equals("HBIN1", StringComparison.OrdinalIgnoreCase)) return true;
-        return double.TryParse(s, out double n) && Math.Abs(n - 1) < 1e-9;
+        return BinPalette.ColorForCategory(category);
     }
 
     private static readonly Brush PassBrush = NewBrush(46, 160, 67);
     private static readonly Brush FailBrush = NewBrush(210, 60, 60);
-    private static readonly Brush[] Palette = new Color[]
-        {
-            Color.FromRgb(31, 119, 180),
-            Color.FromRgb(255, 127, 14),
-            Color.FromRgb(148, 103, 189),
-            Color.FromRgb(140, 86, 75),
-            Color.FromRgb(227, 119, 194),
-            Color.FromRgb(127, 127, 127),
-            Color.FromRgb(188, 189, 34),
-            Color.FromRgb(23, 190, 207),
-            Color.FromRgb(174, 199, 232),
-            Color.FromRgb(255, 187, 120),
-            Color.FromRgb(197, 176, 213),
-            Color.FromRgb(196, 156, 148),
-            Color.FromRgb(247, 182, 210),
-            Color.FromRgb(199, 199, 199),
-            Color.FromRgb(219, 219, 141),
-            Color.FromRgb(158, 218, 229),
-            Color.FromRgb(214, 39, 40),
-            Color.FromRgb(44, 160, 44),
-            Color.FromRgb(255, 187, 0),
-            Color.FromRgb(0, 128, 128),
-        }.Select(c => (Brush)NewBrush(c.R, c.G, c.B)).ToArray();
-
-    private static Brush ColorFromPalette(string category)
-    {
-        int key = category.GetHashCode();
-        if (int.TryParse(category, out int binNo))
-            key = binNo;
-
-        return Palette[(int)(Math.Abs((long)key) % Palette.Length)];
-    }
-
     private static SolidColorBrush NewBrush(byte r, byte g, byte b)
     {
         var brush = new SolidColorBrush(Color.FromRgb(r, g, b));

@@ -55,7 +55,7 @@ public partial class HelpWindow : Window
         if (string.IsNullOrWhiteSpace(_markdown)) return;
         var dialog = new SaveFileDialog
         {
-            Title = "保存使用手册", FileName = "CSV Analyzer V2.0 使用手册.md",
+            Title = "保存使用手册", FileName = "CSV Analyzer V2.0.4 使用手册.md",
             Filter = "Markdown 文档 (*.md)|*.md", DefaultExt = ".md", AddExtension = true
         };
         if (dialog.ShowDialog(this) != true) return;
