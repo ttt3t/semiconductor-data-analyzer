@@ -93,6 +93,25 @@ public class WaferMapControl : FrameworkElement
         set => SetValue(DiesProperty, value);
     }
 
+    public static readonly DependencyProperty DimmedCategoriesProperty =
+        DependencyProperty.Register(nameof(DimmedCategories), typeof(IReadOnlySet<string>), typeof(WaferMapControl),
+            new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender, (d, _) =>
+            {
+                // Only repaint colors/label contrast. Coordinates, hover lookup and Site borders stay cached.
+                var map = (WaferMapControl)d;
+                map._fills = map._numbers = null;
+                map._fillBitmap = null;
+            }));
+
+    public IReadOnlySet<string>? DimmedCategories
+    {
+        get => (IReadOnlySet<string>?)GetValue(DimmedCategoriesProperty);
+        set => SetValue(DimmedCategoriesProperty, value);
+    }
+
+    private Brush DisplayColor(WaferDie die)
+        => DimmedCategories?.Contains(die.Category) == true ? Brushes.Silver : die.Color;
+
     public static readonly DependencyProperty ShowSiteBordersProperty =
         DependencyProperty.Register(nameof(ShowSiteBorders), typeof(bool), typeof(WaferMapControl),
             new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
@@ -239,13 +258,13 @@ public class WaferMapControl : FrameworkElement
         // Bound memory even for sparse/extreme coordinates. Non-solid fills use
         // the vector fallback below; the application's BIN/heat palettes are solid.
         if (width <= 8192 && height <= 8192 && width * height <= 4_000_000 &&
-            _hoverIndex.Values.All(d => d.Color is SolidColorBrush))
+            _hoverIndex.Values.All(d => DisplayColor(d) is SolidColorBrush))
         {
             int stride = (int)width * 4;
             var pixels = new byte[stride * (int)height];
             foreach (var die in _hoverIndex.Values)
             {
-                var brush = (SolidColorBrush)die.Color;
+                var brush = (SolidColorBrush)DisplayColor(die);
                 var color = brush.Color;
                 int offset = (die.Y - _minY) * stride + (die.X - _minX) * 4;
                 pixels[offset] = color.B; pixels[offset + 1] = color.G; pixels[offset + 2] = color.R;
@@ -262,7 +281,7 @@ public class WaferMapControl : FrameworkElement
                 Rectangle(lines, (long)die.X - _minX, (long)die.Y - _minY, false);
         _gridLines.Freeze();
         using (var drawing = _fills.Open())
-            foreach (var group in _hoverIndex.Values.GroupBy(d => d.Color))
+            foreach (var group in _hoverIndex.Values.GroupBy(DisplayColor))
             {
                 var geometry = new StreamGeometry { FillRule = FillRule.Nonzero };
                 using (var context = geometry.Open())
@@ -318,7 +337,7 @@ public class WaferMapControl : FrameworkElement
         foreach (var die in dies)
         {
             string label = string.IsNullOrWhiteSpace(die.Category) || die.Category == "(空)" ? "-" : die.Category;
-            bool light = die.Color is SolidColorBrush fill &&
+            bool light = DisplayColor(die) is SolidColorBrush fill &&
                 fill.Color.R * 0.299 + fill.Color.G * 0.587 + fill.Color.B * 0.114 < 150;
             if (!labels.TryGetValue((label, light), out var text))
             {

@@ -4,13 +4,13 @@ using SemiconductorCsvAnalyzer.Services;
 
 namespace SemiconductorCsvAnalyzer.Controls;
 
-public class HistogramControl : FrameworkElement
+public class HistogramControl : CachedPlotControl
 {
     private static readonly PropertyChangedCallback InvalidateIfIdle = (d, _) =>
     {
         var c = (HistogramControl)d;
         if (c._batch == 0)
-            c.InvalidateVisual();
+            c.InvalidatePlot();
     };
 
     public static readonly DependencyProperty BinsProperty =
@@ -105,12 +105,13 @@ public class HistogramControl : FrameworkElement
         ShowMean = showMean;
         ShowThreeSigma = showThreeSigma;
         _batch--;
-        InvalidateVisual();
+        InvalidatePlot();
     }
 
-    protected override void OnRender(DrawingContext dc)
+    protected override bool HasPlotContent => Bins is { Count: > 0 };
+
+    protected override void DrawPlot(DrawingContext dc)
     {
-        base.OnRender(dc);
         _renderCount++;
         double w = ActualWidth, h = ActualHeight;
         dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, Math.Max(0, w), Math.Max(0, h)));

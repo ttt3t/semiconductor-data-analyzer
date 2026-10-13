@@ -3,12 +3,13 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using SemiconductorCsvAnalyzer.Models;
 using SemiconductorCsvAnalyzer.Services;
 
 namespace SemiconductorCsvAnalyzer.Controls;
 
-public class ScatterPlotControl : FrameworkElement
+public class ScatterPlotControl : CachedPlotControl
 {
     public static readonly DependencyProperty ValuesProperty =
         DependencyProperty.Register(nameof(Values), typeof(IList<TestValue>), typeof(ScatterPlotControl),
@@ -31,13 +32,57 @@ public class ScatterPlotControl : FrameworkElement
     public double? Lsl { get => (double?)GetValue(LslProperty); set => SetValue(LslProperty, value); }
     public double? Usl { get => (double?)GetValue(UslProperty); set => SetValue(UslProperty, value); }
 
+    public static readonly DependencyProperty IsYAxisLockedProperty =
+        DependencyProperty.Register(nameof(IsYAxisLocked), typeof(bool), typeof(ScatterPlotControl),
+            new FrameworkPropertyMetadata(false, (d, _) => ((ScatterPlotControl)d).UpdateYAxisLock()));
+
+    public bool IsYAxisLocked
+    {
+        get => (bool)GetValue(IsYAxisLockedProperty);
+        set => SetValue(IsYAxisLockedProperty, value);
+    }
+
+    private (double Min, double Max)? _lockedYRange;
+
+    private void UpdateYAxisLock()
+    {
+        if (IsYAxisLocked && _pointCount > 0)
+        {
+            double min = _dataMinY, max = _dataMaxY;
+            if (_hasPlot) GetVisibleRange(out _, out _, out min, out max);
+            _lockedYRange = (min, max);
+        }
+        else if (!IsYAxisLocked) _lockedYRange = null;
+        UpdateVerticalRange();
+        InvalidatePlot();
+        _overlayLayer.InvalidateVisual();
+    }
+
+    private void UpdateVerticalRange()
+    {
+        _scaleY = 1; _offsetY = 0;
+        if (_pointCount == 0) return; // Keep the lock across the temporary empty series while loading another item.
+        double pad = (_series.Maximum - _series.Minimum) * 0.05;
+        if (pad <= 0) pad = Math.Max(Math.Abs(_series.Minimum) * 0.01, 1e-12);
+        var range = (_series.Minimum - pad, _series.Maximum + pad);
+        if (IsYAxisLocked)
+        {
+            _lockedYRange ??= range; // A lock enabled before selecting a test captures its first range.
+            range = _lockedYRange.Value;
+        }
+        (_dataMinY, _dataMaxY) = range;
+    }
+
     private static readonly Brush PointBrush = Freeze(new SolidColorBrush(Color.FromRgb(30, 120, 200)));
+    private static readonly Brush GroupDarkBrush = Freeze(new SolidColorBrush(Color.FromRgb(31, 95, 165)));
+    private static readonly Brush GroupLightBrush = Freeze(new SolidColorBrush(Color.FromRgb(128, 185, 231)));
     private static readonly Brush OutBrush = Freeze(new SolidColorBrush(Color.FromRgb(220, 60, 60)));
     private static readonly Brush GridBrush = Freeze(new SolidColorBrush(Color.FromRgb(210, 210, 210)));
     private static readonly Brush CrossBrush = Freeze(new SolidColorBrush(Color.FromRgb(168, 168, 168)));
     private static readonly Brush LabelBg = Freeze(new SolidColorBrush(Color.FromArgb(235, 255, 255, 255)));
     private static readonly Pen AxisPen = Freeze(new Pen(Brushes.Black, 1));
     private static readonly Pen GridPen = Freeze(new Pen(GridBrush, 1));
+    private static readonly Pen GroupPen = Freeze(new Pen(Freeze(new SolidColorBrush(Color.FromRgb(218, 223, 230))), 1));
     private static readonly Pen CrossPen = Freeze(new Pen(CrossBrush, 1));
     private static readonly Pen RedPen = Freeze(new Pen(Brushes.Red, 1.5));
     private static readonly Pen LabelBorder = Freeze(new Pen(Freeze(new SolidColorBrush(Color.FromRgb(180, 180, 180))), 0.8));
@@ -46,6 +91,8 @@ public class ScatterPlotControl : FrameworkElement
     private const string InteractionHelp = "滚轮缩放 · 左键拖拽 · 双击/右键重置";
     private double Dpi => VisualTreeHelper.GetDpi(this).PixelsPerDip;
     public string Unit { get; private set; } = "";
+    public string HorizontalAxisTitle => _series.Order switch
+        { ScatterOrder.Site => "Site", ScatterOrder.Wafer => "Wafer", _ => "样本序号" };
 
     private static T Freeze<T>(T f) where T : Freezable
     {
@@ -54,6 +101,7 @@ public class ScatterPlotControl : FrameworkElement
     }
 
     private readonly OverlayLayer _overlayLayer;
+    private readonly DispatcherTimer _hoverTimer;
     private int _batch;
     private long _renderCount;
 
@@ -68,6 +116,8 @@ public class ScatterPlotControl : FrameworkElement
     private Point? _hover;
     private ScatterSeries _series = ScatterSeries.Empty;
     private int _pointCount;
+    private FormattedText[] _groupLabels = Array.Empty<FormattedText>();
+    private double _groupLabelDpi;
 
     public ScatterPlotControl()
     {
@@ -82,6 +132,19 @@ public class ScatterPlotControl : FrameworkElement
         _overlayLayer = new OverlayLayer(this) { IsHitTestVisible = false };
         AddVisualChild(_overlayLayer);
         AddLogicalChild(_overlayLayer);
+        _hoverTimer = new DispatcherTimer(DispatcherPriority.Render, Dispatcher)
+            { Interval = TimeSpan.FromMilliseconds(16) };
+        _hoverTimer.Tick += (_, _) =>
+        {
+            _hoverTimer.Stop();
+            _overlayLayer.InvalidateVisual();
+        };
+        Unloaded += (_, _) =>
+        {
+            _hoverTimer.Stop();
+            _hover = null;
+            _overlayLayer.InvalidateVisual();
+        };
 
         MouseWheel += OnMouseWheel;
         MouseLeftButtonDown += OnMouseLeftButtonDown;
@@ -100,8 +163,6 @@ public class ScatterPlotControl : FrameworkElement
         Usl = usl;
         _batch--;
         RebuildPointCache();
-        InvalidateVisual();
-        _overlayLayer.InvalidateVisual();
     }
 
     public void SetSeries(ScatterSeries series, double? lsl, double? usl, string unit)
@@ -120,12 +181,19 @@ public class ScatterPlotControl : FrameworkElement
         var c = (ScatterPlotControl)d;
         if (c._batch != 0) return;
         c.RebuildPointCache();
-        c.InvalidateVisual();
-        c._overlayLayer?.InvalidateVisual();
     }
 
     protected override int VisualChildrenCount => 1;
     protected override Visual GetVisualChild(int index) => _overlayLayer;
+
+    protected override bool HasPlotContent => _pointCount > 0;
+
+    protected override void OnResizePreview()
+    {
+        _hoverTimer.Stop();
+        _hover = null;
+        _overlayLayer.InvalidateVisual();
+    }
 
     protected override HitTestResult HitTestCore(PointHitTestParameters hitTestParameters)
         => new PointHitTestResult(this, hitTestParameters.HitPoint);
@@ -140,11 +208,16 @@ public class ScatterPlotControl : FrameworkElement
 
     protected override Size ArrangeOverride(Size finalSize)
     {
+        base.ArrangeOverride(finalSize);
         const double left = ChartAxis.PlotLeft, right = ChartAxis.PlotRight, top = 32, bottom = 54;
+        double nextW = Math.Max(0, finalSize.Width - left - right);
+        double nextH = Math.Max(0, finalSize.Height - top - bottom);
+        if (_plotW > 0) _offsetX *= nextW / _plotW;
+        if (_plotH > 0) _offsetY *= nextH / _plotH;
         _left = left;
         _top = top;
-        _plotW = Math.Max(0, finalSize.Width - left - right);
-        _plotH = Math.Max(0, finalSize.Height - top - bottom);
+        _plotW = nextW;
+        _plotH = nextH;
         _hasPlot = _plotW >= 20 && _plotH >= 20 && _pointCount > 0;
         _overlayLayer.Arrange(new Rect(0, 0, finalSize.Width, finalSize.Height));
         return finalSize;
@@ -152,28 +225,37 @@ public class ScatterPlotControl : FrameworkElement
 
     private void ResetZoom()
     {
-        _scaleX = _scaleY = 1.0;
-        _offsetX = _offsetY = 0;
-        InvalidateVisual();
+        _scaleX = 1; _offsetX = 0;
+        if (!IsYAxisLocked) { _scaleY = 1; _offsetY = 0; }
+        InvalidatePlot();
         _overlayLayer.InvalidateVisual();
     }
 
     private void OnMouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if (_pointCount == 0 || !IsInPlot(e.GetPosition(this))) return;
-
         Point mouse = e.GetPosition(this);
-        double nextScale = Math.Clamp(_scaleX * (e.Delta > 0 ? 1.15 : 1.0 / 1.15), 0.2, 50);
+        if (_pointCount == 0 || !IsInPlot(mouse)) return;
+        ZoomAt(mouse, e.Delta);
+        e.Handled = true;
+    }
+
+    private void ZoomAt(Point mouse, int delta)
+    {
+        double nextScale = Math.Clamp(_scaleX * (delta > 0 ? 1.15 : 1.0 / 1.15), 0.2, 50);
         double zoomFactor = nextScale / _scaleX;
 
         _offsetX = mouse.X - _left - (mouse.X - _left - _offsetX) * zoomFactor;
-        double originY = _top + _plotH;
-        _offsetY = originY - mouse.Y - (originY - mouse.Y - _offsetY) * zoomFactor;
-        _scaleX = _scaleY = nextScale;
+        if (!IsYAxisLocked)
+        {
+            double nextScaleY = Math.Clamp(_scaleY * zoomFactor, 0.2, 50);
+            double originY = _top + _plotH;
+            _offsetY = originY - mouse.Y - (originY - mouse.Y - _offsetY) * (nextScaleY / _scaleY);
+            _scaleY = nextScaleY;
+        }
+        _scaleX = nextScale;
         _hover = mouse;
-        InvalidateVisual();
+        InvalidatePlot();
         _overlayLayer.InvalidateVisual();
-        e.Handled = true;
     }
 
     private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -203,13 +285,13 @@ public class ScatterPlotControl : FrameworkElement
         _dragStart = null;
         if (IsMouseCaptured)
             ReleaseMouseCapture();
-        InvalidateVisual();
         _overlayLayer.InvalidateVisual();
     }
 
     private void OnMouseLeave(object sender, MouseEventArgs e)
     {
         if (IsMouseCaptured) return;
+        _hoverTimer.Stop();
         _hover = null;
         _overlayLayer.InvalidateVisual();
     }
@@ -217,17 +299,23 @@ public class ScatterPlotControl : FrameworkElement
     private void OnMouseMove(object sender, MouseEventArgs e)
     {
         Point current = e.GetPosition(this);
-        _hover = current;
-
         if (_dragStart.HasValue && e.LeftButton == MouseButtonState.Pressed)
         {
+            _hover = current;
             _offsetX += current.X - _dragStart.Value.X;
-            _offsetY -= current.Y - _dragStart.Value.Y;
+            if (!IsYAxisLocked) _offsetY -= current.Y - _dragStart.Value.Y;
             _dragStart = current;
-            InvalidateVisual();
+            InvalidatePlot();
+            _overlayLayer.InvalidateVisual();
         }
+        else QueueHover(current);
+    }
 
-        _overlayLayer.InvalidateVisual();
+    private void QueueHover(Point point)
+    {
+        if (_hover == point) return;
+        _hover = point;
+        if (!_hoverTimer.IsEnabled) _hoverTimer.Start();
     }
 
     private bool IsInPlot(Point p)
@@ -277,7 +365,9 @@ public class ScatterPlotControl : FrameworkElement
     private void ApplySeries(ScatterSeries series)
     {
         _series = series;
+        _groupLabels = Array.Empty<FormattedText>();
         _pointCount = series.SampleCount;
+        _hoverTimer.Stop();
         _hover = null;
         _dragStart = null;
         if (IsMouseCaptured) ReleaseMouseCapture();
@@ -285,20 +375,20 @@ public class ScatterPlotControl : FrameworkElement
         _offsetX = _offsetY = 0;
         if (_pointCount > 0)
         {
-            double pad = (series.Maximum - series.Minimum) * 0.05;
-            if (pad <= 0) pad = Math.Max(Math.Abs(series.Minimum) * 0.01, 1e-12);
-            _dataMinX = _pointCount == 1 ? 0.5 : 1;
-            _dataMaxX = _pointCount == 1 ? 1.5 : _pointCount;
-            _dataMinY = series.Minimum - pad;
-            _dataMaxY = series.Maximum + pad;
+            bool grouped = series.Order != ScatterOrder.SerialNumber;
+            _dataMinX = grouped || _pointCount == 1 ? 0.5 : 1;
+            _dataMaxX = grouped || _pointCount == 1 ? _pointCount + 0.5 : _pointCount;
         }
+        UpdateVerticalRange();
         _hasPlot = _plotW >= 20 && _plotH >= 20 && _pointCount > 0;
-        InvalidateVisual();
+        AutomationProperties.SetHelpText(this, "横轴：" + HorizontalAxisTitle +
+            (series.Order == ScatterOrder.SerialNumber ? "（从 1 开始）；" : "分组，组内按 SN 排序；") +
+            "纵轴：测量值。绘制视野内全部有效测量点，不抽样、不聚合。" + InteractionHelp);
+        InvalidatePlot();
         _overlayLayer.InvalidateVisual();
     }
-    protected override void OnRender(DrawingContext dc)
+    protected override void DrawPlot(DrawingContext dc)
     {
-        base.OnRender(dc);
         _renderCount++;
 
         double w = ActualWidth;
@@ -308,7 +398,7 @@ public class ScatterPlotControl : FrameworkElement
         if (w >= 180 && h >= 120)
         {
             ChartAxis.DrawTitle(dc, this, ChartAxis.ValueTitle(Unit), new Rect(8, 3, w - 16, 24));
-            ChartAxis.DrawTitle(dc, this, "样本序号", new Rect(Math.Max(4, (_left + w - 60) / 2), h - 22, 70, 21));
+            ChartAxis.DrawTitle(dc, this, HorizontalAxisTitle, new Rect(Math.Max(4, (_left + w - 60) / 2), h - 22, 70, 21));
         }
 
         if (w < 40 || h < 40 || !_hasPlot)
@@ -318,7 +408,9 @@ public class ScatterPlotControl : FrameworkElement
         GetVisibleRange(out double visMinX, out double visMaxX, out double visMinY, out double visMaxY);
 
         var yTicks = ChartAxis.Ticks(visMinY, visMaxY, Math.Max(3, (int)(_plotH / 32)));
-        var xTicks = ChartAxis.Ticks(visMinX, visMaxX, Math.Max(1, (int)(_plotW / 85)), integers: true);
+        bool grouped = _series.Order != ScatterOrder.SerialNumber;
+        var xTicks = grouped ? Array.Empty<double>() :
+            ChartAxis.Ticks(visMinX, visMaxX, Math.Max(1, (int)(_plotW / 85)), integers: true);
         double yStep = yTicks.Count > 1 ? yTicks[1] - yTicks[0] : visMaxY - visMinY;
 
         dc.PushClip(new RectangleGeometry(plotRect));
@@ -334,6 +426,7 @@ public class ScatterPlotControl : FrameworkElement
             double x = MapX(tick);
             dc.DrawLine(GridPen, new Point(x, _top), new Point(x, _top + _plotH));
         }
+        if (grouped) DrawGroupBoundaries(dc, visMinX, visMaxX);
 
         if (Lsl.HasValue)
         {
@@ -349,12 +442,18 @@ public class ScatterPlotControl : FrameworkElement
         double r = PointRadius;
         var points = _series.Points;
         int start = ScatterSeries.LowerBound(points, visMinX - 1);
+        var groups = _series.Groups;
+        int groupIndex = grouped && start < points.Length ? ScatterSeries.LowerBoundGroup(groups, points[start].Index) : 0;
         for (int i = start; i < points.Length && points[i].Index <= visMaxX + 1; i++)
         {
             var point = points[i];
             double x = MapX(point.Index), y = MapY(point.Value);
             if (y < _top - r || y > _top + _plotH + r) continue;
-            dc.DrawEllipse(point.OutOfSpec ? OutBrush : PointBrush, null, new Point(x, y), r, r);
+            if (grouped)
+                while (groupIndex + 1 < groups.Length && point.Index > groups[groupIndex].EndIndex) groupIndex++;
+            Brush brush = point.OutOfSpec ? OutBrush : !grouped ? PointBrush :
+                (groupIndex % 2 == 0 ? GroupDarkBrush : GroupLightBrush);
+            dc.DrawEllipse(brush, null, new Point(x, y), r, r);
         }
         dc.Pop();
 
@@ -381,7 +480,57 @@ public class ScatterPlotControl : FrameworkElement
             dc.DrawText(ft, new Point(tx, _top + _plotH + 6));
             lastLabelRight = tx + ft.Width;
         }
+        if (grouped) DrawGroupLabels(dc, visMinX, visMaxX);
 
+    }
+
+    private void DrawGroupBoundaries(DrawingContext dc, double min, double max)
+    {
+        var groups = _series.Groups;
+        for (int i = ScatterSeries.LowerBoundGroup(groups, min); i < groups.Length && groups[i].StartIndex - 0.5 <= max; i++)
+        {
+            double x = MapX(groups[i].StartIndex - 0.5);
+            dc.DrawLine(GroupPen, new Point(x, _top), new Point(x, _top + _plotH));
+        }
+        if (groups.Length > 0)
+        {
+            double x = MapX(groups[^1].EndIndex + 0.5);
+            dc.DrawLine(GroupPen, new Point(x, _top), new Point(x, _top + _plotH));
+        }
+    }
+
+    private void DrawGroupLabels(DrawingContext dc, double min, double max)
+    {
+        var groups = _series.Groups;
+        if (_groupLabels.Length != groups.Length || _groupLabelDpi != Dpi)
+        {
+            _groupLabels = groups.Select(g => ChartAxis.Text(this,
+                _series.Order == ScatterOrder.Site ? "Site " + g.Name : g.Name)).ToArray();
+            _groupLabelDpi = Dpi;
+        }
+        for (int i = ScatterSeries.LowerBoundGroup(groups, min); i < groups.Length && groups[i].StartIndex - 0.5 <= max; i++)
+        {
+            double boundary = MapX(groups[i].StartIndex - 0.5);
+            if (boundary >= _left && boundary <= _left + _plotW)
+                dc.DrawLine(GroupPen, new Point(boundary, _top + _plotH), new Point(boundary, _top + _plotH + 4));
+            double left = Math.Max(_left, boundary);
+            double right = Math.Min(_left + _plotW, MapX(groups[i].EndIndex + 0.5));
+            if (right - left <= 2) continue;
+            var label = _groupLabels[i];
+            double scale = Math.Min(1, Math.Max(1, right - left - 8) / Math.Max(1, label.WidthIncludingTrailingWhitespace));
+            double x = (left + right - label.WidthIncludingTrailingWhitespace * scale) / 2;
+            double y = _top + _plotH + 6 + (16 - label.Height * scale) / 2;
+            dc.PushTransform(new TranslateTransform(x, y));
+            dc.PushTransform(new ScaleTransform(scale, scale));
+            dc.DrawText(label, new Point());
+            dc.Pop(); dc.Pop();
+        }
+        if (groups.Length > 0)
+        {
+            double boundary = MapX(groups[^1].EndIndex + 0.5);
+            if (boundary >= _left && boundary <= _left + _plotW)
+                dc.DrawLine(GroupPen, new Point(boundary, _top + _plotH), new Point(boundary, _top + _plotH + 4));
+        }
     }
 
     private sealed class OverlayLayer : FrameworkElement
@@ -393,7 +542,7 @@ public class ScatterPlotControl : FrameworkElement
         protected override void OnRender(DrawingContext dc)
         {
             var o = _owner;
-            if (o._hover is not Point hp || !o.IsInPlot(hp))
+            if (o.IsResizePreview || o._hover is not Point hp || !o.IsInPlot(hp))
                 return;
 
             dc.PushClip(new RectangleGeometry(new Rect(o._left, o._top, o._plotW, o._plotH)));
@@ -404,7 +553,12 @@ public class ScatterPlotControl : FrameworkElement
             if (!o.TryScreenToData(hp, out double dx, out double dy))
                 return;
 
-            string label = $"序号≈{dx:G5}  测量值={dy:G6} {o.Unit}\n{InteractionHelp}";
+            string groupText = "";
+            int group = ScatterSeries.LowerBoundGroup(o._series.Groups, dx);
+            if (group < o._series.Groups.Length && dx >= o._series.Groups[group].StartIndex - 0.5)
+                groupText = o.HorizontalAxisTitle + " " + o._series.Groups[group].Name + "\n";
+            string label = groupText + $"序号≈{dx:G5}  测量值={dy:G6} {o.Unit}\n" +
+                (o.IsYAxisLocked ? "纵轴已锁定 · 横向缩放/拖拽 · 双击重置横轴" : InteractionHelp);
             var ft = new FormattedText(label, CultureInfo.InvariantCulture,
                 FlowDirection.LeftToRight, UiTypeface, 11, Brushes.Black, o.Dpi)
             {
