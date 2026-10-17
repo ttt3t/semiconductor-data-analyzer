@@ -16,7 +16,7 @@ public partial class FtUuidWindow : Window
     {
         InitializeComponent(); _data = data; _config = config; TxtNumbers.Text = numbers;
         Closed += (_, _) => { _closed = true; _cancel.Cancel(); DgPreview.ItemsSource = null; _cancel.Dispose(); };
-        TxtNotice.Text = data == null || data.Records.Count == 0 ? "可先配置 Test Num，导入数据后再预览。" : $"当前 {data.Records.Count:N0} 条记录。读不完整的记录独立保留。";
+        TxtNotice.Text = data == null || data.Records.Count == 0 ? "未加载数据" : $"当前 {data.Records.Count:N0} 条记录";
     }
     private RetestIdentityService.Reader ReadDefinition()
     {
@@ -29,6 +29,7 @@ public partial class FtUuidWindow : Window
         try
         {
             var reader = ReadDefinition(); BtnPreview.IsEnabled = false; TxtNotice.Text = "读取预览…";
+            using var lease = new DatasetLease(_data?.Records.AsEnumerable() ?? Enumerable.Empty<CsvRecord>());
             var token = _cancel.Token;
             var rows = await Task.Run(() => (_data?.Records.Take(100) ?? Enumerable.Empty<CsvRecord>()).Select((record, index) =>
             {

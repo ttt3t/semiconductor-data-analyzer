@@ -11,8 +11,7 @@
                     <RadioButton x:Name="KeepFirst" Content="只保留首测" Margin="0,0,0,8"/>
                     <RadioButton x:Name="KeepLast" Content="复测覆盖首测" Margin="0,0,0,8"/>
                     <RadioButton x:Name="KeepRetests" Content="只保留复测" ToolTip="每颗芯片、每个测项去掉首次，保留后续全部复测；仅测一次的项不计入。"/>
-                    <TextBlock Margin="0,12,0,0" Foreground="DimGray" TextWrapping="Wrap"
-                               Text="与 Testitem Yield 一致，按晶圆、芯片及测试项选择记录。只保留复测会去掉各测项首次，保留后续全部复测；原文格式与异常值一并导出。"/>
+                    
                 </StackPanel>
             </GroupBox>
 
@@ -26,8 +25,7 @@
                         <TextBox x:Name="TxtOutlierSigma" Text="6" Width="65" Margin="6,0" Padding="4,2" TextChanged="ClearError"/>
                         <TextBlock Text="σ" VerticalAlignment="Center"/>
                     </StackPanel>
-                    <TextBlock Margin="0,8,0,0" Foreground="DimGray" TextWrapping="Wrap"
-                               Text="先筛选晶圆与复测记录，再合并所选晶圆和 Site，逐测项计算均值与总体 σ，只剔除一次。超限测项留空，其余测项及异常原文保留。"/>
+                    
                 </StackPanel>
             </GroupBox>
             <GroupBox x:Name="ReportSettings" Header="4. 报告设置" Margin="0,10,0,0" Visibility="Collapsed">

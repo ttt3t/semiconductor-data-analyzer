@@ -43,7 +43,7 @@
                 <TextBox x:Name="MaximumReferences" Text="100" Width="55" Margin="6,0,12,0" TextChanged="Options_Changed"/>
                 <TextBlock Text="前段标准化 RMS 距离 ≤" VerticalAlignment="Center"/>
                 <TextBox x:Name="MaximumDistance" Text="1.5" Width="50" Margin="6,0,12,0" TextChanged="Options_Changed"/>
-                <TextBlock Text="最多匹配缺测前最近 8 项；优先同批次；不删除参考中的未知结果。" Foreground="DimGray" VerticalAlignment="Center"/>
+                
             </WrapPanel>
             <Border Background="#EFF5FC" Padding="10" Margin="0,0,0,8">
                 <TextBlock x:Name="Summary" Text="正在准备数据…" TextWrapping="Wrap" LineHeight="22"/>
@@ -56,8 +56,7 @@
         <TabControl x:Name="Tabs" SelectionChanged="Tabs_Changed">
             <TabItem Header="1 · 确认测试项与调整阈值">
                 <DockPanel Margin="8">
-                    <TextBlock DockPanel.Dock="Top" Margin="0,0,0,8" TextWrapping="Wrap" Foreground="DimGray"
-                               Text="先核对“有效项”及冲突，再确认建立基准；取消“模拟启用”即关闭该项。空限值表示单侧无限制。阶段默认按测试项顺序递增，请按实际程序调整；同阶段填写相同数字。更改有效项或阶段后须重新确认。原始阈值、原文和主列表保持不变。原良率 / 预测良率为有效实测值在原始 / 模拟阈值下的单项通过率，缺测不计入；总体联合预测见上方。"/>
+                    
                     <DataGrid x:Name="RulesGrid" FrozenColumnCount="3">
                         <DataGrid.Columns>
                             <DataGridTemplateColumn Header="有效项" Width="65"><DataGridTemplateColumn.CellTemplate><DataTemplate>

@@ -31,14 +31,8 @@
     <Grid Margin="20">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <DockPanel Margin="0,0,0,16">
-            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                <CheckBox x:Name="RawToggle" Content="查看 Markdown 原文" VerticalAlignment="Center" Margin="0,0,16,0"
-                          Checked="RawToggle_Changed" Unchecked="RawToggle_Changed"/>
-                <Button Content="保存 .md…" Style="{StaticResource WorkspaceButton}" Click="SaveMarkdown_Click"/>
-            </StackPanel>
             <StackPanel>
                 <TextBlock Text="使用手册" Foreground="{DynamicResource TextPrimary}" FontSize="23" FontWeight="SemiBold"/>
-                <TextBlock Text="" Foreground="{DynamicResource TextSecondary}" Margin="0,5,0,0"/>
             </StackPanel>
         </DockPanel>
         <Grid Grid.Row="1">
@@ -55,9 +49,6 @@
                 <Grid>
                     <FlowDocumentScrollViewer x:Name="DocumentViewer" IsToolBarVisible="False" VerticalScrollBarVisibility="Auto"
                                               HorizontalScrollBarVisibility="Disabled"/>
-                    <TextBox x:Name="RawMarkdown" Visibility="Collapsed" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
-                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" BorderThickness="0" Padding="22"
-                             Background="Transparent" Foreground="{DynamicResource TextPrimary}" FontFamily="Consolas, Microsoft YaHei UI" FontSize="13"/>
                 </Grid>
             </Border>
         </Grid>

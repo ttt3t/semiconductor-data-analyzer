@@ -1,0 +1,59 @@
+<Window x:Class="SemiconductorCsvAnalyzer.ProductEditorWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="产品与测试流程" Width="920" Height="730" MinWidth="760" MinHeight="560"
+        WindowStartupLocation="CenterOwner" Background="#F3F6FB" FontFamily="Microsoft YaHei UI">
+    <Window.Resources><ResourceDictionary><ResourceDictionary.MergedDictionaries><ResourceDictionary Source="Styles/WorkspaceTheme.xaml"/></ResourceDictionary.MergedDictionaries></ResourceDictionary></Window.Resources>
+    <DockPanel Margin="20">
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+            <TextBlock x:Name="TxtError" Foreground="#B42318" TextWrapping="Wrap" Margin="0,0,0,8"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="取消" IsCancel="True" Style="{StaticResource WorkspaceButton}" Margin="0,0,8,0"/>
+                <Button Content="保存产品" Click="Save_Click" Style="{StaticResource PrimaryButton}"/>
+            </StackPanel>
+        </StackPanel>
+        <TabControl>
+            <TabItem Header="产品与 Testflow">
+                <DockPanel Margin="15">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Text="产品名称" FontWeight="SemiBold"/><TextBox x:Name="TxtName" Padding="8,6" Margin="0,5,0,10"/>
+                        <TextBlock Text="说明"/><TextBox x:Name="TxtDescription" Padding="8,6" Margin="0,5,0,12"/>
+                        <WrapPanel Margin="0,0,0,10">
+                            <CheckBox x:Name="HasFt" Content="包含 FT 测试" Click="HasFt_Click" VerticalAlignment="Center" Margin="0,0,20,0"/>
+                            <CheckBox x:Name="IncludePartial" Content="良品包含 PartialPass" VerticalAlignment="Center" Margin="0,0,20,0"/>
+                            <RadioButton x:Name="LastMode" Content="同温复测保留末次" GroupName="Retest" IsChecked="True" Margin="0,0,14,0" VerticalAlignment="Center"/>
+                            <RadioButton x:Name="FirstMode" Content="保留首测" GroupName="Retest" VerticalAlignment="Center"/>
+                        </WrapPanel>
+                        <TextBlock Text="FT 自动计算 UUID：按顺序填写 eFuse / OTP Test Num，多个用逗号分隔；仅指定良率时可留空" TextWrapping="Wrap"/>
+                        <TextBox x:Name="TxtUuid" Padding="8,6" Margin="0,5,0,12"/>
+                        <DockPanel Margin="0,0,0,8">
+                            <TextBlock Text="测试流程 · 必测步骤共同决定对应 CP / FT 综合良率" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        </DockPanel>
+                        <WrapPanel Margin="0,0,0,8">
+                            <Button Content="＋ CP 步骤" Click="AddCp_Click" Style="{StaticResource WorkspaceButton}" Margin="0,0,8,0"/>
+                            <Button Content="＋ FT 步骤" Click="AddFt_Click" Style="{StaticResource WorkspaceButton}" Margin="0,0,8,0"/>
+                            <Button Content="上移" Click="MoveUp_Click" Style="{StaticResource WorkspaceButton}" Margin="0,0,8,0"/>
+                            <Button Content="下移" Click="MoveDown_Click" Style="{StaticResource WorkspaceButton}" Margin="0,0,8,0"/>
+                            <Button Content="移除步骤" Click="Remove_Click" Style="{StaticResource QuietButton}"/>
+                        </WrapPanel>
+                    </StackPanel>
+                    
+                    <DataGrid x:Name="DgFlow" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" CanUserReorderColumns="False" HeadersVisibility="Column" RowHeight="34">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="类型" Binding="{Binding Kind}" Width="70" IsReadOnly="True"/>
+                            <DataGridTextColumn Header="步骤名称" Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+                            <DataGridTextColumn Header="温度（°C）" Binding="{Binding Temperature, ValidatesOnExceptions=True}" Width="130"/>
+                            <DataGridCheckBoxColumn Header="必测" Binding="{Binding Required}" Width="75"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+            <TabItem Header="默认解析配置（INI）">
+                <DockPanel Margin="15">
+                    <Button Content="从现有 INI 加载" Click="LoadConfig_Click" DockPanel.Dock="Top" HorizontalAlignment="Left" Style="{StaticResource WorkspaceButton}" Margin="0,0,0,10"/>
+                    
+                    <TextBox x:Name="TxtConfig" AcceptsReturn="True" AcceptsTab="True" FontFamily="Consolas" FontSize="12" Padding="10"
+                             HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"/>
+                </DockPanel>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</Window>

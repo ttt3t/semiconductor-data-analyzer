@@ -103,8 +103,7 @@
                     </Rectangle.Fill>
                 </Rectangle>
                 <TextBlock x:Name="TxtHeatRange" TextWrapping="Wrap" LineHeight="22"/>
-                <TextBlock Text="所有晶圆共用当前测试项 / Site 的色标。自定义须满足蓝标 &lt; 绿标 &lt; 红标；范围外固定为蓝/红，不剔除样品。同坐标显示最新样品，无有效值显示灰色。"
-                           TextWrapping="Wrap" Foreground="DimGray" Margin="0,10,0,0"/>
+                
             </StackPanel>
             </ScrollViewer>
 

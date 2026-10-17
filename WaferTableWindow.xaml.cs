@@ -17,6 +17,7 @@ public partial class WaferTableWindow : Window
     }
     private WaferStatisticsResult? _first, _last;
     private readonly List<string> _wafers;
+    private WaferCategoryTrendWindow? _categoryTrend;
 
     public WaferTableWindow(WaferStatisticsResult first, WaferStatisticsResult last)
     {
@@ -50,6 +51,8 @@ public partial class WaferTableWindow : Window
         layout.TrackColumns("HBINAndCategoryTables", HbinPanelColumn, CategoryPanelColumn);
         Closed += (_, _) =>
         {
+            _categoryTrend?.Close();
+            _categoryTrend = null;
             DgWafers.ItemsSource = DgHBinWafers.ItemsSource = DgCategoryWafers.ItemsSource = null;
             _first = _last = null;
             _wafers.Clear();
@@ -83,6 +86,19 @@ public partial class WaferTableWindow : Window
         Show(DgCategoryWafers, 1, result.CategoryRows, result.ValidSBinCounts, "SBIN");
         TxtInfo.Text = $"Wafer {_wafers.Count} 个  |  去重芯片 {result.ChipCounts.Sum()}  |  无 SBIN {result.ChipCounts.Sum() - result.ValidSBinCounts.Sum()}  |  无 HBIN {result.ChipCounts.Sum() - result.ValidHBinCounts.Sum()}  |  当前显示：{(counts ? "数量（颗）" : "占比（%）")}";
         TxtCopyStatus.Text = "";
+        _categoryTrend?.UpdateStatistics(result, FirstMode.IsChecked == true);
+    }
+
+    private void BtnCategoryTrend_Click(object sender, RoutedEventArgs e)
+    {
+        if (_categoryTrend != null) { _categoryTrend.Activate(); return; }
+        var result = FirstMode.IsChecked == true ? _first : _last;
+        if (result == null) return;
+        _categoryTrend = new WaferCategoryTrendWindow(_wafers,
+            _first!.CategoryRows.Concat(_last!.CategoryRows).Select(r => r.Category)) { Owner = this };
+        _categoryTrend.UpdateStatistics(result, FirstMode.IsChecked == true);
+        _categoryTrend.Closed += (_, _) => _categoryTrend = null;
+        _categoryTrend.Show();
     }
 
     private string BuildClipboardText()

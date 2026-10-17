@@ -15,8 +15,7 @@
             </DockPanel>
             <TextBlock x:Name="TxtInfo" Margin="0,0,0,12" TextWrapping="Wrap"/>
         </StackPanel>
-        <TextBlock DockPanel.Dock="Bottom" Foreground="DimGray" TextWrapping="Wrap" Margin="0,10,0,0"
-                   Text="按晶圆及芯片选择整条首测或末次记录；无完整坐标时使用序列号。SBIN 与分类占比以有 SBIN 的芯片数为分母，HBIN 占比以有 HBIN 的芯片数为分母。分类在设置的 [SBinCategories] 中编辑。"/>
+        
         <Grid>
             <Grid.Resources>
                 <Style TargetType="DataGrid">
@@ -73,8 +72,7 @@
                           VerticalAlignment="Center" ResizeDirection="Rows" Background="#DDD"/>
             <DockPanel Grid.Row="2" Grid.ColumnSpan="3">
                 <TextBlock Text="SBIN 各 Site 占比" FontWeight="Bold" DockPanel.Dock="Top" Margin="0,0,0,6"/>
-                <TextBlock Text="每列分母为该 Site 有效 SBIN 芯片数；无有效 SBIN 时显示 –。复测模式与上方一致。"
-                           DockPanel.Dock="Top" Foreground="DimGray" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                
                 <DataGrid x:Name="DgSites" FrozenColumnCount="2" CanUserReorderColumns="False"
                           HeadersVisibility="Column" EnableColumnVirtualization="True">
                     <DataGrid.Columns>

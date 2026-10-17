@@ -25,6 +25,7 @@
         </DockPanel>
         <TextBlock Text="半导体 CSV / STDF 测试数据分析工具" FontSize="14" Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,10"/>
         <TextBlock FontSize="13" LineHeight="25" TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}">
+            <Run Text="产品、批次与跨温综合良率管理"/><LineBreak/>
             <Run Text="良率统计与多晶圆 / Site 对比"/><LineBreak/>
             <Run Text="晶圆 Map、直方图与散点图"/><LineBreak/>
             <Run Text="阈值模拟、良率预测与 XLSX 报告导出"/>

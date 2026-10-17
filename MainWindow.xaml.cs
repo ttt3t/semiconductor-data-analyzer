@@ -32,6 +32,7 @@ public partial class MainWindow : Window
     private string _lastConfigPath = "";
     private string _currentCsvPath = "";
     private string _currentDataName = "尚未打开文件";
+    private bool _managedConfigLoaded;
     private CsvParseResult _data = new();
     private List<CsvImportSource> _sources = new();
     private readonly List<(WaferMapWindow Window, Func<CsvParseResult, IReadOnlyList<WaferMapPage>> Pages)> _openMaps = new();
@@ -41,6 +42,10 @@ public partial class MainWindow : Window
     private ScatterOrder _scatterOrder;
     private RetestMode _retestMode = RetestMode.All;
     private bool _isBusy;
+    private CancellationTokenSource? _operationCancellation;
+    private DatasetLease? _datasetLease;
+    private bool _closeAfterOperation;
+    private bool _operationCommitting;
     private readonly Dictionary<string, string> _columnFilters = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HashSet<string>> _columnValueFilters = new(StringComparer.OrdinalIgnoreCase);
     private ColumnValueFilterPopup? _valueFilterPopup;
@@ -58,6 +63,8 @@ public partial class MainWindow : Window
     private long _detailVersion;
     private bool _closing;
     private bool _detailPending;
+    internal bool CanReclaimMemory => !_closing && !_isBusy && !_detailPending && _detailGate.CurrentCount == 1
+        && DgTestItems != null && !DgTestItems.IsScrollActive && !_filterTimer.IsEnabled;
 
     public MainWindow() : this(null) { }
 
@@ -83,10 +90,12 @@ public partial class MainWindow : Window
         InitializeComponent();
         ApplyUiPreferences();
         _uiPreferences.Changed += OnUiPreferencesChanged;
-        _memoryReclaimer = new IdleMemoryReclaimer(Dispatcher, () =>
-            !_closing && !_isBusy && !_detailPending && _detailGate.CurrentCount == 1
-            && !DgTestItems.IsScrollActive && !_filterTimer.IsEnabled);
-        Closing += (_, e) => { if (_isBusy) e.Cancel = true; };
+        _memoryReclaimer = new IdleMemoryReclaimer(Dispatcher, () => CanReclaimMemory);
+        Closing += (_, e) =>
+        {
+            if (!_isBusy) return;
+            e.Cancel = true; _closeAfterOperation = true; CancelOperation();
+        };
         // app.ico is optional during development; when present it is embedded as a WPF resource.
         try
         {
@@ -130,6 +139,8 @@ public partial class MainWindow : Window
             _allItems = new();
             _devices = new();
             _data = new();
+            _sources.Clear();
+            _datasetLease?.Dispose(); _datasetLease = null;
             _runIndex = -1;
             _runBySerial = new(StringComparer.Ordinal);
             _runItems = new(StringComparer.Ordinal);
@@ -195,6 +206,7 @@ public partial class MainWindow : Window
         string[] candidates =
         {
             AppSettings.LastConfigCopyPath,
+            AppSettings.LastConfigCopyPath + ".bak",
             AppSettings.LastConfigPath ?? "",
             Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Configs", "config.ini"),
             Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.ini"),
@@ -209,8 +221,12 @@ public partial class MainWindow : Window
         {
             if (!string.IsNullOrWhiteSpace(p) && File.Exists(p))
             {
-                LoadConfig(p, remember: false);
-                return;
+                if (LoadConfig(p, remember: false))
+                {
+                    if (p == AppSettings.LastConfigCopyPath + ".bak") TxtStatus.Text = "默认配置读取失败，已使用上一份备份。";
+                    else if (AppSettings.LoadNotice.Length > 0) TxtStatus.Text = AppSettings.LoadNotice;
+                    return;
+                }
             }
         }
 
@@ -224,7 +240,7 @@ public partial class MainWindow : Window
     private void BtnSettings_Click(object sender, RoutedEventArgs e)
     {
         if (_isBusy) return;
-        new SettingsWindow(_config, ApplySettings, OpenCsvAsync, _recentFiles, _uiPreferences, _data) { Owner = this }.ShowDialog();
+        new SettingsWindow(_config, ApplySettings, OpenCsvAsync, _recentFiles, _uiPreferences, _data, CancelOperation) { Owner = this }.ShowDialog();
     }
 
     private async Task ApplySettings(AnalyzerConfig config)
@@ -235,6 +251,8 @@ public partial class MainWindow : Window
             var data = reload ? await Task.Run(() => _sources.Count > 0
                 ? DatasetService.LoadSources(_sources, config) : DataFileService.Parse(_currentCsvPath, config)) : _data;
             var prepared = await PrepareAnalysisAsync(data, config);
+            AnalysisOperation.CheckCancellation();
+            _operationCommitting = true; BtnCancelOperation.IsEnabled = false;
             await Task.Run(() => AppSettings.SaveConfig(config));
             _config = config;
             _lastConfigPath = AppSettings.LastConfigCopyPath;
@@ -265,7 +283,7 @@ public partial class MainWindow : Window
         };
     }
 
-    private void LoadConfig(string path, bool remember = false)
+    private bool LoadConfig(string path, bool remember = false)
     {
         try
         {
@@ -280,10 +298,12 @@ public partial class MainWindow : Window
                 AppSettings.SaveLastConfig(path);
                 TxtStatus.Text += "  | 已保存为默认配置";
             }
+            return true;
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message, "配置加载失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            TxtStatus.Text = "配置加载失败：" + ex.Message;
+            return false;
         }
     }
 
@@ -336,7 +356,7 @@ public partial class MainWindow : Window
     {
         if (_isBusy) throw new InvalidOperationException("正在处理数据，请稍后重试。");
         if (!File.Exists(path)) throw new FileNotFoundException("找不到数据文件：" + path);
-        if (string.IsNullOrEmpty(_lastConfigPath) && !DataFileService.IsStdf(path) && !IntegratedCsvService.IsIntegrated(path))
+        if (!_managedConfigLoaded && string.IsNullOrEmpty(_lastConfigPath) && !DataFileService.IsStdf(path) && !IntegratedCsvService.IsIntegrated(path))
             throw new InvalidOperationException("普通 CSV 需要先在设置中加载行列配置；STDF 可直接打开。");
         await RunBusyAsync(async () =>
         {
@@ -347,6 +367,7 @@ public partial class MainWindow : Window
             UpdateValueFilterHeaders();
             CommitAnalysis(result, prepared);
             _sources = new List<CsvImportSource> { new(path, StdfMode: mode) };
+            RefreshStdfInformationSources();
             _currentCsvPath = path;
             _currentDataName = Path.GetFileName(path);
             UpdateWindowTitle();
@@ -358,6 +379,48 @@ public partial class MainWindow : Window
     }
 
     #endregion
+
+    public async Task OpenManagedFileAsync(string path, AnalyzerConfig config, StdfImportMode mode, RetestMode retestMode)
+    {
+        if (_isBusy) throw new InvalidOperationException("正在处理数据。");
+        var previousConfig = _config; var previousMode = _retestMode; bool previousManaged = _managedConfigLoaded;
+        _config = ConfigLoader.Parse(ConfigLoader.Serialize(config), config.ConfigFileName);
+        _managedConfigLoaded = true;
+        _retestMode = retestMode; LstRetestMode.SelectedIndex = (int)retestMode;
+        UpdateConfigInfo();
+        try { await OpenDataAsync(path, mode); }
+        catch
+        {
+            _config = previousConfig; _retestMode = previousMode; _managedConfigLoaded = previousManaged;
+            LstRetestMode.SelectedIndex = (int)previousMode; UpdateConfigInfo(); throw;
+        }
+    }
+
+    public async Task OpenManagedFilesAsync(IReadOnlyList<CsvImportSource> sources, AnalyzerConfig config, RetestMode retestMode)
+    {
+        if (_isBusy) throw new InvalidOperationException("正在处理数据。");
+        if (sources.Count == 0) throw new InvalidOperationException("未选择数据文件。");
+        await RunBusyAsync(async () =>
+        {
+            var activeConfig = ConfigLoader.Parse(ConfigLoader.Serialize(config), config.ConfigFileName);
+            var result = await Task.Run(() => DatasetService.LoadSources(sources, activeConfig));
+            var oldRetestMode = _retestMode;
+            _retestMode = retestMode;
+            PreparedAnalysis prepared;
+            try { prepared = await PrepareAnalysisAsync(result, activeConfig); }
+            catch { _retestMode = oldRetestMode; throw; }
+            _config = activeConfig; _managedConfigLoaded = true;
+            LstRetestMode.SelectedIndex = (int)retestMode;
+            _columnValueFilters.Clear(); UpdateValueFilterHeaders();
+            CommitAnalysis(result, prepared);
+            _sources = sources.ToList(); _currentCsvPath = sources[0].Path;
+            RefreshStdfInformationSources();
+            _currentDataName = sources.Count == 1 ? Path.GetFileName(sources[0].Path) : $"整合数据（{sources.Count} 个文件 / {result.Wafers.Count} 个 wafer）";
+            UpdateConfigInfo(); RefreshOpenMaps();
+            TxtStatus.Text = "已按登记顺序打开，保留全部原始测试记录；复测显示沿用产品设置。";
+            ShowSerialNumberNotice(_data);
+        });
+    }
 
     private async void BtnImportData_Click(object sender, RoutedEventArgs e)
     {
@@ -381,6 +444,7 @@ public partial class MainWindow : Window
                 var prepared = await PrepareAnalysisAsync(merged, _config);
                 CommitAnalysis(merged, prepared);
                 _sources.AddRange(sources);
+                RefreshStdfInformationSources();
                 _currentDataName = $"整合数据（{_sources.Count} 个文件 / {_data.Wafers.Count} 个 wafer）";
                 UpdateWindowTitle();
                 RefreshOpenMaps();
@@ -389,6 +453,7 @@ public partial class MainWindow : Window
                 ShowSerialNumberNotice(_data);
             });
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { MessageBox.Show(ex.Message, "导入失败", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
@@ -414,6 +479,7 @@ public partial class MainWindow : Window
                     (outlierSigma.HasValue ? $"；已剔除均值 ± {outlierSigma.Value:G}σ 以外的测项值" : "");
             });
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { MessageBox.Show(ex.Message, "导出失败", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
@@ -442,6 +508,7 @@ public partial class MainWindow : Window
                 TxtStatus.Text = $"报告已导出：4 个工作表，{focused.Length} 个关注测项";
             });
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { MessageBox.Show(ex.Message, "报告导出失败", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
@@ -456,7 +523,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _combineSites = previous; BtnCombineSite.IsChecked = previous;
-            MessageBox.Show(ex.Message, "重算失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            if (ex is not OperationCanceledException) MessageBox.Show(ex.Message, "重算失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -471,7 +538,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _retestMode = previous; LstRetestMode.SelectedIndex = (int)previous;
-            MessageBox.Show(ex.Message, "重算失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            if (ex is not OperationCanceledException) MessageBox.Show(ex.Message, "重算失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -484,7 +551,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             _combineWafers = previous; BtnCombineWafer.IsChecked = previous;
-            MessageBox.Show(ex.Message, "重算失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            if (ex is not OperationCanceledException) MessageBox.Show(ex.Message, "重算失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -497,9 +564,10 @@ public partial class MainWindow : Window
         bool combineWafers = _combineWafers;
         return Task.Run(() =>
         {
+            AnalysisOperation.CheckCancellation();
             data = RetestIdentityService.Prepare(data, config);
             var analysis = DatasetService.SelectRetests(data, mode);
-            var sites = CollectSites(data.Items);
+            var sites = CollectSites(data.Items, data.Records);
             return new PreparedAnalysis(analysis, sites,
                 SummaryService.Build(analysis.Items, sites, data.Wafers, combine, combineWafers, config), data);
         });
@@ -513,13 +581,16 @@ public partial class MainWindow : Window
 
     private void CommitAnalysis(CsvParseResult data, PreparedAnalysis prepared)
     {
+        AnalysisOperation.CheckCancellation();
         data = prepared.Source;
+        var lease = new DatasetLease(data.Records);
         string? keepName = _currentItem?.DisplayName;
         string keepSite = _combineSites ? TestItemSummary.CombinedSite : _currentSite;
         string? keepWafer = _combineWafers ? null : _currentWafer;
         ClearDetail();
         bool changedData = !ReferenceEquals(_data, data);
         _data = data;
+        var previousLease = _datasetLease; _datasetLease = lease; previousLease?.Dispose();
         _allItems = prepared.Data.Items;
         _devices = data.Devices;
         _allSites = prepared.Sites;
@@ -533,20 +604,43 @@ public partial class MainWindow : Window
     private async Task RunBusyAsync(Func<Task> operation)
     {
         if (_isBusy) throw new InvalidOperationException("正在处理，请稍后再试。");
+        using var cancellation = new CancellationTokenSource();
+        _operationCancellation = cancellation;
+        _operationCommitting = false;
+        using var scope = new AnalysisOperation(cancellation.Token);
         SetBusy(true);
         try
         {
             await System.Windows.Threading.Dispatcher.Yield(DispatcherPriority.Background);
             await operation();
         }
-        finally { SetBusy(false); _memoryReclaimer.Request(); }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        { TxtStatus.Text = "已取消，保留上次有效结果。"; throw; }
+        finally
+        {
+            _operationCancellation = null;
+            _operationCommitting = false;
+            SetBusy(false); _memoryReclaimer.Request();
+            if (_closeAfterOperation) _ = Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(Close));
+        }
     }
+
+    private void CancelOperation()
+    {
+        if (_operationCommitting) { TxtStatus.Text = "正在完成配置保存…"; return; }
+        _operationCancellation?.Cancel();
+        BtnCancelOperation.IsEnabled = false;
+        TxtStatus.Text = _closeAfterOperation ? "正在停止处理并关闭…" : "正在取消，保留上次结果…";
+    }
+    private void CancelOperation_Click(object sender, RoutedEventArgs e) => CancelOperation();
 
     private void SetBusy(bool busy)
     {
         _isBusy = busy;
         BusyIndicator.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         MainToolbar.IsEnabled = MainContent.IsEnabled = !busy;
+        BtnCancelOperation.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        BtnCancelOperation.IsEnabled = busy;
         if (busy)
         {
             CloseValueFilter();
@@ -721,11 +815,37 @@ public partial class MainWindow : Window
         _ => ""
     };
 
-    private static List<string> CollectSites(IEnumerable<TestItemData> items)
+    private static List<string> CollectSites(IReadOnlyList<TestItemData> items, IReadOnlyList<CsvRecord>? records = null)
     {
-        var sites = items
-            .SelectMany(i => i.Values.Select(v => SiteKey(v.Site)).Concat(i.Errors.Select(r => SiteKey(r.Site))))
-            .Distinct()
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        int maxSites = int.MaxValue;
+        if (records != null && records.Count > 0)
+        {
+            var candidateSites = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = 0; i < records.Count; i++)
+                candidateSites.Add(SiteKey(records[i].Site));
+            maxSites = candidateSites.Count;
+        }
+
+        for (int i = 0; i < items.Count && seen.Count < maxSites; i++)
+        {
+            var item = items[i];
+            var values = item.Values;
+            for (int j = 0; j < values.Count; j++)
+            {
+                if (seen.Add(SiteKey(values.GetRecordAt(j).Site)) && seen.Count >= maxSites)
+                    break;
+            }
+            if (seen.Count >= maxSites) break;
+            var errors = item.Errors;
+            for (int j = 0; j < errors.Count; j++)
+            {
+                if (seen.Add(SiteKey(errors[j].Site)) && seen.Count >= maxSites)
+                    break;
+            }
+        }
+
+        var sites = seen
             .OrderBy(NumericText.SortKey)
             .ThenBy(s => s, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -940,7 +1060,7 @@ public partial class MainWindow : Window
         }
 
         var sb = new StringBuilder();
-        sb.AppendLine("Test Num\tTest Item\tSite\tWafer\tSBIN\tHBIN\tUnit\tLSL\tUSL\tCount\tFails\tEorr\tSite σ\tMean\tMax\tMin\tValue\tMedian\tσ\tRobust Mean\tRobust Sigma\tCpk\tInSpec%");
+        sb.AppendLine("Test Num\tTest Item\tSite\tWafer\tSBIN\tHBIN\tUnit\tLSL\tUSL\tCount\tFails\tError\tSite σ\tMean\tMax\tMin\tValue\tMedian\tσ\tRobust Mean\tRobust Sigma\tCpk\tInSpec%");
 
         foreach (var s in list)
         {
@@ -1068,6 +1188,7 @@ public partial class MainWindow : Window
             });
             window!.ShowDialog();
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { MessageBox.Show(ex.Message, "Bin 统计失败", MessageBoxButton.OK, MessageBoxImage.Error); }
         finally { _memoryReclaimer.Request(); }
     }
@@ -1087,6 +1208,7 @@ public partial class MainWindow : Window
             });
             window!.ShowDialog();
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex) { MessageBox.Show(ex.Message, "Wafer Table 统计失败", MessageBoxButton.OK, MessageBoxImage.Error); }
         finally { _memoryReclaimer.Request(); }
     }

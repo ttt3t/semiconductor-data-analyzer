@@ -12,7 +12,7 @@
                 <TextBox x:Name="TxtNumbers" Padding="8,6"/>
                 <Button x:Name="BtnPreview" Grid.Column="1" Content="预览" Click="Preview_Click" Style="{StaticResource WorkspaceButton}" Margin="10,0,0,0"/>
             </Grid>
-            <TextBlock Text="例：101,102 → E8 + A9 → E8A9。保留原文、大小写和前导零，仅去除首尾空格。预览最多显示前 100 条记录。" TextWrapping="Wrap" Foreground="#64748B" Margin="0,0,0,12"/>
+            
         </StackPanel>
         <StackPanel DockPanel.Dock="Bottom" Margin="0,14,0,0">
             <TextBlock x:Name="TxtNotice" TextWrapping="Wrap" Foreground="#64748B" Margin="0,0,0,12"/>

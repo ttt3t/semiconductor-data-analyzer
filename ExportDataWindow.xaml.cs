@@ -49,7 +49,7 @@ public partial class ExportDataWindow : Window
             ReportHistogramMode.SelectedIndex = Math.Clamp(histogramMode, 0, 2);
             ReportCombineSites.IsChecked = combineSites;
             ReportCombineWafers.IsChecked = combineWafers;
-            ReportFocusInfo.Text = $"已关注 {focusedCount} 个测项，关注图表合并 Site 和 Wafer，散点排序沿用主窗口。BIN 图与统计：仅首测时用首测，其余用末测；只保留复测时仅统计有复测测项的芯片。多个晶圆分别绘图。";
+            ReportFocusInfo.Text = $"已关注 {focusedCount} 个测项";
         }
         _wafers = wafers.Select(w => new WaferChoice(w)).ToList();
         WaferList.ItemsSource = new ListCollectionView(_wafers);

@@ -22,7 +22,7 @@
                     <ListBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Name}" ToolTip="{Binding Path}" TextTrimming="CharacterEllipsis"/></DataTemplate></ListBox.ItemTemplate>
                 </ListBox>
             </DockPanel>
-            <TextBlock Text="按列表从上到下导入，以下选项应用于全部文件；后导入的记录视为较新的复测。" Foreground="DimGray" TextWrapping="Wrap" Margin="0,0,0,12"/>
+            
             <GroupBox Header="1. Wafer 关系" Margin="0,0,0,12">
                 <StackPanel Margin="10">
                     <StackPanel Orientation="Horizontal">
@@ -44,8 +44,7 @@
                     <RadioButton x:Name="NewLimits" GroupName="Limits" Content="使用新文件阈值"/>
                 </StackPanel>
             </GroupBox>
-            <TextBlock Text="保留全部原始记录，统计按主列表选项计算；Map 同 wafer、同坐标取最新值。未匹配的测试项作为新项保留。"
-                       Foreground="DimGray" TextWrapping="Wrap"/>
+            
         </StackPanel>
     </DockPanel>
 </Window>

@@ -97,6 +97,7 @@
                         <StackPanel Orientation="Horizontal">
                             <Button x:Name="BinTableButton" Click="BtnBinStats_Click" Style="{StaticResource ToolbarAction}"><StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Table" Style="{StaticResource ButtonIcon}"/><TextBlock Text="BIN Table" VerticalAlignment="Center"/></StackPanel></Button>
                             <Button x:Name="WaferTableButton" Click="BtnWaferTable_Click" Style="{StaticResource ToolbarAction}"><StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Table" Style="{StaticResource ButtonIcon}"/><TextBlock Text="Wafer Table" VerticalAlignment="Center"/></StackPanel></Button>
+                            <Button x:Name="StdfInformationButton" Click="BtnStdfInformation_Click" Style="{StaticResource ToolbarAction}" ToolTip="查看 STDF Lot Information，切换当前已打开或追加导入的 STDF 文件"><StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Info" Style="{StaticResource ButtonIcon}"/><TextBlock Text="Lot Info" VerticalAlignment="Center"/></StackPanel></Button>
                             <Button x:Name="PredictionButton" Click="BtnYieldSimulation_Click" Style="{StaticResource ToolbarAction}"><StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Prediction" Style="{StaticResource ButtonIcon}"/><TextBlock Text="良率预测" VerticalAlignment="Center"/></StackPanel></Button>
                         </StackPanel>
                     </StackPanel></Border>
@@ -109,9 +110,10 @@
         </Border>
         <Border DockPanel.Dock="Bottom" Background="{StaticResource WorkspaceBackground}" Padding="14,5" BorderBrush="{StaticResource BorderSoft}" BorderThickness="0,1,0,0">
             <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <TextBlock x:Name="TxtBottomInfo" FontSize="11" Foreground="{StaticResource TextSecondary}" TextTrimming="CharacterEllipsis"/>
                 <TextBlock x:Name="TxtStatus" Grid.Column="2" FontSize="11" Foreground="{StaticResource TextSecondary}" TextTrimming="CharacterEllipsis" TextAlignment="Right"/>
+                <Button x:Name="BtnCancelOperation" Grid.Column="3" Content="取消处理" Click="CancelOperation_Click" Visibility="Collapsed" Style="{StaticResource QuietButton}" Margin="10,0,0,0" Padding="8,1"/>
             </Grid>
         </Border>
         <Grid x:Name="MainContent" ClipToBounds="True" Margin="8,6,8,6">
@@ -365,7 +367,7 @@
                         <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" CellStyle="{StaticResource FailsCell}"
                                             Binding="{Binding Fails, Mode=OneTime}" SortMemberPath="Fails" Width="60">
                             <DataGridTextColumn.Header><StackPanel>
-                                <TextBlock Text="Fails" Style="{StaticResource ColHeaderLabel}" AutomationProperties.HelpText="超出 LSL 或 USL 的有效测量样品数；缺测和无效值计入 Eorr"/>
+                                <TextBlock Text="Fails" Style="{StaticResource ColHeaderLabel}" AutomationProperties.HelpText="超出 LSL 或 USL 的有效测量样品数；缺测和无效值计入 Error"/>
                                 <TextBox Style="{StaticResource ColFilterBox}" Tag="Fails" TextChanged="ColumnFilter_Changed"
                                          PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
                             </StackPanel></DataGridTextColumn.Header>
@@ -373,7 +375,7 @@
                         <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding Eorr, Mode=OneTime}" SortMemberPath="Eorr" Width="60">
                             <DataGridTextColumn.Header>
                                 <StackPanel>
-                                    <TextBlock Text="Eorr" Style="{StaticResource ColHeaderLabel}" ToolTip="当前测试项的空值、缺列、非数值及非有限值数量"/>
+                                    <TextBlock Text="Error" Style="{StaticResource ColHeaderLabel}" ToolTip="当前测试项的空值、缺列、非数值及非有限值数量"/>
                                     <TextBox Style="{StaticResource ColFilterBox}" Tag="Eorr" TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
                                 </StackPanel>
@@ -496,7 +498,7 @@
                         <Grid.ColumnDefinitions><ColumnDefinition Width="1.3*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                         <TextBlock x:Name="TxtItemTitle" Text="选择测试项查看分布" FontSize="11" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
                                    VerticalAlignment="Center" AutomationProperties.HelpText="{Binding Text, RelativeSource={RelativeSource Self}}"/>
-                        <TextBlock x:Name="TxtUnit" Grid.Column="1" Text="从左侧列表选择一行" Margin="10,0,0,0" FontSize="10" Foreground="{StaticResource TextSecondary}" TextTrimming="CharacterEllipsis"
+                        <TextBlock x:Name="TxtUnit" Grid.Column="1" Text="" Margin="10,0,0,0" FontSize="10" Foreground="{StaticResource TextSecondary}" TextTrimming="CharacterEllipsis"
                                    VerticalAlignment="Center" TextAlignment="Right" AutomationProperties.HelpText="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                     </Grid>
                 </Border>

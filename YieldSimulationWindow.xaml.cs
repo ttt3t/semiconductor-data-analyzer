@@ -31,7 +31,7 @@ public partial class YieldSimulationWindow : Window
         InitializeComponent();
         RetestFirst.IsChecked = retest == RetestMode.First;
         RetestLast.IsChecked = retest != RetestMode.First;
-        ClassificationInfo.Text = $"HBIN：Pass = {string.Join(",", config.PassHBins)}；PartialPass = {string.Join(",", config.PartialPassHBins)}；其余（含空 HBIN）为不良。可在设置的 INI 配置中修改。每颗芯片只计一次，部分复测按测项继承。";
+        ClassificationInfo.Text = $"Pass HBIN：{string.Join(",", config.PassHBins)}    PartialPass HBIN：{string.Join(",", config.PartialPassHBins)}";
         _debounce = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = TimeSpan.FromMilliseconds(350) };
         _debounce.Tick += Debounce_Tick;
         Map.HoverChanged += Map_Hover;
@@ -69,6 +69,7 @@ public partial class YieldSimulationWindow : Window
     private async Task PrepareAsync(SimulationScheme? scheme = null, bool reset = false)
     {
         if (_closed) return;
+        using var lease = new DatasetLease(_data.Records);
         Invalidate(true);
         _preparing = true;
         Busy.Visibility = Visibility.Visible; Status.Text = "正在后台识别有效项建议…";

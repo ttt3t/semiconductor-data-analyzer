@@ -14,6 +14,8 @@ public partial class SettingsWindow : Window
 {
     private readonly Func<AnalyzerConfig, Task> _apply;
     private bool _applying;
+    private readonly Action? _cancelApply;
+    private bool _closeAfterApply;
     private string _fileName;
     private readonly RecentFilesService _recentFiles;
     private readonly Func<string, Task>? _openCsv;
@@ -29,10 +31,11 @@ public partial class SettingsWindow : Window
 
     public SettingsWindow(AnalyzerConfig config, Func<AnalyzerConfig, Task> apply,
         Func<string, Task>? openCsv = null, RecentFilesService? recentFiles = null,
-        UiPreferencesService? uiPreferences = null, CsvParseResult? data = null)
+        UiPreferencesService? uiPreferences = null, CsvParseResult? data = null, Action? cancelApply = null)
     {
         InitializeComponent();
         _apply = apply;
+        _cancelApply = cancelApply;
         _openCsv = openCsv;
         _recentFiles = recentFiles ?? RecentFilesService.Current;
         _uiPreferences = uiPreferences ?? UiPreferencesService.Current;
@@ -42,8 +45,8 @@ public partial class SettingsWindow : Window
         ShowPreferences(_uiPreferences.Value);
         _lastTab = SettingsTabs.SelectedItem as TabItem;
         _syncing = false;
-        TxtStatus.Text = "分析配置需应用并重算；界面设置可独立保存并立即生效。";
-        Closing += (_, e) => { if (_applying) e.Cancel = true; };
+        Closing += (_, e) =>
+        { if (_applying) { e.Cancel = true; _closeAfterApply = true; _cancelApply?.Invoke(); TxtStatus.Text = "正在停止处理…"; } };
         RefreshRecentFiles();
         BtnRecentCsv.IsEnabled = _openCsv != null;
         Closed += (_, _) => { RecentConfigs.ItemsSource = RecentCsvs.ItemsSource = null; };
@@ -326,13 +329,27 @@ public partial class SettingsWindow : Window
         try
         {
             var config = ReadConfig();
-            _applying = true; IsEnabled = false;
+            _applying = true;
+            SettingsTabs.IsEnabled = ConfigActions.IsEnabled = BtnApplyAnalysis.IsEnabled = false;
+            BtnSettingsClose.Content = "取消处理";
             TxtStatus.Text = "处理中…";
             await _apply(config);
             _applying = false;
             DialogResult = true;
         }
+        catch (OperationCanceledException) { TxtStatus.Text = "已取消，配置保持不变。"; }
         catch (Exception ex) { TxtStatus.Text = "应用失败：" + ex.Message; }
-        finally { _applying = false; IsEnabled = true; }
+        finally
+        {
+            _applying = false;
+            SettingsTabs.IsEnabled = ConfigActions.IsEnabled = BtnApplyAnalysis.IsEnabled = true;
+            BtnSettingsClose.Content = "关闭";
+            if (_closeAfterApply) _ = Dispatcher.BeginInvoke(new Action(Close));
+        }
+    }
+    private void SettingsClose_Click(object sender, RoutedEventArgs e)
+    {
+        if (_applying) { _cancelApply?.Invoke(); TxtStatus.Text = "正在停止处理…"; }
+        else Close();
     }
 }

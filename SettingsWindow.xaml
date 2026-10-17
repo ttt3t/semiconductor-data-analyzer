@@ -58,9 +58,9 @@
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
             <StackPanel>
                 <TextBlock Text="设置" FontSize="24" FontWeight="SemiBold"/>
-                <TextBlock Text="调整分析规则与显示习惯" Foreground="{StaticResource TextSecondary}" Margin="0,6,0,0"/>
+                
             </StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+            <StackPanel x:Name="ConfigActions" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                 <Button Content="加载配置…" Click="BtnLoad_Click" Style="{StaticResource WorkspaceButton}"/>
                 <Button Content="导出 config.ini…" Click="BtnExport_Click" Style="{StaticResource WorkspaceButton}" Margin="8,0,0,0"/>
             </StackPanel>
@@ -68,14 +68,14 @@
         <StackPanel DockPanel.Dock="Bottom" Margin="0,14,0,0">
             <TextBlock x:Name="TxtStatus" TextWrapping="Wrap" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,12"/>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="关闭" IsCancel="True" MinWidth="88" Style="{StaticResource WorkspaceButton}"/>
+                <Button x:Name="BtnSettingsClose" Content="关闭" Click="SettingsClose_Click" MinWidth="88" Style="{StaticResource WorkspaceButton}"/>
                 <Button x:Name="BtnApplyAnalysis" Content="应用分析配置并重算" Click="BtnApply_Click" MinWidth="156" Style="{StaticResource PrimaryButton}" Margin="8,0,0,0"/>
             </StackPanel>
         </StackPanel>
         <TabControl x:Name="SettingsTabs" SelectionChanged="SettingsTabs_SelectionChanged"
                     BorderBrush="{StaticResource BorderSoft}" Background="{StaticResource SurfaceBrush}">
             <TabItem x:Name="AnalysisTab" Header="统计与绘图">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ScrollViewer TextElement.Foreground="{StaticResource TextPrimary}" TextElement.FontWeight="Normal" VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="24">
                         <TextBlock Text="稳健统计" Style="{StaticResource SectionTitle}"/>
                         <CheckBox x:Name="ChkRemoveOutliers" Content="计算 Robust Mean / Sigma 时剔除离群点" IsChecked="True"
@@ -86,7 +86,7 @@
                                      IsEnabled="{Binding IsChecked, ElementName=ChkRemoveOutliers}"/>
                             <TextBlock Text="σ" VerticalAlignment="Center"/>
                         </StackPanel>
-                        <TextBlock Style="{StaticResource HelpText}" Text="按当前测项及 Site 的原始均值、总体标准差保留范围内样品（含边界），一次剔除范围外样品。只影响两列 Robust 统计，原始样品与良率不变。"/>
+                        
                         <Border Height="1" Background="{StaticResource BorderSoft}" Margin="0,22"/>
                         <TextBlock Text="直方图" Style="{StaticResource SectionTitle}"/>
                         <Grid Margin="0,0,0,18">
@@ -106,17 +106,17 @@
                             <CheckBox x:Name="ChkShowMean" Content="均值" Margin="0,0,28,14" Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>
                             <CheckBox x:Name="ChkShowThreeSigma" Content="±3σ 参考线" Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>
                         </WrapPanel>
-                        <TextBlock Style="{StaticResource HelpText}" Text=""/>
+                        
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
             <TabItem x:Name="IdentityTab" Header="CP / FT">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ScrollViewer TextElement.Foreground="{StaticResource TextPrimary}" TextElement.FontWeight="Normal" VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="24">
                         <TextBlock Text="测试与复测识别模式" Style="{StaticResource SectionTitle}"/>
                         <RadioButton x:Name="ModeCP" Content="CP（默认）：沿用晶圆、坐标和原序列号识别" GroupName="TestMode" Margin="0,0,0,14" Checked="IdentityControlChanged"/>
                         <RadioButton x:Name="ModeFT" Content="FT：读取 eFuse / OTP 芯片 UUID 识别复测" GroupName="TestMode" Margin="0,0,0,18" Checked="IdentityControlChanged"/>
-                        <TextBlock Style="{StaticResource HelpText}" Text="CP 沿用当前逻辑：同晶圆优先按完整 X/Y 坐标，无完整坐标时按原序列号。FT 按 UUID 识别同一颗芯片，跨 Site、坐标或晶圆标签仍可识别复测。"/>
+                        
                         <StackPanel x:Name="FtIdentityPanel" Margin="0,22,0,0">
                             <StackPanel.Style><Style TargetType="StackPanel">
                                 <Setter Property="Visibility" Value="Collapsed"/>
@@ -126,24 +126,24 @@
                             <TextBlock Text="Test Num（多个按填写顺序拼接，以逗号分隔）" Margin="0,0,0,8"/>
                             <TextBox x:Name="TxtUuidTestNumbers" TextChanged="IdentityTextChanged" Margin="0,0,0,12"/>
                             <Button Content="配置 / 预览芯片 UUID…" Click="BtnUuid_Click" HorizontalAlignment="Left" Style="{StaticResource WorkspaceButton}" Margin="0,0,0,14"/>
-                            <TextBlock Style="{StaticResource HelpText}" Text="一个测项直接作为 UUID；多个测项按填写顺序直接拼接。例如 101、102 读到 E8、A9，UUID 为 E8A9。保留十六进制原文与前导零，仅去除首尾空格。读不完整的记录独立保留并提示，不回退到序列号或坐标。"/>
+                            
                         </StackPanel>
-                        <TextBlock Style="{StaticResource HelpText}" Margin="0,20,0,0" Text="点击下方“应用分析配置并重算”生效，也会保存到 config.ini。四种复测口径继续可用；原始测量值和 Run 序列号保留。"/>
+                        
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
             <TabItem x:Name="AppearanceTab" Header="界面与习惯">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ScrollViewer TextElement.Foreground="{StaticResource TextPrimary}" TextElement.FontWeight="Normal" VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="24">
                         <TextBlock Text="主列表" Style="{StaticResource SectionTitle}"/>
                         <CheckBox x:Name="ChkCompactTable" Content="紧凑行高（适合同时查看更多测项）"/>
                         <CheckBox x:Name="ChkShowColumnFilters" Content="显示表头的关键字筛选输入框"/>
                         <CheckBox x:Name="ChkAlternateRows" Content="显示交替行底色"/>
-                        <TextBlock Style="{StaticResource HelpText}" Text="关闭紧凑行高后，使用更舒展的字号和行间距。隐藏输入框时清除关键字条件；右键勾选条件保留，仍可通过表头修改。"/>
+                        
                         <TextBlock Text="Run 选取方式" Style="{StaticResource SectionTitle}" Margin="0,18,0,10"/>
                         <RadioButton x:Name="RunBySerial" Content="序列号" GroupName="RunSelection" Margin="0,0,0,10"/>
                         <RadioButton x:Name="RunByCoordinates" Content="晶圆 + X/Y 坐标" GroupName="RunSelection"/>
-                        <TextBlock Style="{StaticResource HelpText}" Text="晶圆通过输入框和上下按钮切换，不使用下拉框。坐标定位默认显示末次记录，上下按钮按导入顺序浏览该晶圆有完整坐标的记录；无坐标的数据请使用序列号模式。"/>
+                        
                         <Border Height="1" Background="{StaticResource BorderSoft}" Margin="0,22"/>
                         <TextBlock Text="导入习惯" Style="{StaticResource SectionTitle}"/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
@@ -153,7 +153,7 @@
                                 <ComboBoxItem Content="93k 模式（优先 TSR 名称）"/>
                             </ComboBox>
                         </StackPanel>
-                        <TextBlock Style="{StaticResource HelpText}" Text="每次导入 STDF 仍会弹窗确认，这里只决定默认选中项。"/>
+                        
 
                         <Button x:Name="BtnSavePreferences" Content="保存界面设置" Click="BtnSavePreferences_Click"
                                 HorizontalAlignment="Left" Style="{StaticResource PrimaryButton}"/>
@@ -161,16 +161,15 @@
                 </ScrollViewer>
             </TabItem>
             <TabItem x:Name="IniTab" Header="INI 配置">
-                <DockPanel Margin="18">
-                    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,12" Foreground="{StaticResource TextSecondary}" LineHeight="22"
-                               Text="行列编号从 1 开始，0 表示不存在。CSV 使用行列定义；STDF 自动读取文件内定义。HBINClassification 定义 Pass / PartialPass（不可重叠），SBinCategories 定义分类，PredictionContext 定义产品与程序。详细参数见“关于 → 详细说明”。"/>
+                <DockPanel TextElement.Foreground="{StaticResource TextPrimary}" TextElement.FontWeight="Normal" Margin="18">
+                    
                     <TextBox x:Name="TxtConfig" FontFamily="Consolas" FontSize="13" AcceptsReturn="True"
                              AcceptsTab="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                              TextWrapping="NoWrap" Padding="12" SpellCheck.IsEnabled="False"/>
                 </DockPanel>
             </TabItem>
             <TabItem Header="最近文件">
-                <Grid Margin="18">
+                <Grid TextElement.Foreground="{StaticResource TextPrimary}" TextElement.FontWeight="Normal" Margin="18">
                     <Grid.Resources>
                         <DataTemplate x:Key="RecentFileTemplate">
                             <StackPanel Margin="6">
@@ -193,7 +192,7 @@
                     </GroupBox>
                     <GroupBox Header="最近的数据（CSV / STDF）" Grid.Row="1" BorderBrush="{StaticResource BorderSoft}">
                         <DockPanel Margin="10">
-                            <TextBlock DockPanel.Dock="Top" Text="按已生效的配置打开并替换当前数据。" TextWrapping="Wrap" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,8"/>
+                            
                             <Button x:Name="BtnRecentCsv" Content="打开选中数据" DockPanel.Dock="Bottom" Click="BtnRecentCsv_Click" Style="{StaticResource WorkspaceButton}" Margin="0,8,0,0"/>
                             <ListBox x:Name="RecentCsvs" ItemTemplate="{StaticResource RecentFileTemplate}"
                                      BorderBrush="{StaticResource BorderSoft}" ScrollViewer.HorizontalScrollBarVisibility="Disabled" MouseDoubleClick="RecentCsv_DoubleClick"/>

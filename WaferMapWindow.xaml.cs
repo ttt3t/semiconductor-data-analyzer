@@ -157,7 +157,7 @@ public partial class WaferMapWindow : Window
         HeatMode.IsEnabled = _heatmapScale != null;
         if (_heatmapScale == null) PfMode.IsChecked = true;
         TxtHeatRange.Text = HeatRangeText();
-        TxtMapInfo.Text = page.Dies.Count == 0 ? "此 wafer 在当前测试项 / Site 下没有可绘制坐标。" : $"{page.Dies.Count} 颗芯片；悬停查看详细信息";
+        TxtMapInfo.Text = page.Dies.Count == 0 ? "此 wafer 在当前测试项 / Site 下没有可绘制坐标。" : $"{page.Dies.Count} 颗芯片";
         int total = Math.Max(1, _pfDies.Count);
         ClearLegend();
         _legend = _pfDies

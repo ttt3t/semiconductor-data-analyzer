@@ -32,7 +32,10 @@ public partial class ValuesWindow : Window
     public ValuesWindow(string title, IReadOnlyList<TestValue> values)
     {
         InitializeComponent();
-        _values = values.Select(value => new ValueRow(value)).ToArray();
+        var lease = new DatasetLease(values.Select(v => v.Record));
+        try { _values = values.Select(value => new ValueRow(value)).ToArray(); }
+        catch { lease.Dispose(); throw; }
+        Closed += (_, _) => lease.Dispose();
         Title = title;
         TxtTitle.Text = title;
         DgValues.ItemsSource = new ListCollectionView((ValueRow[])_values);

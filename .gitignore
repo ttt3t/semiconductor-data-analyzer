@@ -5,6 +5,8 @@ obj/
 artifacts/
 outputs/
 Diagnostics/
+Archives/
+TestResults/
 *.user
 *.suo
 *.pubxml
@@ -12,6 +14,9 @@ Diagnostics/
 *.log
 *.tmp
 *.rawcache
+*.exe
+*.dll
+*.pdb
 
 # Local preferences and working data
 app.settings.ini
@@ -19,6 +24,11 @@ last_config.ini
 ui.preferences.json
 layout.json
 recent*.json
+catalog.json
+catalog.json.bak
+catalog.json.lock
+# Public demonstration files kept for local testing, not project source.
+Samples/PublicSTDF/
 *.csv
 *.std
 *.stdf
@@ -29,5 +39,12 @@ recent*.json
 .env.*
 *.pem
 *.key
+*.pfx
+*.p12
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 Thumbs.db
 .DS_Store
