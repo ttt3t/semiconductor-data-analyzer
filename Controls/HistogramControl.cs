@@ -6,6 +6,9 @@ namespace SemiconductorCsvAnalyzer.Controls;
 
 public class HistogramControl : CachedPlotControl
 {
+    // Bars/ticks are inexpensive vectors; keep them sharp while resizing, without a second bitmap.
+    public HistogramControl() => UseBitmapCache = false;
+
     private static readonly PropertyChangedCallback InvalidateIfIdle = (d, _) =>
     {
         var c = (HistogramControl)d;

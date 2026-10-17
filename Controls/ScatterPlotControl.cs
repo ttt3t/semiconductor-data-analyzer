@@ -1,8 +1,10 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using SemiconductorCsvAnalyzer.Models;
 using SemiconductorCsvAnalyzer.Services;
@@ -73,10 +75,11 @@ public class ScatterPlotControl : CachedPlotControl
         (_dataMinY, _dataMaxY) = range;
     }
 
-    private static readonly Brush PointBrush = Freeze(new SolidColorBrush(Color.FromRgb(30, 120, 200)));
-    private static readonly Brush GroupDarkBrush = Freeze(new SolidColorBrush(Color.FromRgb(31, 95, 165)));
-    private static readonly Brush GroupLightBrush = Freeze(new SolidColorBrush(Color.FromRgb(128, 185, 231)));
-    private static readonly Brush OutBrush = Freeze(new SolidColorBrush(Color.FromRgb(220, 60, 60)));
+    private static readonly Color PointColor = Color.FromRgb(30, 120, 200);
+    private static readonly Color GroupDarkColor = Color.FromRgb(31, 95, 165);
+    private static readonly Color GroupLightColor = Color.FromRgb(128, 185, 231);
+    private static readonly Color OutColor = Color.FromRgb(220, 60, 60);
+
     private static readonly Brush GridBrush = Freeze(new SolidColorBrush(Color.FromRgb(210, 210, 210)));
     private static readonly Brush CrossBrush = Freeze(new SolidColorBrush(Color.FromRgb(168, 168, 168)));
     private static readonly Brush LabelBg = Freeze(new SolidColorBrush(Color.FromArgb(235, 255, 255, 255)));
@@ -119,8 +122,25 @@ public class ScatterPlotControl : CachedPlotControl
     private FormattedText[] _groupLabels = Array.Empty<FormattedText>();
     private double _groupLabelDpi;
 
+    // Real-time rasterization buffers (reused across frames, zero resize stretching).
+    private WriteableBitmap? _pointBitmap;
+    private double _pointBitmapDpi;
+    private uint[] _pixelBuffer = Array.Empty<uint>();
+    private byte[] _occupancy = Array.Empty<byte>();
+    private readonly List<(int X, int Y)> _failCoords = new(256);
+    private double _stampDpi;
+    private int _stampRadius;
+    private byte[] _stampAlpha = Array.Empty<byte>();
+    private uint[] _stampNormal = Array.Empty<uint>();
+    private uint[] _stampDark = Array.Empty<uint>();
+    private uint[] _stampLight = Array.Empty<uint>();
+    private uint[] _stampOut = Array.Empty<uint>();
+    private const int MaxRasterPixels = 4_000_000;
+
     public ScatterPlotControl()
     {
+        // Disable CachedPlotControl's static bitmap stretching; render every frame live.
+        UseBitmapCache = false;
         Focusable = true;
         Cursor = Cursors.Cross;
         ClipToBounds = true;
@@ -143,6 +163,7 @@ public class ScatterPlotControl : CachedPlotControl
         {
             _hoverTimer.Stop();
             _hover = null;
+            ReleaseRasterBuffers();
             _overlayLayer.InvalidateVisual();
         };
 
@@ -152,6 +173,16 @@ public class ScatterPlotControl : CachedPlotControl
         MouseMove += OnMouseMove;
         MouseLeave += OnMouseLeave;
         MouseRightButtonDown += OnMouseRightButtonDown;
+    }
+
+    private void ReleaseRasterBuffers()
+    {
+        _pointBitmap = null;
+        _pointBitmapDpi = 0;
+        _pixelBuffer = Array.Empty<uint>();
+        _occupancy = Array.Empty<byte>();
+        _failCoords.Clear();
+        if (_failCoords.Capacity > 256) _failCoords.Capacity = 256;
     }
 
     public void SetData(IList<TestValue>? values, double? lsl, double? usl, string unit = "")
@@ -188,13 +219,6 @@ public class ScatterPlotControl : CachedPlotControl
 
     protected override bool HasPlotContent => _pointCount > 0;
 
-    protected override void OnResizePreview()
-    {
-        _hoverTimer.Stop();
-        _hover = null;
-        _overlayLayer.InvalidateVisual();
-    }
-
     protected override HitTestResult HitTestCore(PointHitTestParameters hitTestParameters)
         => new PointHitTestResult(this, hitTestParameters.HitPoint);
 
@@ -208,10 +232,10 @@ public class ScatterPlotControl : CachedPlotControl
 
     protected override Size ArrangeOverride(Size finalSize)
     {
-        base.ArrangeOverride(finalSize);
         const double left = ChartAxis.PlotLeft, right = ChartAxis.PlotRight, top = 32, bottom = 54;
         double nextW = Math.Max(0, finalSize.Width - left - right);
         double nextH = Math.Max(0, finalSize.Height - top - bottom);
+        bool sizeChanged = _plotW != nextW || _plotH != nextH;
         if (_plotW > 0) _offsetX *= nextW / _plotW;
         if (_plotH > 0) _offsetY *= nextH / _plotH;
         _left = left;
@@ -220,6 +244,11 @@ public class ScatterPlotControl : CachedPlotControl
         _plotH = nextH;
         _hasPlot = _plotW >= 20 && _plotH >= 20 && _pointCount > 0;
         _overlayLayer.Arrange(new Rect(0, 0, finalSize.Width, finalSize.Height));
+        if (sizeChanged)
+        {
+            InvalidateVisual();
+            _overlayLayer.InvalidateVisual();
+        }
         return finalSize;
     }
 
@@ -367,6 +396,10 @@ public class ScatterPlotControl : CachedPlotControl
         _series = series;
         _groupLabels = Array.Empty<FormattedText>();
         _pointCount = series.SampleCount;
+        _failCoords.Clear();
+        if (_failCoords.Capacity > Math.Max(256L, (long)_pointCount * 4))
+            _failCoords.Capacity = Math.Max(256, _pointCount);
+        if (_pointCount == 0) ReleaseRasterBuffers();
         _hoverTimer.Stop();
         _hover = null;
         _dragStart = null;
@@ -387,6 +420,7 @@ public class ScatterPlotControl : CachedPlotControl
         InvalidatePlot();
         _overlayLayer.InvalidateVisual();
     }
+
     protected override void DrawPlot(DrawingContext dc)
     {
         _renderCount++;
@@ -439,22 +473,7 @@ public class ScatterPlotControl : CachedPlotControl
             dc.DrawLine(RedPen, new Point(_left, y), new Point(_left + _plotW, y));
         }
 
-        double r = PointRadius;
-        var points = _series.Points;
-        int start = ScatterSeries.LowerBound(points, visMinX - 1);
-        var groups = _series.Groups;
-        int groupIndex = grouped && start < points.Length ? ScatterSeries.LowerBoundGroup(groups, points[start].Index) : 0;
-        for (int i = start; i < points.Length && points[i].Index <= visMaxX + 1; i++)
-        {
-            var point = points[i];
-            double x = MapX(point.Index), y = MapY(point.Value);
-            if (y < _top - r || y > _top + _plotH + r) continue;
-            if (grouped)
-                while (groupIndex + 1 < groups.Length && point.Index > groups[groupIndex].EndIndex) groupIndex++;
-            Brush brush = point.OutOfSpec ? OutBrush : !grouped ? PointBrush :
-                (groupIndex % 2 == 0 ? GroupDarkBrush : GroupLightBrush);
-            dc.DrawEllipse(brush, null, new Point(x, y), r, r);
-        }
+        RenderPointsBitmap(dc, plotRect, visMinX, visMaxX, grouped);
         dc.Pop();
 
         ChartAxis.DrawAxes(dc, AxisPen, plotRect);
@@ -481,7 +500,222 @@ public class ScatterPlotControl : CachedPlotControl
             lastLabelRight = tx + ft.Width;
         }
         if (grouped) DrawGroupLabels(dc, visMinX, visMaxX);
+    }
 
+    private void EnsureStamp(double dpi)
+    {
+        if (_stampDpi == dpi && _stampAlpha.Length > 0) return;
+        _stampDpi = dpi;
+        double radius = PointRadius * dpi;
+        int r = Math.Max(1, (int)Math.Ceiling(radius + 0.5));
+        int size = r * 2 + 1;
+        int len = size * size;
+        _stampRadius = r;
+        _stampAlpha = new byte[len];
+        _stampNormal = new uint[len];
+        _stampDark = new uint[len];
+        _stampLight = new uint[len];
+        _stampOut = new uint[len];
+
+        static uint Premultiply(Color c, byte a)
+        {
+            if (a == 0) return 0;
+            uint pr = (uint)((c.R * a + 127) / 255);
+            uint pg = (uint)((c.G * a + 127) / 255);
+            uint pb = (uint)((c.B * a + 127) / 255);
+            return ((uint)a << 24) | (pr << 16) | (pg << 8) | pb;
+        }
+
+        for (int dy = -r; dy <= r; dy++)
+        {
+            for (int dx = -r; dx <= r; dx++)
+            {
+                double dist = Math.Sqrt(dx * dx + dy * dy);
+                double coverage = Math.Clamp(radius + 0.5 - dist, 0.0, 1.0);
+                byte alpha = (byte)Math.Round(coverage * 255.0);
+                int idx = (dy + r) * size + (dx + r);
+                _stampAlpha[idx] = alpha;
+                _stampNormal[idx] = Premultiply(PointColor, alpha);
+                _stampDark[idx] = Premultiply(GroupDarkColor, alpha);
+                _stampLight[idx] = Premultiply(GroupLightColor, alpha);
+                _stampOut[idx] = Premultiply(OutColor, alpha);
+            }
+        }
+    }
+
+    private void RenderPointsBitmap(DrawingContext dc, Rect plotRect, double visMinX, double visMaxX, bool grouped)
+    {
+        var points = _series.Points;
+        if (points.Length == 0 || _plotW < 1 || _plotH < 1) return;
+
+        // Offscreen report export renders at 144 DPI (1.5x); match it so exported scatter plots stay crisp.
+        double renderDpi = PresentationSource.FromVisual(this) == null ? Math.Max(1.5, Dpi) : Dpi;
+        double targetW = _plotW * renderDpi, targetH = _plotH * renderDpi;
+        double bitmapScale = Math.Min(1, Math.Sqrt(MaxRasterPixels / (targetW * targetH)));
+        bitmapScale = Math.Min(bitmapScale, Math.Min(8192 / targetW, 8192 / targetH));
+        int bmpW = Math.Clamp((int)Math.Round(targetW * bitmapScale), 1, 8192);
+        int bmpH = Math.Min(Math.Clamp((int)Math.Round(targetH * bitmapScale), 1, 8192), MaxRasterPixels / bmpW);
+        int pixelCount = bmpW * bmpH;
+
+        if (_pointBitmap == null || _pointBitmap.PixelWidth != bmpW || _pointBitmap.PixelHeight != bmpH || _pointBitmapDpi != renderDpi)
+        {
+            _pointBitmap = new WriteableBitmap(bmpW, bmpH, 96.0 * renderDpi, 96.0 * renderDpi, PixelFormats.Pbgra32, null);
+            _pointBitmapDpi = renderDpi;
+        }
+        // Grow geometrically during a drag; release a much larger old allocation after shrinking.
+        if (_pixelBuffer.Length < pixelCount || _pixelBuffer.Length > Math.Max(65536L, (long)pixelCount * 4))
+        {
+            int capacity = _pixelBuffer.Length < pixelCount
+                ? Math.Min(MaxRasterPixels, Math.Max(pixelCount, Math.Max(65536, _pixelBuffer.Length * 2)))
+                : Math.Max(65536, pixelCount);
+            _pixelBuffer = new uint[capacity];
+            _occupancy = new byte[capacity];
+        }
+
+        Array.Clear(_pixelBuffer, 0, pixelCount);
+        Array.Clear(_occupancy, 0, pixelCount);
+        _failCoords.Clear();
+        EnsureStamp(bitmapScale < 1 ? Math.Min(bmpW / _plotW, bmpH / _plotH) : renderDpi);
+
+        double pxPerDipX = bmpW / _plotW;
+        double pxPerDipY = bmpH / _plotH;
+
+        double scaleX, biasX;
+        if (_dataMaxX == _dataMinX)
+        {
+            scaleX = 0;
+            biasX = (0.5 * _plotW * _scaleX + _offsetX) * pxPerDipX;
+        }
+        else
+        {
+            double invSpanX = 1.0 / (_dataMaxX - _dataMinX);
+            scaleX = (_plotW * _scaleX * invSpanX) * pxPerDipX;
+            biasX = (_offsetX - _dataMinX * _plotW * _scaleX * invSpanX) * pxPerDipX;
+        }
+
+        double scaleY, biasY;
+        if (_dataMaxY == _dataMinY)
+        {
+            scaleY = 0;
+            biasY = (_plotH - (0.5 * _plotH * _scaleY + _offsetY)) * pxPerDipY;
+        }
+        else
+        {
+            double invSpanY = 1.0 / (_dataMaxY - _dataMinY);
+            scaleY = -(_plotH * _scaleY * invSpanY) * pxPerDipY;
+            biasY = (_plotH - _offsetY + _dataMinY * _plotH * _scaleY * invSpanY) * pxPerDipY;
+        }
+
+        int r = _stampRadius;
+        int start = ScatterSeries.LowerBound(points, visMinX - 1);
+        var groups = _series.Groups;
+        int groupIndex = grouped && start < points.Length ? ScatterSeries.LowerBoundGroup(groups, points[start].Index) : 0;
+
+        for (int i = start; i < points.Length && points[i].Index <= visMaxX + 1; i++)
+        {
+            var point = points[i];
+            int ix = (int)Math.Round(Math.FusedMultiplyAdd(point.Index, scaleX, biasX));
+            int iy = (int)Math.Round(Math.FusedMultiplyAdd(point.Value, scaleY, biasY));
+            if (ix < -r || ix >= bmpW + r || iy < -r || iy >= bmpH + r) continue;
+
+            if (grouped)
+                while (groupIndex + 1 < groups.Length && point.Index > groups[groupIndex].EndIndex) groupIndex++;
+
+            // A clipped point outside the image must not occupy the center of an inside point.
+            bool centerInside = (uint)ix < (uint)bmpW && (uint)iy < (uint)bmpH;
+            int centerIdx = centerInside ? iy * bmpW + ix : -1;
+
+            if (point.OutOfSpec)
+            {
+                if (!centerInside || _occupancy[centerIdx] != 3)
+                {
+                    if (centerInside) _occupancy[centerIdx] = 3;
+                    _failCoords.Add((ix, iy));
+                }
+                continue;
+            }
+
+            byte state = !grouped ? (byte)1 : (groupIndex % 2 == 0 ? (byte)1 : (byte)2);
+            if (centerInside && _occupancy[centerIdx] != 0) continue;
+            if (centerInside) _occupancy[centerIdx] = state;
+
+            uint[] stamp = !grouped ? _stampNormal : (state == 1 ? _stampDark : _stampLight);
+            StampCircle(bmpW, bmpH, ix, iy, r, stamp);
+        }
+
+        // Second pass: stamp out-of-spec red points on top so failures are never hidden behind pass points.
+        for (int i = 0; i < _failCoords.Count; i++)
+        {
+            var (ix, iy) = _failCoords[i];
+            StampCircle(bmpW, bmpH, ix, iy, r, _stampOut);
+        }
+
+        _pointBitmap.WritePixels(new Int32Rect(0, 0, bmpW, bmpH), _pixelBuffer, bmpW * sizeof(uint), 0);
+        dc.DrawImage(_pointBitmap, plotRect);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void StampCircle(int bmpW, int bmpH, int cx, int cy, int r, uint[] stampColors)
+    {
+        int size = r * 2 + 1;
+        var alphas = _stampAlpha;
+        var pixels = _pixelBuffer;
+
+        // Interior fast path: zero per-pixel bounds checks.
+        if (cx >= r && cx < bmpW - r && cy >= r && cy < bmpH - r)
+        {
+            int stampIdx = 0;
+            for (int dy = -r; dy <= r; dy++)
+            {
+                int rowOffset = (cy + dy) * bmpW + cx;
+                for (int dx = -r; dx <= r; dx++, stampIdx++)
+                {
+                    byte a = alphas[stampIdx];
+                    if (a == 0) continue;
+                    int idx = rowOffset + dx;
+                    uint src = stampColors[stampIdx];
+                    uint dst = pixels[idx];
+                    pixels[idx] = (dst == 0 || a == 255) ? src : BlendPremultiplied(src, a, dst);
+                }
+            }
+            return;
+        }
+
+        int dyMin = Math.Max(-r, -cy);
+        int dyMax = Math.Min(r, bmpH - 1 - cy);
+        int dxMin = Math.Max(-r, -cx);
+        int dxMax = Math.Min(r, bmpW - 1 - cx);
+
+        for (int dy = dyMin; dy <= dyMax; dy++)
+        {
+            int rowOffset = (cy + dy) * bmpW + cx;
+            int stampRow = (dy + r) * size + r;
+            for (int dx = dxMin; dx <= dxMax; dx++)
+            {
+                int stampIdx = stampRow + dx;
+                byte a = alphas[stampIdx];
+                if (a == 0) continue;
+                int idx = rowOffset + dx;
+                uint src = stampColors[stampIdx];
+                uint dst = pixels[idx];
+                pixels[idx] = (dst == 0 || a == 255) ? src : BlendPremultiplied(src, a, dst);
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static uint BlendPremultiplied(uint src, byte srcA, uint dst)
+    {
+        uint invA = (uint)(255 - srcA);
+        uint b = (src & 0xFF) + (((dst & 0xFF) * invA + 127) >> 8);
+        uint g = ((src >> 8) & 0xFF) + ((((dst >> 8) & 0xFF) * invA + 127) >> 8);
+        uint r = ((src >> 16) & 0xFF) + ((((dst >> 16) & 0xFF) * invA + 127) >> 8);
+        uint a = (src >> 24) + (((dst >> 24) * invA + 127) >> 8);
+        if (b > 255) b = 255;
+        if (g > 255) g = 255;
+        if (r > 255) r = 255;
+        if (a > 255) a = 255;
+        return (a << 24) | (r << 16) | (g << 8) | b;
     }
 
     private void DrawGroupBoundaries(DrawingContext dc, double min, double max)
