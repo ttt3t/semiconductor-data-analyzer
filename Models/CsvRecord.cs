@@ -6,6 +6,7 @@ public sealed class CsvRecord
     public string Product { get; set; } = "";
     public string Program { get; set; } = "";
     public string Lot { get; set; } = "";
+    public DateTime? StdfTestTime { get; set; }
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string WaferId { get; set; } = "";
     public string SerialNumber { get; set; } = "";

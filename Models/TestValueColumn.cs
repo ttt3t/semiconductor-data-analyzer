@@ -13,6 +13,32 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
     public int Count => _count;
     public bool IsReadOnly => false;
     internal double GetSourceRowValue(int row) => _numbers[row];
+    internal double GetValueAt(int index) => _numbers[Row(index)];
+    internal CsvRecord GetRecordAt(int index) => _records[Row(index)];
+
+    internal bool TryGetContiguousValues(out ReadOnlySpan<double> values)
+    {
+        if (_validRows == null)
+        {
+            values = _numbers.AsSpan(0, _count);
+            return true;
+        }
+        values = default;
+        return false;
+    }
+
+    internal void CopyValuesTo(Span<double> destination)
+    {
+        if (_validRows == null)
+        {
+            _numbers.AsSpan(0, _count).CopyTo(destination);
+            return;
+        }
+        var rows = _validRows;
+        var numbers = _numbers;
+        for (int i = 0; i < _count; i++)
+            destination[i] = numbers[rows[i]];
+    }
 
     internal void Initialize(IReadOnlyList<CsvRecord> records, string testId)
     {
@@ -93,12 +119,41 @@ public sealed class IndexedTestValues : IReadOnlyList<TestValue>
     { _source = source; _indices = indices; }
     public int Count => _indices.Count;
     public TestValue this[int index] => _source[_indices[index]];
+    internal double GetValueAt(int index) => _source is TestValueColumn col ? col.GetValueAt(_indices[index]) : _source[_indices[index]].Value;
+    internal CsvRecord GetRecordAt(int index) => _source is TestValueColumn col ? col.GetRecordAt(_indices[index]) : _source[_indices[index]].Record;
+
+    internal void CopyValuesTo(Span<double> destination)
+    {
+        int n = _indices.Count;
+        if (_source is TestValueColumn col)
+        {
+            for (int i = 0; i < n; i++)
+                destination[i] = col.GetValueAt(_indices[i]);
+        }
+        else
+        {
+            for (int i = 0; i < n; i++)
+                destination[i] = _source[_indices[i]].Value;
+        }
+    }
+
     public static IndexedTestValues ForSite(IReadOnlyList<TestValue> source, string site)
         => ForScope(source, site, null);
 
     public static IndexedTestValues ForScope(IReadOnlyList<TestValue> source, string? site, string? wafer)
     {
         var indices = new List<int>();
+        if (source is TestValueColumn col)
+        {
+            for (int i = 0; i < col.Count; i++)
+            {
+                var record = col.GetRecordAt(i);
+                if ((site == null || (string.IsNullOrWhiteSpace(record.Site) ? "(空)" : record.Site) == site) &&
+                    (wafer == null || record.WaferId == wafer))
+                    indices.Add(i);
+            }
+            return new(source, indices);
+        }
         for (int i = 0; i < source.Count; i++)
         {
             var value = source[i];

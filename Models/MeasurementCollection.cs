@@ -9,7 +9,8 @@ public sealed class MeasurementSchema
     public MeasurementSchema(IEnumerable<string> keys)
     {
         Keys = keys.ToArray();
-        Indices = Keys.Select((key, index) => (key, index)).ToDictionary(p => p.key, p => p.index);
+        Indices = new Dictionary<string, int>(Keys.Length, StringComparer.Ordinal);
+        for (int i = 0; i < Keys.Length; i++) Indices.Add(Keys[i], i);
     }
 }
 
@@ -23,6 +24,7 @@ public sealed class MeasurementCollection : IReadOnlyDictionary<string, string>
     private byte[]? _presence;
     private Dictionary<string, string>? _editable;
     internal bool IsOnDisk => _store != null;
+    internal RawMeasurementStore? RawStore => _store;
 
     public MeasurementCollection() => _editable = new();
     private MeasurementCollection(Dictionary<string, string> values) => _editable = values;
@@ -38,6 +40,14 @@ public sealed class MeasurementCollection : IReadOnlyDictionary<string, string>
         { _editable = null, _schema = schema, _store = store, _offset = offset, _length = length, _presence = presence, _count = count };
 
     private bool Present(int i) => _presence == null || (_presence[i >> 3] & (1 << (i & 7))) != 0;
+    internal bool PresentAt(int index)
+    {
+        if (_editable != null)
+            return _schema != null && (uint)index < (uint)_schema.Keys.Length && _editable.ContainsKey(_schema.Keys[index]);
+        return _presence == null || (_presence[index >> 3] & (1 << (index & 7))) != 0;
+    }
+    internal RawMeasurementStore.RawRow ReadRow(ref byte[]? reusableBuffer) =>
+        _store!.Read(_offset, _length, _schema!.Keys.Length, ref reusableBuffer);
     internal MeasurementCollection SelectKeys(HashSet<string> keys)
     {
         if (_store == null) return new(keys.Where(ContainsKey).ToDictionary(key => key, key => this[key]));
@@ -56,7 +66,13 @@ public sealed class MeasurementCollection : IReadOnlyDictionary<string, string>
     }
     internal MeasurementSchema? Schema => _schema;
     public int Count => _editable?.Count ?? _count;
-    public IEnumerable<string> Keys => _editable != null ? _editable.Keys : _schema!.Keys.Where((_, i) => Present(i));
+    public IEnumerable<string> Keys => _editable != null ? _editable.Keys : EnumerateOnDiskKeys();
+    private IEnumerable<string> EnumerateOnDiskKeys()
+    {
+        var keys = _schema!.Keys;
+        for (int i = 0; i < keys.Length; i++)
+            if (Present(i)) yield return keys[i];
+    }
     public IEnumerable<string> Values => Keys.Select(key => this[key]);
     public string this[string key]
     {
