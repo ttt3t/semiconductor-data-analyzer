@@ -34,7 +34,7 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 当前源码版本为 V2.0.4；已发布的运行包版本以 Releases 页面为准。详细操作和统计口径见 [使用手册](Docs/UserGuide.md)。
 ## 功能
 
-- **CSV / STDF 导入**：INI 配置 CSV 布局；读取 STDF V4 的 PTR、MPR、FTR，支持大小端及 `.std.gz` / `.stdf.gz`；93k 模式优先使用 TSR 的完整测项名称。
+- **CSV / STDF 导入**：首次即可多选文件，并选择晶圆关系、测项匹配及限值来源；设置中可按按钮手动识别 CSV 格式、预览 / 编辑并另存 INI，支持多行名称、重复表头和引号内换行，旧配置兼容。读取 STDF V4 的 PTR、MPR、FTR，支持大小端及 `.std.gz` / `.stdf.gz`；93k 模式优先使用 TSR 的完整测项名称。详见 [CSV 格式说明](Docs/CSVFormats.md)。
 - **STDF Lot Info**：在分析器顶部查看 MIR / MRR 批次、产品、程序、机台、温度与时间，以及 WIR / WRR 晶圆信息；左侧切换当前打开或追加的 STDF，支持复制全部信息。只在后台读取基本信息，不重算主表或绘图。
 - **主列表统计**：良率、均值、中位数、总体 σ、Cpk、robust 统计、异常值数、Site 良率差异；支持 Combine Site、筛选、排序和关注项。
 - **Run / Value**：按序列号浏览原始记录；缺失或重复序列号自动编号，保留复测身份；超限 Value 标红，良率渐变着色。

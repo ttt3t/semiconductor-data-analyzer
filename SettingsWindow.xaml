@@ -160,6 +160,43 @@
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
+            <TabItem x:Name="CsvFormatTab" Header="CSV 格式">
+                <Grid TextElement.Foreground="{StaticResource TextPrimary}" TextElement.FontWeight="Normal" Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <DockPanel Margin="0,0,0,10">
+                        <Button x:Name="BtnBrowseCsvFormat" DockPanel.Dock="Right" Content="选择 CSV…" Click="BrowseCsvFormat_Click" Style="{StaticResource WorkspaceButton}" Margin="8,0,0,0"/>
+                        <TextBox x:Name="TxtCsvSamplePath" TextChanged="CsvSamplePath_Changed" ToolTip="仅选择文件不会自动识别；点击开始识别后运行。"/>
+                    </DockPanel>
+                    <WrapPanel Grid.Row="1" Margin="0,0,0,10">
+                        <Button x:Name="BtnRecognizeCsv" Content="开始识别" Click="RecognizeCsv_Click" Style="{StaticResource PrimaryButton}" Margin="0,0,8,6"/>
+                        <Button x:Name="BtnCancelCsvDetection" Content="取消识别" Click="CancelCsvDetection_Click" IsEnabled="False" Style="{StaticResource WorkspaceButton}" Margin="0,0,8,6"/>
+                        <Button x:Name="BtnPreviewCsvFormat" Content="更新预览" Click="PreviewCsvFormat_Click" IsEnabled="False" Style="{StaticResource WorkspaceButton}" Margin="0,0,8,6"/>
+                        <Button x:Name="BtnUseCsvFormat" Content="采用此配置" Click="UseCsvFormat_Click" IsEnabled="False" Style="{StaticResource WorkspaceButton}" Margin="0,0,8,6"/>
+                        <Button x:Name="BtnSaveCsvFormat" Content="INI 另存为…" Click="SaveCsvFormat_Click" IsEnabled="False" Style="{StaticResource WorkspaceButton}" Margin="0,0,0,6"/>
+                    </WrapPanel>
+                    <TextBlock x:Name="TxtCsvFormatSummary" Grid.Row="2" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <ScrollViewer Grid.Row="3" MaxHeight="110" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8">
+                        <TextBlock x:Name="TxtCsvFormatWarnings" TextWrapping="Wrap" Foreground="#92400E"/>
+                    </ScrollViewer>
+                    <Grid Grid.Row="4">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <GroupBox Header="样本预览（测项列优先）" BorderBrush="{StaticResource BorderSoft}">
+                            <DataGrid x:Name="DgCsvFormatPreview" IsReadOnly="True" AutoGenerateColumns="True" CanUserAddRows="False" CanUserDeleteRows="False"
+                                      AutoGeneratingColumn="CsvPreview_AutoGeneratingColumn" EnableRowVirtualization="True" EnableColumnVirtualization="True" VirtualizingPanel.IsVirtualizing="True"
+                                      VirtualizingPanel.VirtualizationMode="Recycling" ColumnWidth="100" RowHeight="25" FontSize="12"/>
+                        </GroupBox>
+                        <GroupBox Grid.Column="2" Header="识别后的 INI（可编辑）" BorderBrush="{StaticResource BorderSoft}">
+                            <TextBox x:Name="TxtDetectedCsvIni" FontFamily="Consolas" FontSize="12" AcceptsReturn="True" AcceptsTab="True"
+                                     TextChanged="DetectedCsvIni_Changed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                     TextWrapping="NoWrap" SpellCheck.IsEnabled="False" Padding="8"
+                                     ToolTip="TestItemRows=1,2 指定多行名称；TestItemColumns 可指定测项列；SkipRepeatedHeaders 控制跳过重复表头。"/>
+                        </GroupBox>
+                    </Grid>
+                </Grid>
+            </TabItem>
             <TabItem x:Name="IniTab" Header="INI 配置">
                 <DockPanel TextElement.Foreground="{StaticResource TextPrimary}" TextElement.FontWeight="Normal" Margin="18">
                     

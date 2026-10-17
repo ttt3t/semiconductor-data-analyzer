@@ -8,6 +8,10 @@ public sealed class AnalyzerConfig
 
     // Layout (1-based, 0 = not present)
     public int TestItemRow { get; set; } = 1;
+    // Optional hierarchical name rows; an empty list retains the legacy TestItemRow.
+    public List<int> TestItemRows { get; set; } = new();
+    public List<int> TestItemColumns { get; set; } = new();
+    public bool SkipRepeatedHeaders { get; set; } = true;
     public int LowLimitRow { get; set; } = 2;
     public int HighLimitRow { get; set; } = 3;
     public int UnitRow { get; set; } = 4;

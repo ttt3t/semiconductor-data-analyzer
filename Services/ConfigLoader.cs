@@ -73,6 +73,9 @@ public static class ConfigLoader
             case "HASQUOTEDFIELDS": c.HasQuotedFields = ParseBool(value); break;
 
             case "TESTITEMROW": c.TestItemRow = ParsePositiveInt(key, value); break;
+            case "TESTITEMROWS": c.TestItemRows = List(value).Select(v => ParsePositiveInt(key, v)).Distinct().Order().ToList(); break;
+            case "TESTITEMCOLUMNS": c.TestItemColumns = List(value).Select(v => ParsePositiveInt(key, v)).Distinct().Order().ToList(); break;
+            case "SKIPREPEATEDHEADERS": c.SkipRepeatedHeaders = ParseBool(value); break;
             case "LOWLIMITROW": c.LowLimitRow = ParseNonNegativeInt(key, value); break;
             case "HIGHLIMITROW": c.HighLimitRow = ParseNonNegativeInt(key, value); break;
             case "UNITROW": c.UnitRow = ParseNonNegativeInt(key, value); break;
@@ -153,6 +156,7 @@ public static class ConfigLoader
         int maxHeaderRow = Math.Max(c.TestItemRow,
             Math.Max(c.LowLimitRow, Math.Max(c.HighLimitRow,
             Math.Max(c.UnitRow, Math.Max(c.TestNumberRow, Math.Max(c.SBinRow, c.HBinRow))))));
+        if (c.TestItemRows.Count > 0) maxHeaderRow = Math.Max(maxHeaderRow, c.TestItemRows.Max());
 
         if (c.DataStartRow <= maxHeaderRow)
             throw new InvalidDataException("DataStartRow 必须大于所有阈值/名称行");
@@ -193,6 +197,7 @@ public static class ConfigLoader
     }
 
     public static bool CsvDefinitionChanged(AnalyzerConfig a, AnalyzerConfig b) =>
+        !a.TestItemRows.SequenceEqual(b.TestItemRows) || !a.TestItemColumns.SequenceEqual(b.TestItemColumns) || a.SkipRepeatedHeaders != b.SkipRepeatedHeaders ||
         a.WaferColumn != b.WaferColumn ||
         (a.EncodingName, a.Delimiter, a.HasQuotedFields) != (b.EncodingName, b.Delimiter, b.HasQuotedFields) ||
         (a.TestItemRow, a.LowLimitRow, a.HighLimitRow, a.UnitRow, a.TestNumberRow, a.SBinRow, a.HBinRow,
@@ -214,6 +219,11 @@ public static class ConfigLoader
 
             [Layout]
             TestItemRow={c.TestItemRow}
+            ; Multiple name rows, joined from top to bottom; empty keeps TestItemRow.
+            TestItemRows={string.Join(",", c.TestItemRows)}
+            ; Optional explicit measurement columns; empty reads from TestItemStartColumn.
+            TestItemColumns={string.Join(",", c.TestItemColumns)}
+            SkipRepeatedHeaders={c.SkipRepeatedHeaders}
             LowLimitRow={c.LowLimitRow}
             HighLimitRow={c.HighLimitRow}
             UnitRow={c.UnitRow}

@@ -44,7 +44,7 @@ public static class CsvParser
             return IntegratedCsvService.Load(csvPath);
         }
         Encoding encoding;
-        try { encoding = Encoding.GetEncoding(config.EncodingName); }
+        try { encoding = CsvText.EncodingFor(config.EncodingName); }
         catch { encoding = Encoding.UTF8; }
 
         FileStream stream;
@@ -62,15 +62,23 @@ public static class CsvParser
         // widest row without retaining the whole file and a second split-string copy.
         var headerRows = new HashSet<int>(new[] { config.TestItemRow, config.LowLimitRow,
             config.HighLimitRow, config.UnitRow, config.TestNumberRow, config.SBinRow, config.HBinRow });
+        var nameRows = CsvText.NameRows(config);
+        headerRows.UnionWith(nameRows);
+        var definitionSignatures = new List<ulong>();
         var rows = new Dictionary<int, string[]>();
         int rowCount = 0, maxCols = 0;
         using (var reader = new StreamReader(input, encoding, true, 65536, leaveOpen: true))
-            while (reader.ReadLine() is { } line)
+            foreach (string line in CsvText.ReadRecords(reader, config.HasQuotedFields, cancellationToken))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 rowCount++;
                 maxCols = Math.Max(maxCols, CountColumns(line, config.Delimiter, config.HasQuotedFields));
-                if (headerRows.Contains(rowCount)) rows[rowCount - 1] = ParseLine(line, config.Delimiter, config.HasQuotedFields);
+                if (headerRows.Contains(rowCount) || (config.SkipRepeatedHeaders && rowCount < config.DataStartRow))
+                {
+                    var cells = ParseLine(line, config.Delimiter, config.HasQuotedFields);
+                    if (headerRows.Contains(rowCount)) rows[rowCount - 1] = cells;
+                    if (rowCount < config.DataStartRow) definitionSignatures.Add(CsvText.Signature(cells));
+                }
             }
         if (rowCount < config.DataStartRow)
             throw new InvalidDataException($"CSV 行数不足，需要至少 {config.DataStartRow} 行");
@@ -80,8 +88,17 @@ public static class CsvParser
             throw new InvalidDataException("产品 / 程序 / 批次 / HBIN 的配置列号超出 CSV 实际列数。");
         if (maxCols < config.TestItemStartColumn)
             throw new InvalidDataException($"CSV 实际列数 ({maxCols}) 小于配置的 TestItemStartColumn ({config.TestItemStartColumn})");
+        if (config.TestItemColumns.Any(c => c < 1 || c > maxCols))
+            throw new InvalidDataException("TestItemColumns 中的测项列号超出 CSV 实际列数。");
 
-        var testItemRow = GetRow(rows, config.TestItemRow - 1);
+        var nameHeaders = nameRows.Select(r => GetRow(rows, r - 1)).ToArray();
+        var nameSignatures = nameHeaders.Select((h, i) => (Signature: CsvText.Signature(h), Row: nameRows[i]))
+            .GroupBy(p => p.Signature).ToDictionary(g => g.Key, g => g.Min(p => p.Row));
+        var nameAnchors = nameHeaders.Select(h =>
+        {
+            int col = Array.FindIndex(h, s => !string.IsNullOrWhiteSpace(s));
+            return (Column: col, Value: col < 0 ? "" : h[col].Trim());
+        }).Where(a => a.Column >= 0).ToArray();
         var lowRow = config.LowLimitRow > 0 ? GetRow(rows, config.LowLimitRow - 1) : null;
         var highRow = config.HighLimitRow > 0 ? GetRow(rows, config.HighLimitRow - 1) : null;
         var unitRow = config.UnitRow > 0 ? GetRow(rows, config.UnitRow - 1) : null;
@@ -91,10 +108,34 @@ public static class CsvParser
 
         var items = new List<TestItemData>();
         var nameCount = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var identityColumns = new[] { config.SerialNumberColumn, config.XColumn, config.YColumn, config.SiteColumn,
+            config.WaferColumn, config.SBinColumn, config.HBinColumn, config.ProductColumn, config.ProgramColumn, config.LotColumn }.ToHashSet();
+        var parentNames = new string[nameHeaders.Length];
 
-        for (int col = config.TestItemStartColumn - 1; col < maxCols; col++)
+        var measurementColumns = config.TestItemColumns.Count > 0 ? config.TestItemColumns.Select(c => c - 1)
+            : Enumerable.Range(config.TestItemStartColumn - 1, maxCols - config.TestItemStartColumn + 1);
+        foreach (int col in measurementColumns)
         {
-            string name = GetCell(testItemRow, col).Trim();
+            if (identityColumns.Contains(col + 1)) continue;
+            var parts = new List<string>();
+            for (int h = 0; h < nameHeaders.Length; h++)
+            {
+                string part = GetCell(nameHeaders[h], col).Trim();
+                if (h < nameHeaders.Length - 1)
+                {
+                    if (part.Length > 0)
+                    {
+                        if (part != parentNames[h]) Array.Clear(parentNames, h + 1, parentNames.Length - h - 1);
+                        parentNames[h] = part;
+                    }
+                    else part = parentNames[h] ?? "";
+                }
+                if (part.Length > 0 && !parts.Contains(part, StringComparer.Ordinal)) parts.Add(part);
+            }
+            // Retain vertically merged explicit names, but not columns consisting only
+            // of an inherited horizontal group label.
+            if (!nameHeaders.Any(h => GetCell(h, col).Trim().Length > 0)) continue;
+            string name = string.Join(" / ", parts);
             if (string.IsNullOrWhiteSpace(name)) continue;
 
             if (!nameCount.TryGetValue(name, out _))
@@ -132,12 +173,49 @@ public static class CsvParser
             var rowCells = new List<string>(maxCols);
             var quoteBuffer = new StringBuilder(64);
             var rawMeasurements = new string?[items.Count];
-            int r = 0;
-            while (dataReader.ReadLine() is { } line)
+            int skippedHeaders = 0;
+            using var dataRows = CsvText.ReadRecords(dataReader, config.HasQuotedFields, cancellationToken).GetEnumerator();
+            for (int r = 1; r < config.DataStartRow; r++) dataRows.MoveNext();
+            var replay = new Queue<string>();
+            bool Next(out string line)
+            {
+                if (replay.Count > 0) { line = replay.Dequeue(); return true; }
+                if (dataRows.MoveNext()) { line = dataRows.Current; return true; }
+                line = ""; return false;
+            }
+            while (Next(out string line))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (++r < config.DataStartRow) continue;
                 ParseLineInto(line, config.Delimiter, config.HasQuotedFields, rowCells, quoteBuffer);
+                if (config.SkipRepeatedHeaders)
+                {
+                    bool possibleHeader = false;
+                    foreach (var anchor in nameAnchors)
+                        if (GetCell(rowCells, anchor.Column).Trim() == anchor.Value) { possibleHeader = true; break; }
+                    if (possibleHeader)
+                    {
+                        ulong signature = CsvText.Signature(rowCells);
+                        if (nameSignatures.TryGetValue(signature, out int headerRow))
+                        {
+                            // Only discard a complete matching definition block. Look-ahead is replayed
+                            // on mismatch, so real values equal to an LSL/USL row are never swallowed.
+                            int following = config.DataStartRow - headerRow - 1;
+                            var ahead = new List<string>();
+                            bool complete = following <= 256;
+                            if (complete)
+                                for (int offset = 1; offset <= following; offset++)
+                                {
+                                    if (!Next(out string next)) { complete = false; break; }
+                                    ahead.Add(next);
+                                    if (CsvText.Signature(ParseLine(next, config.Delimiter, config.HasQuotedFields)) != definitionSignatures[headerRow + offset - 1])
+                                    { complete = false; break; }
+                                }
+                            if (!complete) replay = new Queue<string>(ahead.Concat(replay));
+                            skippedHeaders += 1 + (complete ? ahead.Count : 0);
+                            continue;
+                        }
+                    }
+                }
 
                 string sn = GetCell(rowCells, config.SerialNumberColumn - 1);
                 string site = config.SiteColumn > 0 ? GetCell(rowCells, config.SiteColumn - 1) : "";
@@ -183,6 +261,7 @@ public static class CsvParser
 
             rawStore.Seal();
             var parsed = DatasetService.Build(items, records);
+            if (skippedHeaders > 0) parsed.SourceDescription = $"已跳过 {skippedHeaders} 行重复表头";
             progress?.Invoke($"解析完成，共 {items.Count} 个测试项，{parsed.Devices.Count} 颗唯一芯片");
             return parsed;
         }
@@ -224,7 +303,7 @@ public static class CsvParser
         return row[col];
     }
 
-    private static string[] ParseLine(string line, char delimiter, bool hasQuoted)
+    internal static string[] ParseLine(string line, char delimiter, bool hasQuoted)
     {
         if (!hasQuoted)
             return line.Split(delimiter);

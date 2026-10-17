@@ -1,0 +1,211 @@
+using System.IO;
+using System.Reflection;
+using System.Text;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Threading;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static string folder = ""; static int checks;
+    static string P(string name) => Path.Combine(folder, name);
+    static void Check(bool condition, string message)
+    { if (!condition) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
+    static string Write(string name, string text, Encoding? encoding = null)
+    { string path = P(name); File.WriteAllText(path, text, encoding ?? new UTF8Encoding(false)); return path; }
+    static object? Field(object target, string name) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target);
+    static void Set(object target, string name, object value) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, value);
+    static object? Call(object target, string name, params object[] args) => target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(target, args);
+    static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame); }
+    static void Until(Func<bool> condition) { var timer = System.Diagnostics.Stopwatch.StartNew(); while (!condition()) { if (timer.ElapsedMilliseconds > 30000) throw new TimeoutException(); Pump(); Thread.Sleep(2); } Pump(); }
+    static void Wait(Task task) { Until(() => task.IsCompleted); task.GetAwaiter().GetResult(); }
+    static void Save(Window window,string name)
+    {
+        window.UpdateLayout();var root=(FrameworkElement)window.Content;root.UpdateLayout();
+        var drawing=new System.Windows.Media.DrawingVisual();using(var dc=drawing.RenderOpen())
+        {var bounds=new Rect(0,0,root.ActualWidth,root.ActualHeight);dc.DrawRectangle(window.Background,null,bounds);dc.DrawRectangle(new System.Windows.Media.VisualBrush(root),null,bounds);}
+        var bitmap=new System.Windows.Media.Imaging.RenderTargetBitmap((int)root.ActualWidth,(int)root.ActualHeight,96,96,System.Windows.Media.PixelFormats.Pbgra32);bitmap.Render(drawing);
+        var encoder=new System.Windows.Media.Imaging.PngBitmapEncoder();encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));using var output=File.Create(P(name));encoder.Save(output);
+    }
+    static AnalyzerConfig Seed() => ConfigLoader.Load(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../config.ini")));
+    static string StdfFixture()
+    {
+        string path=P("synthetic.stdf");using var output=File.Create(path);using var writer=new BinaryWriter(output);
+        void C(BinaryWriter w,string text){var bytes=Encoding.ASCII.GetBytes(text);w.Write((byte)bytes.Length);w.Write(bytes);}
+        void R(byte type,byte sub,Action<BinaryWriter> fill)
+        {using var buffer=new MemoryStream();using(var w=new BinaryWriter(buffer,Encoding.ASCII,true))fill(w);writer.Write((ushort)buffer.Length);writer.Write(type);writer.Write(sub);writer.Write(buffer.ToArray());}
+        R(0,10,w=>{w.Write((byte)2);w.Write((byte)4);});
+        R(1,10,w=>{w.Write((uint)0);w.Write((uint)0);w.Write((byte)1);w.Write((byte)'P');w.Write((byte)' ');w.Write((byte)' ');w.Write((ushort)0);w.Write((byte)' ');foreach(string value in new[]{"LOT","PRODUCT","NODE","TESTER","JOB","REV"})C(w,value);});
+        R(2,10,w=>{w.Write((byte)1);w.Write((byte)1);w.Write((uint)0);C(w,"W-STDF");});
+        R(5,10,w=>{w.Write((byte)1);w.Write((byte)2);});
+        R(15,10,w=>{w.Write((uint)900);w.Write((byte)1);w.Write((byte)2);w.Write((byte)0);w.Write((byte)0);w.Write(1.3f);C(w,"StdfVoltage");C(w,"");});
+        R(5,20,w=>{w.Write((byte)1);w.Write((byte)2);w.Write((byte)0);w.Write((ushort)1);w.Write((ushort)1);w.Write((ushort)1);w.Write((short)2);w.Write((short)3);w.Write((uint)0);C(w,"STDF-1");});
+        R(2,20,w=>{w.Write((byte)1);w.Write((byte)1);for(int i=0;i<6;i++)w.Write((uint)0);C(w,"W-STDF");});
+        R(1,20,w=>{w.Write((uint)0);w.Write((byte)' ');});
+        return path;
+    }
+    const string Header = "SN,X,Y,Site,SBIN,HBIN,Wafer,Voltage,Current\n";
+    const string Definitions = "LSL,,,,,,,0,0\nUSL,,,,,,,2,1\nUnit,,,,,,,V,A\nTest Num,,,,,,,101,102\n";
+    const string Row1 = "S1,0,0,1,1,1,W1,1.2,0.03\n";
+    const string Row2 = "S2,1,0,2,2,2,W1,2.5,0.02\n";
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            var app = new App(); app.InitializeComponent(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var ownership = new AnalysisOperation();
+            var seed = Seed(); seed.BinCount = 37; seed.PassHBins = new() { "1", "2" };
+            string plain = Write("plain.csv", Header + Row1 + Row2);
+            var simple = CsvFormatDetector.Detect(plain, seed);
+            Check(simple.Config.DataStartRow == 2 && simple.Config.LowLimitRow == 0 && simple.Config.HighLimitRow == 0, "single header does not invent limits from measurement values");
+            Check(simple.Config.TestItemStartColumn == 8 && simple.Config.WaferColumn == 7 && simple.Config.HBinColumn == 6, "identity columns and measurement boundary recognized");
+            Check(simple.Config.BinCount == 37 && simple.Config.PassHBins.SequenceEqual(seed.PassHBins), "analysis settings preserved in generated INI");
+            Check(seed.DataStartRow == 8 && seed.TestItemRows.Count == 0, "recognition never mutates the seed configuration");
+            var data = CsvParser.Parse(plain, simple.Config);
+            Check(data.Records.Count == 2 && data.Items.Count == 2 && data.Items[0].Values.Count == 2, "single-header data parses correctly");
+            string textValues=Write("first-invalid.csv",Header+Row1.Replace("1.2,0.03","V,A")+Row2);
+            var invalidConfig=CsvFormatDetector.Detect(textValues,seed).Config;
+            Check(invalidConfig.DataStartRow==2 && CsvParser.Parse(textValues,invalidConfig).Records.Count==2,"first chip with unit-like invalid values is not removed as metadata");
+            string labeled = Write("labeled.csv", Header + Definitions + Row1 + Row2);
+            var recognized = CsvFormatDetector.Detect(labeled, seed);
+            var c = recognized.Config;
+            Check((c.LowLimitRow,c.HighLimitRow,c.UnitRow,c.TestNumberRow,c.DataStartRow) == (2,3,4,5,6), "labeled metadata rows recognized");
+            data = CsvParser.Parse(labeled,c);
+            Check(data.Items[0].LowLimit == 0 && data.Items[0].HighLimit == 2 && data.Items[1].Unit == "A" && data.Items[0].TestNumber == "101", "limits, unit and test numbers reach the analysis pipeline");
+            string unlabeled = Write("unlabeled.csv", Header + ",,,,,,,0,0\n,,,,,,,2,1\n,,,,,,,V,A\n,,,,,,,101,102\n,,,,,,,1,2\n,,,,,,,1,2\n" + Row1);
+            c = CsvFormatDetector.Detect(unlabeled, seed).Config;
+            Check((c.LowLimitRow,c.HighLimitRow,c.UnitRow,c.TestNumberRow,c.DataStartRow) == (2,3,4,5,8), "legacy unlabeled multi-row definitions inferred");
+            Check(c.SBinRow == 0 && c.HBinRow == 0, "unlabeled bin definition rows are not guessed");
+            string repeated = Write("repeated.csv", Header + Definitions + Row1 + Header + Definitions + Row2);
+            c = recognized.Config;
+            data = CsvParser.Parse(repeated,c);
+            Check(data.Records.Count == 2 && data.Items.All(i => i.Errors.Count == 0), "complete repeated header block is excluded from values and Eorr");
+            Check(data.SourceDescription.Contains("5"), "skipped repeated header rows reported");
+            c.SkipRepeatedHeaders = false;
+            Check(CsvParser.Parse(repeated,c).Records.Count == 7, "repeated-header skipping can be disabled");
+            c.SkipRepeatedHeaders = true;
+            string onlyName = Write("repeat-name.csv", Header + Definitions + Row1 + Header + Row2);
+            Check(CsvParser.Parse(onlyName,c).Records.Count == 2, "name-only repetition does not discard subsequent data");
+
+            string groupHeader = "SN,X,Y,Site,SBIN,HBIN,Wafer,Power,,Analog,\n,,,,,,,Vdd,Vss,Leak,Offset\n";
+            string groupRows = "LSL,,,,,,,0,0,0,0\nUSL,,,,,,,3,3,1,1\nUnit,,,,,,,V,V,A,V\n";
+            string groupData = "G1,0,0,1,1,1,W1,1,2,0.1,0.2\n";
+            string hierarchy = Write("hierarchy.csv",groupHeader + groupRows + groupData + groupHeader + groupRows + groupData.Replace("G1,0", "G2,1"));
+            c = CsvFormatDetector.Detect(hierarchy,seed).Config;
+            Check(c.TestItemRows.SequenceEqual(new[]{1,2}) && c.DataStartRow == 6, "hierarchical header rows detected");
+            data = CsvParser.Parse(hierarchy,c);
+            Check(data.Items.Select(i => i.Name).SequenceEqual(new[]{"Power / Vdd","Power / Vss","Analog / Leak","Analog / Offset"}), "merged upper-level labels carried into leaf names");
+            Check(data.Records.Count == 2 && data.Items.All(i=>i.Errors.Count==0), "hierarchical repeated blocks do not become chips");
+            string vertical=Write("vertical.csv","SN,X,Y,Site,SBIN,HBIN,Wafer,Vdd,Power,\n,,,,,,,,Leak,Offset\nV1,0,0,1,1,1,W1,1,0.1,0.2\n");
+            var verticalConfig=CsvFormatDetector.Detect(vertical,seed).Config;
+            Check(CsvParser.Parse(vertical,verticalConfig).Items.Select(i=>i.Name).SequenceEqual(new[]{"Vdd","Power / Leak","Power / Offset"}),"vertically merged names retain their measurements");
+            var roundTrip = ConfigLoader.Parse(ConfigLoader.Serialize(c));
+            Check(roundTrip.TestItemRows.SequenceEqual(c.TestItemRows) && !ConfigLoader.CsvDefinitionChanged(c,roundTrip), "multi-row config survives INI round trip");
+            roundTrip.TestItemRows = new(){2}; Check(ConfigLoader.CsvDefinitionChanged(c,roundTrip), "editing name rows triggers a source reload");
+            string save=P("detected.ini"); ConfigLoader.Save(save,c);
+            Check(ConfigLoader.Load(save).TestItemRows.SequenceEqual(new[]{1,2}), "detected INI can be saved and loaded independently");
+            bool rejected=false; try { ConfigLoader.Parse("[Layout]\nTestItemRows=1,8\nDataStartRow=8"); } catch(InvalidDataException){rejected=true;}
+            Check(rejected,"header rows cannot overlap data start");
+
+            string onlyValues=Write("values-only.csv","Voltage,Current\n0,0\n2,1\nV,A\n1,0.1\nVoltage,Current\n0,0\n2,1\nV,A\n0,0\n");
+            var noIds=new AnalyzerConfig {TestItemRow=1,LowLimitRow=2,HighLimitRow=3,UnitRow=4,DataStartRow=5,TestItemStartColumn=1,SerialNumberColumn=0,XColumn=0,YColumn=0,SiteColumn=0};
+            Check(CsvParser.Parse(onlyValues,noIds).Records.Count==2,"real values equal to the LSL row survive a repeated header block");
+            string partial=Write("partial-block.csv","Voltage,Current\n0,0\n2,1\nV,A\n1,0.1\nVoltage,Current\n0,0\n1.5,0.2\n");
+            Check(CsvParser.Parse(partial,noIds).Records.Count==3,"look-ahead is replayed when a repeated metadata block is incomplete");
+
+            string multiline=Write("multiline.csv","SN,X,Y,Site,SBIN,HBIN,Wafer,\"Voltage\nsense,\"\"A\"\"\",Current\n"+Row1+Row2);
+            c=CsvFormatDetector.Detect(multiline,seed).Config; data=CsvParser.Parse(multiline,c);
+            Check(c.DataStartRow==2 && data.Records.Count==2 && data.Items[0].Name=="Voltage\nsense,\"A\"","quoted multi-line/comma/escaped-quote names use logical record numbers");
+            bool quoteError=false;try{CsvFormatDetector.Detect(Write("broken.csv","SN,\"broken\n1,2"),seed);}catch(InvalidDataException){quoteError=true;}
+            Check(quoteError,"unclosed quotes produce a clear error");
+            string errors=Write("errors.csv",Header+Definitions+Row1+Row2+",,,,,,,,\nBAD,2,0,1,2,2,W1,abc,0.2\n");
+            var errorData=CsvParser.Parse(errors,recognized.Config);
+            Check(errorData.Records.Count==4 && errorData.Items[0].Errors.Count==2 && errorData.Devices.Count==3,"blank and nonnumeric data remain errors rather than being removed as headers");
+            foreach(var (name,sep,encoding) in new[]{("utf16.tsv",'\t',Encoding.Unicode),("utf16be.tsv",'\t',Encoding.BigEndianUnicode),("utf32.csv",',',Encoding.UTF32),("utf32be.csv",',',new UTF32Encoding(true,true)),("utf8.csv",';',new UTF8Encoding(true)),("pipe.csv",'|',Encoding.UTF8)})
+            {
+                string path=Write(name,(Header+Row1+Row2).Replace(',',sep),encoding);c=CsvFormatDetector.Detect(path,seed).Config;
+                Check(c.Delimiter==sep && CsvParser.Parse(path,c).Records.Count==2,"encoding/delimiter "+name);
+            }
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            string chinese=Write("gbk.csv","序列号,X坐标,Y坐标,Site,软bin,硬bin,片号,电压,电流\n"+Row1+Row2,Encoding.GetEncoding("GB18030"));
+            c=CsvFormatDetector.Detect(chinese,seed).Config;data=CsvParser.Parse(chinese,c);
+            Check(c.EncodingName=="GB18030" && c.WaferColumn==7 && data.Items[0].Name=="电压","GBK-compatible Chinese headers detected and read");
+            string binFirst=Write("bin-first.csv","HBIN,SBIN,SN,Wafer,Voltage\n1,1,F1,W1,1.2\n");
+            c=CsvFormatDetector.Detect(binFirst,seed).Config;
+            Check(c.HBinColumn==1 && c.DataStartRow==2 && CsvParser.Parse(binFirst,c).Items.Count==1,"HBIN-first identity header is not confused with metadata");
+            string trailing=Write("trailing.csv", "SN,Voltage,Result,HBIN,Current\nT1,1.2,PASS,1,0.1\n");
+            c=CsvFormatDetector.Detect(trailing,seed).Config;data=CsvParser.Parse(trailing,c);
+            Check(c.TestItemColumns.SequenceEqual(new[]{2,5}) && data.Items.Count==2,"interleaved identity/result columns excluded through explicit measurement mapping");
+            using(var cancel=new CancellationTokenSource())
+            {cancel.Cancel();bool canceled=false;try{CsvFormatDetector.Detect(plain,seed,cancel.Token);}catch(OperationCanceledException){canceled=true;}Check(canceled,"recognition supports cancellation");}
+
+            var bounded=CsvFormatDetector.Detect(Write("bounded.csv",Header+string.Concat(Enumerable.Repeat(Row1,300))+"\"unterminated"),seed);
+            Check(bounded.Rows.Count==256,"recognition stops at its sampling limit without reading the rest of the file");
+            c=recognized.Config;
+            string next=Write("next.csv",Header+Definitions+Row2.Replace("S2,1,0","S3,0,0").Replace("W1","W2"));
+            var first=new CsvImportSource(labeled);
+            var same=new CsvImportSource(next,new ImportOptions(true,"",true,false));
+            var merged=DatasetService.LoadSources(new[]{first,same},c);
+            Check(merged.Wafers.Count==1 && merged.Wafers[0]=="W1" && merged.Records.Count==3,"first batch same-wafer mode resolves the actual wafer in the first file");
+            Check(DatasetService.SelectRetestRecords(merged.Records,RetestMode.Last).Count==2,"initial batch preserves retest identity and deduplication");
+            var other=same with{ Options=new ImportOptions(false,"",true,false)};
+            merged=DatasetService.LoadSources(new[]{first,other},c);
+            Check(merged.Wafers.Count==2 && merged.Records.Count==3,"initial batch different-wafer mode retains both wafers");
+            string stdfPath=StdfFixture();
+            foreach(string path in new[]{stdfPath,stdfPath+".gz"})
+            {
+                if(path.EndsWith(".gz")){using var source=File.OpenRead(stdfPath);using var output=File.Create(path);using var zip=new System.IO.Compression.GZipStream(output,System.IO.Compression.CompressionLevel.Fastest);source.CopyTo(zip);}
+                var mixed=DatasetService.LoadSources(new[]{first,new CsvImportSource(path,new ImportOptions(false,"",true,false),StdfImportMode.Advantest93K)},c);
+                Check(mixed.Wafers.Count==2 && mixed.Records.Count==3 && mixed.Items.Count==3,"initial mixed CSV/STDF pipeline "+Path.GetExtension(path));
+            }
+            string limits=Write("limits.csv",(Header+Definitions+Row1.Replace("S1","S4")).Replace("USL,,,,,,,2,1","USL,,,,,,,4,2"));
+            Check(DatasetService.LoadSources(new[]{first,new CsvImportSource(limits,new ImportOptions(false,"",true,true))},c).Items[0].HighLimit==4,"initial batch honors later-file limits");
+            Check(DatasetService.LoadSources(new[]{first,new CsvImportSource(limits,new ImportOptions(false,"",true,false))},c).Items[0].HighLimit==2,"initial batch honors first-file limits");
+            string missing=Write("missing-item.csv",Header.Replace("Current","Leakage")+Definitions+Row1.Replace("S1","S5"));
+            Check(DatasetService.LoadSources(new[]{first,new CsvImportSource(missing,new ImportOptions(false,"",false,false))},c).Items.Count==3,"name matching retains unmatched test items");
+            bool missingFailed=false;try{DatasetService.LoadSources(new[]{first,new CsvImportSource(P("absent.csv"),new ImportOptions(false,"",true,false))},c);}catch(InvalidDataException ex){missingFailed=ex.Message.Contains("absent.csv");}
+            Check(missingFailed,"batch failure identifies the offending file");
+
+            var dialog=new ImportDataWindow(new[]{labeled,next},Array.Empty<string>(),true);
+            ((RadioButton)dialog.FindName("SameWafer")).IsChecked=true;
+            Check(((ComboBox)dialog.FindName("CmbTargetWafer")).Visibility==Visibility.Collapsed,"initial import dialog does not require a pre-existing wafer");dialog.Close();
+            int applied=0;
+            var settings=new SettingsWindow(seed, config=>{applied++;return Task.CompletedTask;},csvPath:labeled);
+            settings.Show();Pump();
+            Check(((TextBox)settings.FindName("TxtDetectedCsvIni")).Text.Length==0,"opening settings does not automatically run recognition");
+            ((TabControl)settings.FindName("SettingsTabs")).SelectedItem=settings.FindName("CsvFormatTab");
+            ((Button)settings.FindName("BtnRecognizeCsv")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Until(()=>Field(settings,"_csvDetectionCancellation")==null);
+            Check(((TextBox)settings.FindName("TxtDetectedCsvIni")).Text.Contains("DataStartRow=6") && applied==0,"explicit recognition fills a candidate without applying it");
+            Save(settings,"csv-format-settings.png");
+            ((Button)settings.FindName("BtnUseCsvFormat")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(ConfigLoader.Parse(((TextBox)settings.FindName("TxtConfig")).Text).DataStartRow==6 && applied==0,"adopting candidate stages settings for explicit apply");
+            settings.Close();
+            settings=new SettingsWindow(seed,_=>Task.CompletedTask);settings.Show();
+            ((TabControl)settings.FindName("SettingsTabs")).SelectedItem=settings.FindName("CsvFormatTab");
+            var pending=(Task)Call(settings,"RunCsvFormatTaskAsync",(Func<CancellationToken,Task>)(token=>Task.Delay(10000,token)))!;
+            settings.Close();Wait(pending);Until(()=>!settings.IsVisible);
+            Check(!settings.IsVisible,"closing while recognition runs cancels and safely closes the window");
+
+            string local=P("user");Directory.CreateDirectory(local);
+            typeof(AppSettings).GetField("_userDirectory",BindingFlags.Static|BindingFlags.NonPublic)!.SetValue(null,local);
+            typeof(AppSettings).GetField("_legacyDirectory",BindingFlags.Static|BindingFlags.NonPublic)!.SetValue(null,local);
+            ConfigLoader.Save(Path.Combine(local,"last_config.ini"),c);
+            var main=new MainWindow(new LayoutSettings(P("layout.json")),new RecentFilesService(P("recent.json")),new UiPreferencesService(P("ui.json")));
+            main.Show();Set(main,"_config",c);
+            Wait((Task)Call(main,"OpenBatchAsync",(object)new[]{first,other})!);
+            var active=(CsvParseResult)Field(main,"_data")!;
+            Check(active.Wafers.Count==2 && active.Records.Count==3,"empty standalone analyzer loads the initial batch in one transaction");
+            Save(main,"initial-batch.png");
+            bool failed=false;try{Wait((Task)Call(main,"OpenBatchAsync",(object)new[]{first,new CsvImportSource(P("absent.csv"),new ImportOptions(false,"",true,false))})!);}catch(InvalidDataException){failed=true;}
+            Check(failed && ReferenceEquals(active,Field(main,"_data")),"failed replacement batch preserves the active dataset");main.Close();
+            Console.WriteLine($"ALL {checks} CHECKS PASSED");app.Shutdown();return 0;
+        }
+        catch(Exception ex){Console.Error.WriteLine(ex);return 1;}
+    }
+}

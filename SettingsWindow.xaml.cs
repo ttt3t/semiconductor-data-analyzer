@@ -31,7 +31,7 @@ public partial class SettingsWindow : Window
 
     public SettingsWindow(AnalyzerConfig config, Func<AnalyzerConfig, Task> apply,
         Func<string, Task>? openCsv = null, RecentFilesService? recentFiles = null,
-        UiPreferencesService? uiPreferences = null, CsvParseResult? data = null, Action? cancelApply = null)
+        UiPreferencesService? uiPreferences = null, CsvParseResult? data = null, Action? cancelApply = null, string csvPath = "")
     {
         InitializeComponent();
         _apply = apply;
@@ -40,13 +40,18 @@ public partial class SettingsWindow : Window
         _recentFiles = recentFiles ?? RecentFilesService.Current;
         _uiPreferences = uiPreferences ?? UiPreferencesService.Current;
         _data = data;
+        if (csvPath.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)) TxtCsvSamplePath.Text = csvPath;
         _fileName = "config.ini";
         ShowConfig(config);
         ShowPreferences(_uiPreferences.Value);
         _lastTab = SettingsTabs.SelectedItem as TabItem;
         _syncing = false;
         Closing += (_, e) =>
-        { if (_applying) { e.Cancel = true; _closeAfterApply = true; _cancelApply?.Invoke(); TxtStatus.Text = "正在停止处理…"; } };
+        {
+            if (_csvDetectionCancellation != null)
+            { e.Cancel = true; _closeAfterDetection = true; _csvDetectionCancellation.Cancel(); }
+            if (_applying) { e.Cancel = true; _closeAfterApply = true; _cancelApply?.Invoke(); TxtStatus.Text = "正在停止处理…"; }
+        };
         RefreshRecentFiles();
         BtnRecentCsv.IsEnabled = _openCsv != null;
         Closed += (_, _) => { RecentConfigs.ItemsSource = RecentCsvs.ItemsSource = null; };
@@ -349,7 +354,8 @@ public partial class SettingsWindow : Window
     }
     private void SettingsClose_Click(object sender, RoutedEventArgs e)
     {
-        if (_applying) { _cancelApply?.Invoke(); TxtStatus.Text = "正在停止处理…"; }
+        if (_csvDetectionCancellation != null) { _csvDetectionCancellation.Cancel(); TxtStatus.Text = "正在取消格式识别…"; }
+        else if (_applying) { _cancelApply?.Invoke(); TxtStatus.Text = "正在停止处理…"; }
         else Close();
     }
 }

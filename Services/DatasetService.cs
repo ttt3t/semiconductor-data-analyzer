@@ -293,6 +293,12 @@ public static class DatasetService
             options = options with { MatchByNumber = uniqueNumbers };
         }
         if (incoming.Records.Count == 0) throw new InvalidDataException("新文件没有可导入的测试记录。");
+        if (options.SameWafer && options.TargetWafer.Length == 0)
+        {
+            if (existing.Wafers.Count != 1)
+                throw new InvalidDataException("合并到首个文件时，首个文件必须仅包含一片晶圆；请改选不同 wafer。");
+            options = options with { TargetWafer = existing.Wafers[0] };
+        }
         if (options.SameWafer && (!existing.Wafers.Contains(options.TargetWafer) || incoming.Wafers.Count != 1))
             throw new InvalidDataException("同 wafer 导入需要选择已有 wafer，且新文件只能包含一个 wafer。");
         string Key(TestItemData item)

@@ -240,7 +240,7 @@ public partial class MainWindow : Window
     private void BtnSettings_Click(object sender, RoutedEventArgs e)
     {
         if (_isBusy) return;
-        new SettingsWindow(_config, ApplySettings, OpenCsvAsync, _recentFiles, _uiPreferences, _data, CancelOperation) { Owner = this }.ShowDialog();
+        new SettingsWindow(_config, ApplySettings, OpenCsvAsync, _recentFiles, _uiPreferences, _data, CancelOperation, _currentCsvPath) { Owner = this }.ShowDialog();
     }
 
     private async Task ApplySettings(AnalyzerConfig config)
@@ -317,14 +317,15 @@ public partial class MainWindow : Window
         var dlg = new OpenFileDialog
         {
             Filter = DataFileService.OpenFilter,
-            Title = "打开 CSV / STDF"
+            Title = "打开 CSV / STDF（支持批量选择）",
+            Multiselect = true
         };
 
         if (dlg.ShowDialog() != true) return;
 
         try
         {
-            await OpenCsvAsync(dlg.FileName);
+            await OpenSelectedFilesAsync(dlg.FileNames);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -426,7 +427,7 @@ public partial class MainWindow : Window
     {
         if (_isBusy) return;
         if (_data.Records.Count == 0)
-        { MessageBox.Show("请先打开基础数据。", "导入新数据", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        { BtnOpenCsv_Click(sender, e); return; }
         var file = new OpenFileDialog { Filter = DataFileService.OpenFilter, Title = "选择要追加的数据（支持多选 / 批量导入）", Multiselect = true };
         if (file.ShowDialog(this) != true) return;
         var choices = new ImportDataWindow(file.FileNames, _data.Wafers) { Owner = this };

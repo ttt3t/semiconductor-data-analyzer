@@ -9,18 +9,29 @@ public partial class ImportDataWindow : Window
     public ImportOptions? Options { get; private set; }
     private sealed record ImportFile(string Path) { public string Name => System.IO.Path.GetFileName(Path); }
     private readonly ObservableCollection<ImportFile> _files;
+    private readonly bool _initialImport;
     public string[] SelectedFiles => _files.Select(f => f.Path).ToArray();
     public ImportDataWindow(string fileName, IReadOnlyList<string> wafers) : this(new[] { fileName }, wafers) { }
 
-    public ImportDataWindow(IReadOnlyList<string> files, IReadOnlyList<string> wafers)
+    public ImportDataWindow(IReadOnlyList<string> files, IReadOnlyList<string> wafers, bool initialImport = false)
     {
         InitializeComponent();
+        _initialImport = initialImport;
         _files = new ObservableCollection<ImportFile>(files.Select(path => new ImportFile(path)));
         TxtFile.Text = $"已选择 {files.Count} 个文件";
         FileList.ItemsSource = _files;
         FileList.SelectedIndex = files.Count > 0 ? 0 : -1;
         CmbTargetWafer.ItemsSource = wafers;
         CmbTargetWafer.SelectedIndex = wafers.Count > 0 ? 0 : -1;
+        if (initialImport)
+        {
+            Title = "打开 / 批量导入";
+            TxtFile.Text += "（首个文件作为基础，可调整顺序）";
+            SameWafer.Content = "合并到首个文件的 wafer";
+            CmbTargetWafer.Visibility = Visibility.Collapsed;
+            OldLimits.Content = "使用首个文件阈值";
+            NewLimits.Content = "后续文件阈值覆盖";
+        }
     }
 
     private void MoveUp_Click(object sender, RoutedEventArgs e) => MoveFile(-1);
@@ -38,7 +49,7 @@ public partial class ImportDataWindow : Window
     {
         if (_files.Count == 0) { TxtError.Text = "请至少选择一个文件。"; return; }
         string target = CmbTargetWafer.SelectedItem as string ?? "";
-        if (SameWafer.IsChecked == true && target.Length == 0)
+        if (!_initialImport && SameWafer.IsChecked == true && target.Length == 0)
         { TxtError.Text = "请选择要合并到的 wafer。"; return; }
         Options = new ImportOptions(SameWafer.IsChecked == true, target, MatchNumber.IsChecked == true, NewLimits.IsChecked == true);
         DialogResult = true;
