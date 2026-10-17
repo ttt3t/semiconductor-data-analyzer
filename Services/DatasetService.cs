@@ -1,17 +1,21 @@
+using System.Buffers;
 using System.Globalization;
 using System.IO;
 using SemiconductorCsvAnalyzer.Models;
 
 namespace SemiconductorCsvAnalyzer.Services;
 
-public sealed record ImportOptions(bool SameWafer, string TargetWafer, bool MatchByNumber, bool UseNewLimits);
+public sealed record ImportOptions(bool SameWafer, string TargetWafer, bool MatchByNumber, bool UseNewLimits,
+    bool PreserveWaferNames = false, bool AutoMatch = false);
 public sealed record CsvImportSource(string Path, ImportOptions? Options = null,
-    StdfImportMode StdfMode = StdfImportMode.Standard);
+    StdfImportMode StdfMode = StdfImportMode.Standard, string ConfigText = "", string? WaferOverride = null,
+    string? LotOverride = null, bool ShowLotInWafer = false);
 
 public static class DatasetService
 {
     public static CsvParseResult SelectRetests(CsvParseResult data, RetestMode mode)
     {
+        AnalysisOperation.CheckCancellation();
         if (mode == RetestMode.All) return data;
         var records = SelectRetestRecords(data.Records, mode);
         if (ReferenceEquals(records, data.Records)) return data;
@@ -25,7 +29,7 @@ public static class DatasetService
     internal static (string Wafer, int? X, int? Y, string Fallback) ChipKey(CsvRecord record)
     {
         if (record.IsFtIdentity)
-            return ("", null, null, !string.IsNullOrEmpty(record.RetestUuid) ? "UUID:" + record.RetestUuid : "ROW:" + record.Id);
+            return ("", null, null, !string.IsNullOrEmpty(record.RetestUuid) ? $"LOT:{record.Lot.Length}:{record.Lot}|UUID:" + record.RetestUuid : "ROW:" + record.Id);
         bool coordinates = record.X.HasValue && record.Y.HasValue;
         string fallback = coordinates ? "" : !string.IsNullOrWhiteSpace(record.ChipSerialNumber)
             ? "SN:" + record.ChipSerialNumber.Trim() : "ROW:" + record.Id;
@@ -41,6 +45,7 @@ public static class DatasetService
         var groups = new Dictionary<(string Wafer, int? X, int? Y, string Fallback), List<CsvRecord>>();
         foreach (var record in source)
         {
+            AnalysisOperation.CheckCancellation();
             var key = ChipKey(record);
             if (!groups.TryGetValue(key, out var group)) groups[key] = group = new();
             group.Add(record);
@@ -53,6 +58,7 @@ public static class DatasetService
         var unique = new HashSet<CsvRecord>();
         foreach (var group in groups.Values)
         {
+            AnalysisOperation.CheckCancellation();
             if (group.Count == 1)
             {
                 if (mode != RetestMode.OnlyRetests) unique.Add(group[0]);
@@ -62,28 +68,36 @@ public static class DatasetService
             {
                 // The first occurrence is determined per test, including invalid values.
                 // A test first measured during a partial retest is still its first test.
-                var seen = new HashSet<string>();
+                var seen = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var record in group)
+                {
+                    AnalysisOperation.CheckCancellation();
                     foreach (string test in record.Measurements.Keys)
+                    {
                         if (!seen.Add(test))
                         {
                             if (!retained.TryGetValue(record, out var measurements))
-                                retained[record] = measurements = new HashSet<string>();
+                                retained[record] = measurements = new HashSet<string>(StringComparer.Ordinal);
                             measurements.Add(test);
                         }
+                    }
+                }
                 continue;
             }
-            var chosen = new Dictionary<string, CsvRecord>();
+            var chosen = new Dictionary<string, CsvRecord>(StringComparer.Ordinal);
             foreach (var record in group)
+            {
+                AnalysisOperation.CheckCancellation();
                 foreach (string test in record.Measurements.Keys)
                 {
                     if (mode == RetestMode.Last) chosen[test] = record;
                     else chosen.TryAdd(test, record);
                 }
+            }
             foreach (var entry in chosen)
             {
                 if (!retained.TryGetValue(entry.Value, out var measurements))
-                    retained[entry.Value] = measurements = new HashSet<string>();
+                    retained[entry.Value] = measurements = new HashSet<string>(StringComparer.Ordinal);
                 measurements.Add(entry.Key);
             }
         }
@@ -98,6 +112,7 @@ public static class DatasetService
                     IsFtIdentity = record.IsFtIdentity, RetestUuid = record.RetestUuid, UuidTestNumbers = record.UuidTestNumbers,
                     X = record.X, Y = record.Y, Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
                     Product = record.Product, Program = record.Program, Lot = record.Lot,
+                    StdfTestTime = record.StdfTestTime,
                     Measurements = record.Measurements.SelectKeys(measurements)
                 });
         return records;
@@ -111,54 +126,129 @@ public static class DatasetService
 
     public static CsvParseResult Build(List<TestItemData> items, List<CsvRecord> records)
     {
-        var byId = items.ToDictionary(i => i.Id);
+        AnalysisOperation.CheckCancellation();
+        var byId = new Dictionary<string, TestItemData>(items.Count, StringComparer.Ordinal);
+        foreach (var item in items) byId.Add(item.Id, item);
         // Manual/imported records can start as dictionaries; loaded datasets never
         // retain those raw strings. All test columns share this one row table.
         RawMeasurementStore? rawStore = null;
         try
         {
-            var schema = new MeasurementSchema(items.Select(i => i.Id));
+            MeasurementSchema? fallbackSchema = null;
+            string?[]? tempValues = null;
             foreach (var record in records)
                 if (!record.Measurements.IsOnDisk)
                 {
                     if (record.Measurements.Keys.Any(key => !byId.ContainsKey(key)))
                         throw new InvalidDataException("测量记录引用了不存在的测试项。");
                     rawStore ??= new RawMeasurementStore();
-                    record.Measurements = rawStore.Append(schema,
-                        schema.Keys.Select(key => record.Measurements.TryGetValue(key, out var text) ? text : null).ToArray());
+                    fallbackSchema ??= new MeasurementSchema(items.Select(i => i.Id));
+                    tempValues ??= new string?[fallbackSchema.Keys.Length];
+                    for (int i = 0; i < fallbackSchema.Keys.Length; i++)
+                        tempValues[i] = record.Measurements.TryGetValue(fallbackSchema.Keys[i], out var text) ? text : null;
+                    record.Measurements = rawStore.Append(fallbackSchema, tempValues);
                 }
             rawStore?.Seal();
         }
         catch { rawStore?.Dispose(); throw; }
+
         foreach (var item in items) { item.Values.Initialize(records, item.Id); item.Errors.Clear(); }
-        var devices = new Dictionary<(string Wafer, int? X, int? Y, string Record), DeviceInfo>();
-        for (int row = 0; row < records.Count; row++)
+        var devices = new Dictionary<(string Wafer, int? X, int? Y, string Record), DeviceInfo>(records.Count);
+        TestItemData[]? defaultItemsArray = null;
+        MeasurementSchema? lastSchema = null;
+        TestItemData[]? lastSchemaItems = null;
+        Dictionary<MeasurementSchema, TestItemData[]>? schemaCache = null;
+        byte[]? rowBuffer = null;
+
+        try
         {
-            var record = records[row];
-            bool rawBlank = true;
-            foreach (string measurementKey in record.Measurements.Keys)
+            for (int row = 0; row < records.Count; row++)
             {
-                if (!byId.TryGetValue(measurementKey, out var item))
-                    throw new InvalidDataException("测量记录引用了不存在的测试项。");
-                record.Measurements.TryGetText(measurementKey, out var raw);
-                rawBlank &= raw.IsWhiteSpace();
-                if (TryValue(raw, out double value))
-                    item.Values.SetRow(row, value);
-                else if (!raw.SequenceEqual(StdfParser.NotApplicableValue)) item.Errors.Add(record);
+                AnalysisOperation.CheckCancellation();
+                var record = records[row];
+                bool rawBlank = true;
+                var measurements = record.Measurements;
+                if (measurements.Count > 0)
+                {
+                    var recordSchema = measurements.Schema!;
+                    if (!ReferenceEquals(recordSchema, lastSchema))
+                    {
+                        lastSchema = recordSchema;
+                        if (schemaCache != null && schemaCache.TryGetValue(recordSchema, out var mapped))
+                        {
+                            lastSchemaItems = mapped;
+                        }
+                        else
+                        {
+                            bool matchesIdentityOrder = recordSchema.Keys.Length == items.Count;
+                            if (matchesIdentityOrder)
+                            {
+                                for (int i = 0; i < items.Count; i++)
+                                    if (recordSchema.Keys[i] != items[i].Id) { matchesIdentityOrder = false; break; }
+                            }
+                            if (matchesIdentityOrder)
+                            {
+                                lastSchemaItems = defaultItemsArray ??= items.ToArray();
+                            }
+                            else
+                            {
+                                var resolved = new TestItemData[recordSchema.Keys.Length];
+                                for (int i = 0; i < recordSchema.Keys.Length; i++)
+                                {
+                                    if (!byId.TryGetValue(recordSchema.Keys[i], out var targetItem))
+                                        throw new InvalidDataException("测量记录引用了不存在的测试项。");
+                                    resolved[i] = targetItem;
+                                }
+                                lastSchemaItems = resolved;
+                            }
+                            (schemaCache ??= new())[recordSchema] = lastSchemaItems;
+                        }
+                    }
+
+                    var rawRow = measurements.ReadRow(ref rowBuffer);
+                    var schemaItems = lastSchemaItems!;
+                    for (int col = 0; col < schemaItems.Length; col++)
+                    {
+                        if (!measurements.PresentAt(col)) continue;
+                        var item = schemaItems[col];
+                        if (rawRow.IsNumeric(col))
+                        {
+                            rawBlank = false;
+                            item.Values.SetRow(row, rawRow.ReadNumeric(col));
+                        }
+                        else
+                        {
+                            var raw = rawRow.RawTextSpan(col);
+                            rawBlank &= raw.IsWhiteSpace();
+                            if (TryValue(raw, out double value))
+                                item.Values.SetRow(row, value);
+                            else if (!raw.SequenceEqual(StdfParser.NotApplicableValue))
+                                item.Errors.Add(record);
+                        }
+                    }
+                }
+
+                // A completely blank CSV row is an error, not a physical device.
+                bool blank = rawBlank && !record.X.HasValue && !record.Y.HasValue &&
+                    string.IsNullOrWhiteSpace(record.ChipSerialNumber) &&
+                    string.IsNullOrWhiteSpace(record.Site) &&
+                    string.IsNullOrWhiteSpace(record.SBin) &&
+                    string.IsNullOrWhiteSpace(record.HBin);
+                if (blank) continue;
+                var key = record.IsFtIdentity ? ChipKey(record) :
+                    (record.WaferId, record.X, record.Y, record.X.HasValue && record.Y.HasValue ? "" : record.Id);
+                devices[key] = new DeviceInfo
+                {
+                    WaferId = record.WaferId, SerialNumber = record.SerialNumber, X = record.X, Y = record.Y,
+                    Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin
+                };
             }
-            // A completely blank CSV row is an error, not a physical device.
-            bool blank = !record.X.HasValue && !record.Y.HasValue &&
-                new[] { record.ChipSerialNumber, record.Site, record.SBin, record.HBin }.All(string.IsNullOrWhiteSpace) &&
-                rawBlank;
-            if (blank) continue;
-            var key = record.IsFtIdentity ? ChipKey(record) :
-                (record.WaferId, record.X, record.Y, record.X.HasValue && record.Y.HasValue ? "" : record.Id);
-            devices[key] = new DeviceInfo
-            {
-                WaferId = record.WaferId, SerialNumber = record.SerialNumber, X = record.X, Y = record.Y,
-                Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin
-            };
         }
+        finally
+        {
+            if (rowBuffer != null) ArrayPool<byte>.Shared.Return(rowBuffer);
+        }
+
         foreach (var item in items) item.Values.Complete();
         return new CsvParseResult { Items = items, Records = records, Devices = devices.Values.ToList() };
     }
@@ -166,7 +256,7 @@ public static class DatasetService
     public static CsvParseResult LoadSources(IReadOnlyList<CsvImportSource> sources, AnalyzerConfig config)
     {
         if (sources.Count == 0) throw new InvalidDataException("没有可重新读取的数据文件。");
-        var result = DataFileService.Parse(sources[0].Path, config, stdfMode: sources[0].StdfMode);
+        var result = ParseSource(sources[0], config);
         return sources.Count == 1 ? result : AppendSources(result, sources.Skip(1).ToArray(), config);
     }
 
@@ -178,9 +268,10 @@ public static class DatasetService
         var result = existing;
         foreach (var source in sources)
         {
+            AnalysisOperation.CheckCancellation();
             try
             {
-                var incoming = DataFileService.Parse(source.Path, config, stdfMode: source.StdfMode);
+                var incoming = ParseSource(source, config);
                 result = MergeDefinitions(result, incoming, source.Options ??
                     throw new InvalidDataException("追加文件缺少导入选项。"));
             }
@@ -195,6 +286,12 @@ public static class DatasetService
 
     private static CsvParseResult MergeDefinitions(CsvParseResult existing, CsvParseResult incoming, ImportOptions options)
     {
+        if (options.AutoMatch)
+        {
+            bool uniqueNumbers = new[] { existing.Items, incoming.Items }.All(items => items.All(i => i.TestNumber.Trim().Length > 0) &&
+                items.Select(i => long.TryParse(i.TestNumber.Trim(), out long n) ? n.ToString(CultureInfo.InvariantCulture) : i.TestNumber.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() == items.Count);
+            options = options with { MatchByNumber = uniqueNumbers };
+        }
         if (incoming.Records.Count == 0) throw new InvalidDataException("新文件没有可导入的测试记录。");
         if (options.SameWafer && (!existing.Wafers.Contains(options.TargetWafer) || incoming.Wafers.Count != 1))
             throw new InvalidDataException("同 wafer 导入需要选择已有 wafer，且新文件只能包含一个 wafer。");
@@ -212,7 +309,7 @@ public static class DatasetService
         CheckUnique(existing.Items); CheckUnique(incoming.Items);
         var items = existing.Items.Select(CloneItem).ToList();
         var byKey = items.ToDictionary(Key, StringComparer.OrdinalIgnoreCase);
-        var itemMap = new Dictionary<string, string>();
+        var itemMap = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var source in incoming.Items)
         {
             if (byKey.TryGetValue(Key(source), out var target))
@@ -231,12 +328,12 @@ public static class DatasetService
             }
             itemMap.Add(source.Id, target.Id);
         }
-        var waferMap = new Dictionary<string, string>();
+        var waferMap = new Dictionary<string, string>(StringComparer.Ordinal);
         var taken = existing.Wafers.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (string wafer in incoming.Wafers)
         {
             string name = options.SameWafer ? options.TargetWafer : wafer;
-            if (!options.SameWafer)
+            if (!options.SameWafer && !options.PreserveWaferNames)
             {
                 int suffix = 2;
                 while (!taken.Add(name)) name = $"{wafer} ({suffix++})";
@@ -261,6 +358,7 @@ public static class DatasetService
                 IsFtIdentity = record.IsFtIdentity, RetestUuid = record.RetestUuid, UuidTestNumbers = record.UuidTestNumbers,
                 Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
                 Product = record.Product, Program = record.Program, Lot = record.Lot,
+                StdfTestTime = record.StdfTestTime,
                 Measurements = Remap(record.Measurements)
             });
         return new CsvParseResult
@@ -284,6 +382,32 @@ public static class DatasetService
         return merged;
     }
 
+    private static CsvParseResult ParseSource(CsvImportSource source, AnalyzerConfig config)
+    {
+        var layout = source.ConfigText.Length > 0 ? ConfigLoader.Parse(source.ConfigText) : config;
+        if (source.ConfigText.Length > 0)
+        {
+            layout.TestMode = config.TestMode; layout.UuidTestNumbers = config.UuidTestNumbers;
+            layout.PassHBins = config.PassHBins; layout.PartialPassHBins = config.PartialPassHBins;
+            layout.MissingTokens = config.MissingTokens; layout.NotApplicableTokens = config.NotApplicableTokens;
+        }
+        var data = DataFileService.Parse(source.Path, layout, cancellationToken: AnalysisOperation.Token, stdfMode: source.StdfMode);
+        if (source.WaferOverride is { Length: > 0 } && data.Devices.Select(d => d.WaferId).Distinct().Skip(1).Any())
+            throw new InvalidDataException("含多晶圆的文件不能整体覆盖为一个片号，请在登记中清空晶圆覆盖值。");
+        if (source.WaferOverride != null || source.LotOverride != null || source.ShowLotInWafer)
+        {
+            foreach (var record in data.Records)
+            {
+                if (source.LotOverride != null) record.Lot = source.LotOverride;
+                if (source.WaferOverride is { Length: > 0 }) record.WaferId = source.WaferOverride;
+                if (source.ShowLotInWafer) record.WaferId = record.Lot + " / " + record.WaferId;
+            }
+            data.Records = data.Records.ToList(); // Invalidate any previously materialized wafer-name cache.
+            data.Devices = BuildDevices(data.Records);
+        }
+        return data;
+    }
+
     internal static CsvRecord CloneRecord(CsvRecord record) => new()
     {
         Id = record.Id, WaferId = record.WaferId, SerialNumber = record.SerialNumber,
@@ -291,32 +415,64 @@ public static class DatasetService
         IsFtIdentity = record.IsFtIdentity, RetestUuid = record.RetestUuid, UuidTestNumbers = record.UuidTestNumbers,
         X = record.X, Y = record.Y, Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
         Product = record.Product, Program = record.Program, Lot = record.Lot,
+        StdfTestTime = record.StdfTestTime,
         Measurements = record.Measurements
     };
 
     internal static List<DeviceInfo> BuildDevices(IReadOnlyList<CsvRecord> records)
     {
-        var devices = new Dictionary<(string Wafer, int? X, int? Y, string Record), DeviceInfo>();
-        foreach (var record in records)
+        var devices = new Dictionary<(string Wafer, int? X, int? Y, string Record), DeviceInfo>(records.Count);
+        byte[]? rowBuffer = null;
+        try
         {
-            if (!record.X.HasValue && !record.Y.HasValue &&
-                new[] { record.ChipSerialNumber, record.Site, record.SBin, record.HBin }.All(string.IsNullOrWhiteSpace))
+            foreach (var record in records)
             {
-                bool rawBlank = true;
-                foreach (string key in record.Measurements.Keys)
+                if (!record.X.HasValue && !record.Y.HasValue &&
+                    string.IsNullOrWhiteSpace(record.ChipSerialNumber) &&
+                    string.IsNullOrWhiteSpace(record.Site) &&
+                    string.IsNullOrWhiteSpace(record.SBin) &&
+                    string.IsNullOrWhiteSpace(record.HBin))
                 {
-                    record.Measurements.TryGetText(key, out var raw);
-                    if (!raw.IsWhiteSpace()) { rawBlank = false; break; }
+                    bool rawBlank = true;
+                    var measurements = record.Measurements;
+                    if (measurements.IsOnDisk && measurements.Schema is { } schema)
+                    {
+                        if (measurements.Count > 0)
+                        {
+                            var rawRow = measurements.ReadRow(ref rowBuffer);
+                            for (int col = 0; col < schema.Keys.Length; col++)
+                            {
+                                if (!measurements.PresentAt(col)) continue;
+                                if (rawRow.IsNumeric(col) || !rawRow.RawTextSpan(col).IsWhiteSpace())
+                                {
+                                    rawBlank = false;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        foreach (string key in measurements.Keys)
+                        {
+                            measurements.TryGetText(key, out var raw);
+                            if (!raw.IsWhiteSpace()) { rawBlank = false; break; }
+                        }
+                    }
+                    if (rawBlank) continue;
                 }
-                if (rawBlank) continue;
+                var keyForDevice = record.IsFtIdentity ? ChipKey(record) :
+                    (record.WaferId, record.X, record.Y, record.X.HasValue && record.Y.HasValue ? "" : record.Id);
+                devices[keyForDevice] = new DeviceInfo
+                {
+                    WaferId = record.WaferId, SerialNumber = record.SerialNumber, X = record.X, Y = record.Y,
+                    Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin
+                };
             }
-            var keyForDevice = record.IsFtIdentity ? ChipKey(record) :
-                (record.WaferId, record.X, record.Y, record.X.HasValue && record.Y.HasValue ? "" : record.Id);
-            devices[keyForDevice] = new DeviceInfo
-            {
-                WaferId = record.WaferId, SerialNumber = record.SerialNumber, X = record.X, Y = record.Y,
-                Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin
-            };
+        }
+        finally
+        {
+            if (rowBuffer != null) ArrayPool<byte>.Shared.Return(rowBuffer);
         }
         return devices.Values.ToList();
     }

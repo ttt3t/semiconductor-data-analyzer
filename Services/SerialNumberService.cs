@@ -12,6 +12,7 @@ public static class SerialNumberService
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var record in data.Records)
         {
+            AnalysisOperation.CheckCancellation();
             string serial = record.SerialNumber.Trim();
             if (serial.Length == 0) empty++;
             else if (!seen.Add(serial)) duplicates++;
@@ -20,6 +21,7 @@ public static class SerialNumberService
 
         for (int i = 0; i < data.Records.Count; i++)
         {
+            if ((i & 1023) == 0) AnalysisOperation.CheckCancellation();
             var record = data.Records[i];
             record.OriginalSerialNumber ??= record.SerialNumber;
             record.SerialNumber = (i + 1).ToString(CultureInfo.InvariantCulture);

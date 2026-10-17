@@ -16,6 +16,7 @@ public static class StdfParser
     public static CsvParseResult Parse(string path, AnalyzerConfig config, Action<string>? progress = null,
         CancellationToken cancellationToken = default, StdfImportMode mode = StdfImportMode.Standard)
     {
+        if (!cancellationToken.CanBeCanceled) cancellationToken = AnalysisOperation.Token;
         if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan);
         string name = Path.GetFileName(path);
@@ -34,7 +35,21 @@ public static class StdfParser
             pass.Read(file);
             store.Seal();
             if (pass.Records.Count == 0) throw new InvalidDataException("STDF 不包含完成的芯片记录（PRR）。");
-            var result = DatasetService.Build(catalog.Items, pass.Records.OrderBy(r => r.Order).Select(r => r.Record).ToList());
+            var orderedRecords = new List<CsvRecord>(pass.Records.Count);
+            bool inOrder = true;
+            for (int i = 1; i < pass.Records.Count; i++)
+                if (pass.Records[i].Order < pass.Records[i - 1].Order) { inOrder = false; break; }
+            if (inOrder)
+            {
+                for (int i = 0; i < pass.Records.Count; i++) orderedRecords.Add(pass.Records[i].Record);
+            }
+            else
+            {
+                pass.Records.Sort((a, b) => a.Order.CompareTo(b.Order));
+                for (int i = 0; i < pass.Records.Count; i++) orderedRecords.Add(pass.Records[i].Record);
+            }
+            var result = DatasetService.Build(catalog.Items, orderedRecords);
+            result.StdfMetadata = catalog.Metadata.Complete();
             result.SourceDescription = "STDF V4" + (mode == StdfImportMode.Advantest93K ? "（93k：TSR 测试名称）" : "") +
                 (catalog.HasFunctional ? "；FTR：0=Pass、1=Fail" : "") +
                 (catalog.Families.Values.Any(f => f.Variants.Count > 1) ? "；不同阈值/单位已拆分测项" : "");
@@ -50,8 +65,9 @@ public static class StdfParser
     }
     private readonly record struct FamilyKey(TestKey Test, string Channel, int Occurrence);
     private readonly record struct Limits(double? Lower, double? Upper, string Unit);
-    private sealed class Defaults
+    private struct Defaults
     {
+        public Defaults() { }
         public double? Lower, Upper;
         public double? StartInput, IncrementInput;
         public string Unit = "", Description = "", InputUnit = "";
@@ -66,6 +82,7 @@ public static class StdfParser
     private sealed class WaferScope
     {
         public required string Name;
+        public DateTime? StartTime, FinishTime;
     }
     private sealed class Catalog
     {
@@ -82,6 +99,7 @@ public static class StdfParser
         public readonly List<WaferScope> Wafers = new();
         public readonly HashSet<byte> Heads = new();
         public bool HasFunctional;
+        public readonly StdfMetadataBuilder Metadata = new();
 
         public TestKey Test(byte kind, uint number, byte head, byte site) =>
             Mode == StdfImportMode.Advantest93K ? new(kind, number, head, site) : new(kind, number);
@@ -141,7 +159,7 @@ public static class StdfParser
             }
         }
 
-        public TestItemData Item(FamilyKey key, Limits limits, string description, bool discovering)
+        public TestItemData Item(FamilyKey key, Limits limits, string description, bool discovering, out bool hasMultipleVariants)
         {
             if (!Families.TryGetValue(key, out var family))
             {
@@ -156,6 +174,7 @@ public static class StdfParser
                     Unit = limits.Unit, LowLimit = limits.Lower, HighLimit = limits.Upper };
                 family.Variants.Add(limits, item); Items.Add(item);
             }
+            hasMultipleVariants = family.Variants.Count > 1;
             return item;
         }
 
@@ -169,13 +188,13 @@ public static class StdfParser
                         ResolveTsrName(k.Test) == ResolveTsrName(empty.Test))
                         .Select(k => k with { Test = empty.Test }).Distinct().ToArray();
                 if (keys.Length == 0) keys = new[] { new FamilyKey(empty.Test, " 无结果", empty.Occurrence) };
-                foreach (var key in keys) Item(key, empty.Limits, description, true);
+                foreach (var key in keys) Item(key, empty.Limits, description, true, out _);
             }
             foreach (var (key, declaration) in Declarations)
                 if (!Families.ContainsKey(key) && (Mode != StdfImportMode.Advantest93K ||
                     !Families.Keys.Any(k => k.Test.Unscoped == key.Test.Unscoped && k.Channel == key.Channel && k.Occurrence == key.Occurrence)) &&
                     (key.Channel != " 无结果" || !Families.Keys.Any(k => k.Test == key.Test)))
-                    Item(key, declaration.Limits, declaration.Description, true);
+                    Item(key, declaration.Limits, declaration.Description, true, out _);
             // TSR may explicitly identify tests that were never executed at all.
             if (Mode == StdfImportMode.Advantest93K)
             {
@@ -187,14 +206,14 @@ public static class StdfParser
                         if (name.Length > 0 && !Families.Keys.Any(k => k.Test == scoped) &&
                             !Families.Any(k => k.Key.Test.Unscoped == test && ResolveTsrName(k.Key.Test) == name))
                             Item(new(scoped, test.Kind == 15 ? " 未测结果" : "", 1),
-                                test.Kind == 20 ? new(0, 0, "0=Pass; 1=Fail") : new(null, null, ""), name, true);
+                                test.Kind == 20 ? new(0, 0, "0=Pass; 1=Fail") : new(null, null, ""), name, true, out _);
                     }
                 ConsolidateSiteNames();
             }
             else foreach (var (test, name) in TestNames)
                     if (!Families.Keys.Any(k => k.Test == test))
                         Item(new(test, test.Kind == 15 ? " 未测结果" : "", 1),
-                            test.Kind == 20 ? new(0, 0, "0=Pass; 1=Fail") : new(null, null, ""), name, true);
+                            test.Kind == 20 ? new(0, 0, "0=Pass; 1=Fail") : new(null, null, ""), name, true, out _);
             foreach (var family in Families.Values.Distinct())
             {
                 string kind = family.Key.Test.Kind switch { 10 => "PTR", 15 => "MPR", _ => "FTR" };
@@ -218,12 +237,28 @@ public static class StdfParser
 
     private sealed class Part
     {
-        public required long Order;
-        public required WaferScope Wafer;
-        public required string Product, Program, Lot;
+        public long Order;
+        public WaferScope Wafer = null!;
+        public string Product = "", Program = "", Lot = "";
         public readonly Dictionary<TestKey, int> Occurrences = new();
-        public readonly Dictionary<int, string> Values = new();
+        public readonly byte[] States;
+        public readonly double[] Numbers;
+        public Dictionary<int, string>? InvalidTexts;
         public readonly HashSet<FamilyKey> Families = new();
+
+        public Part(int itemCount)
+        {
+            States = itemCount > 0 ? new byte[itemCount] : Array.Empty<byte>();
+            Numbers = itemCount > 0 ? new double[itemCount] : Array.Empty<double>();
+        }
+
+        public void Reset()
+        {
+            Occurrences.Clear();
+            if (States.Length > 0) Array.Clear(States, 0, States.Length);
+            InvalidTexts?.Clear();
+            Families.Clear();
+        }
     }
 
     private sealed class Pass
@@ -236,6 +271,7 @@ public static class StdfParser
         private readonly MeasurementSchema? _schema;
         private readonly Dictionary<TestKey, Defaults> _defaults = new();
         private readonly Dictionary<(byte Head, byte Site), Part> _parts = new();
+        private readonly Stack<Part> _partPool = new();
         private readonly Dictionary<(byte Head, byte Site), byte> _siteGroups = new();
         private readonly Dictionary<(byte Head, byte Group), WaferScope> _wafers = new();
         private string _product = "", _program = "", _lot = "";
@@ -251,6 +287,23 @@ public static class StdfParser
             if (store != null) _schema = new MeasurementSchema(catalog.Items.Select(i => i.Id));
         }
 
+        private Part RentPart(long order, WaferScope wafer, string product, string program, string lot)
+        {
+            var part = _partPool.Count > 0 ? _partPool.Pop() : new Part(Discovering ? 0 : _catalog.Items.Count);
+            part.Order = order;
+            part.Wafer = wafer;
+            part.Product = product;
+            part.Program = program;
+            part.Lot = lot;
+            return part;
+        }
+
+        private void ReleasePart(Part part)
+        {
+            part.Reset();
+            _partPool.Push(part);
+        }
+
         public void Read(FileStream file)
         {
             using var reader = new StdfReader(file);
@@ -261,6 +314,7 @@ public static class StdfParser
                 try
                 {
                     if (_mrr) throw new InvalidDataException("MRR 之后仍有记录，文件不是单个完整的 STDF 数据流。");
+                    if (Discovering) _catalog.Metadata.Read(reader.Type, reader.Subtype, fields);
                     switch ((reader.Type, reader.Subtype))
                     {
                         case (0, 10): throw new InvalidDataException("文件中出现重复 FAR，不支持直接拼接二进制 STDF 文件。");
@@ -290,7 +344,7 @@ public static class StdfParser
         {
             if (_mir) throw new InvalidDataException("同一数据流包含多个 MIR。");
             f.Skip(15);
-            string lot = f.Cn().Trim(), product = f.Cn().Trim(); f.Cn(); f.Cn();
+            string lot = f.Cn().Trim(), product = f.Cn().Trim(); f.SkipCn(); f.SkipCn();
             string job = f.Cn().Trim(), revision = (f.OptionalCn() ?? "").Trim();
             _lot = lot.Length > 0 ? lot : _config.Lot;
             _product = product.Length > 0 ? product : _config.Product;
@@ -320,19 +374,21 @@ public static class StdfParser
 
         private void Wir(ref StdfFields f)
         {
-            byte head = f.U1(), group = f.U1(); f.U4(); string name = (f.OptionalCn() ?? "").Trim();
+            byte head = f.U1(), group = f.U1(); var start = StdfMetadataBuilder.Time(f.U4()); string name = (f.OptionalCn() ?? "").Trim();
             if (_wafers.ContainsKey((head, group))) throw new InvalidDataException("WIR 尚未结束便出现同一 Head/Site Group 的新 WIR。");
-            NewWafer(head, group, name);
+            var scope = NewWafer(head, group, name);
+            if (Discovering) scope.StartTime = start;
         }
 
         private void Wrr(ref StdfFields f)
         {
-            byte head = f.U1(), group = f.U1(); f.U4(); f.U4();
+            byte head = f.U1(), group = f.U1(); var finish = StdfMetadataBuilder.Time(f.U4()); f.U4();
             for (int i = 0; i < 4; i++) f.OptionalU4();
             string name = (f.OptionalCn() ?? "").Trim();
             if (!_wafers.Remove((head, group), out var scope)) throw new InvalidDataException("WRR 没有对应 WIR。");
             if (_parts.Values.Any(p => ReferenceEquals(p.Wafer, scope))) throw new InvalidDataException("WRR 出现时仍有未完成的芯片。");
             if (Discovering && name.Length > 0) scope.Name = name;
+            if (Discovering) scope.FinishTime = finish;
         }
 
         private WaferScope Wafer(byte head, byte site)
@@ -351,34 +407,42 @@ public static class StdfParser
             byte head = f.U1(), site = f.U1();
             _catalog.Heads.Add(head);
             _catalog.Sites.Add((head, site));
-            if (!_parts.TryAdd((head, site), new Part { Order = _order++, Wafer = Wafer(head, site),
-                    Product = _product, Program = _program, Lot = _lot }))
+            if (_parts.ContainsKey((head, site)))
                 throw new InvalidDataException($"Head {head} / Site {site} 的上一个 PIR 尚未结束。");
+            _parts.Add((head, site), RentPart(_order++, Wafer(head, site), _product, _program, _lot));
         }
 
         private void Prr(ref StdfFields f)
         {
             byte head = f.U1(), site = f.U1(); f.U1(); f.U2(); ushort hbin = f.U2();
             ushort? sbin = f.OptionalU2(); short? x = f.OptionalI2(), y = f.OptionalI2(); f.OptionalU4();
-            string sn = (f.OptionalCn() ?? "").Trim(); f.OptionalCn(); f.OptionalBytes();
+            string sn = (f.OptionalCn() ?? "").Trim(); f.OptionalSkipCn(); f.OptionalBytes();
             if (!_parts.Remove((head, site), out var part)) throw new InvalidDataException($"Head {head} / Site {site} 的 PRR 没有对应 PIR。");
-            if (Discovering) return;
-            var values = new string?[_catalog.Items.Count];
+            if (Discovering)
+            {
+                ReleasePart(part);
+                return;
+            }
             if (_catalog.NotApplicableColumns.TryGetValue((head, site), out var excluded))
-                foreach (int column in excluded) values[column] = NotApplicableValue;
-            foreach (var (column, text) in part.Values) values[column] = text;
+                foreach (int column in excluded)
+                    if (part.States[column] == RawMeasurementStore.StateAbsent)
+                        part.States[column] = RawMeasurementStore.StateNotApplicable;
             // A test executed with one rule does not require all alternate rules too.
             foreach (var key in part.Families)
                 foreach (var item in _catalog.Families[key].Variants.Values)
-                    values[item.ColumnIndex] ??= NotApplicableValue;
+                    if (part.States[item.ColumnIndex] == RawMeasurementStore.StateAbsent)
+                        part.States[item.ColumnIndex] = RawMeasurementStore.StateNotApplicable;
+            var measurements = _store!.AppendStdf(_schema!, part.States, part.Numbers, part.InvalidTexts, NotApplicableValue);
             Records.Add((part.Order, new CsvRecord
             {
                 WaferId = part.Wafer.Name, SerialNumber = sn, Site = _catalog.Heads.Count > 1 ? $"{head}:{site}" : site.ToString(CultureInfo.InvariantCulture),
                 X = x is null or short.MinValue ? null : x, Y = y is null or short.MinValue ? null : y,
                 HBin = hbin.ToString(CultureInfo.InvariantCulture), SBin = sbin is null or ushort.MaxValue ? "" : sbin.Value.ToString(CultureInfo.InvariantCulture),
                 Product = part.Product, Program = part.Program, Lot = part.Lot,
-                Measurements = _store!.Append(_schema!, values)
+                StdfTestTime = part.Wafer.StartTime ?? _catalog.Metadata.LotStart ?? part.Wafer.FinishTime ?? _catalog.Metadata.LotFinish,
+                Measurements = measurements
             }));
+            ReleasePart(part);
         }
 
         private void Tsr(ref StdfFields f)
@@ -453,7 +517,7 @@ public static class StdfParser
             }
             string unit = Inherit(f.OptionalCn(), initial.Unit);
             string inputUnit = mpr ? Inherit(f.OptionalCn(), initial.InputUnit) : "";
-            f.OptionalCn(); f.OptionalCn(); f.OptionalCn(); f.OptionalR4(); f.OptionalR4();
+            f.OptionalSkipCn(); f.OptionalSkipCn(); f.OptionalSkipCn(); f.OptionalR4(); f.OptionalR4();
             return new Defaults { Lower = Limit(low, optional, 4, 6, initial.Lower), Upper = Limit(high, optional, 5, 7, initial.Upper),
                 Unit = unit, Pins = indices, Description = initial.Description,
                 StartInput = start, IncrementInput = increment, InputUnit = inputUnit };
@@ -466,15 +530,27 @@ public static class StdfParser
                 if (Discovering) _catalog.Declarations.TryAdd(family, (limits, description));
                 return;
             }
-            var item = _catalog.Item(family, limits, description, Discovering);
+            var item = _catalog.Item(family, limits, description, Discovering, out bool hasMultipleVariants);
             if (Discovering) return;
-            string raw;
-            if ((flags & 0x10) != 0) raw = ""; // Explicitly untested; never insert zero.
+            int col = item.ColumnIndex;
+            if (part.States[col] != RawMeasurementStore.StateAbsent)
+                throw new ArgumentException("同一芯片内测试项列索引重复。");
+            if ((flags & 0x10) != 0)
+            {
+                part.States[col] = RawMeasurementStore.StateEmpty; // Explicitly untested; never insert zero.
+            }
             else if ((flags & (functional ? 0x6d : 0x2f)) != 0 || (parm & 7) != 0 || value == null || !float.IsFinite(value.Value))
-                raw = $"STDF_INVALID(TEST_FLG=0x{flags:X2},PARM_FLG=0x{parm:X2},RESULT={value?.ToString("R", CultureInfo.InvariantCulture) ?? "absent"})";
-            else raw = ((double)value.Value).ToString("R", CultureInfo.InvariantCulture);
-            part.Values.Add(item.ColumnIndex, raw);
-            part.Families.Add(family);
+            {
+                part.States[col] = RawMeasurementStore.StateText;
+                (part.InvalidTexts ??= new())[col] =
+                    $"STDF_INVALID(TEST_FLG=0x{flags:X2},PARM_FLG=0x{parm:X2},RESULT={value?.ToString("R", CultureInfo.InvariantCulture) ?? "absent"})";
+            }
+            else
+            {
+                part.States[col] = RawMeasurementStore.StateNumeric;
+                part.Numbers[col] = value.Value;
+            }
+            if (hasMultipleVariants) part.Families.Add(family);
         }
 
         private void Ptr(ref StdfFields f)
@@ -483,7 +559,7 @@ public static class StdfParser
             var key = _catalog.Test(10, number, head, site);
             float? result = f.OptionalR4();
             if (result == null && (flags & 0x12) == 0) throw new InvalidDataException("PTR 的有效 RESULT 缺失。");
-            string? text = f.OptionalCn(); f.OptionalCn();
+            string? text = f.OptionalCn(); f.OptionalSkipCn();
             var initial = Default(key); var definition = ReadLimits(ref f, initial, false, 0);
             definition.Description = Inherit(text, initial.Description);
             _defaults.TryAdd(key.Unscoped, definition); // Overrides apply only to this record, never replace the defaults.
@@ -498,8 +574,9 @@ public static class StdfParser
             int pins = f.OptionalU2() ?? 0, count = f.OptionalU2() ?? 0;
             f.Skip((pins + 1) / 2);
             if (count * 4 > f.Remaining) throw new InvalidDataException("MPR RTN_RSLT 数组不完整。");
-            var results = new float[count]; for (int i = 0; i < count; i++) results[i] = f.R4();
-            string? text = f.OptionalCn(); f.OptionalCn();
+            Span<float> results = count <= 64 ? stackalloc float[count] : new float[count];
+            for (int i = 0; i < count; i++) results[i] = f.R4();
+            string? text = f.OptionalCn(); f.OptionalSkipCn();
             var initial = Default(key); var definition = ReadLimits(ref f, initial, true, pins);
             definition.Description = Inherit(text, initial.Description);
             _defaults.TryAdd(key.Unscoped, definition);
@@ -513,13 +590,14 @@ public static class StdfParser
                         Value(execution.Part, family, limits, definition.Description, flags, parm, null);
                 return;
             }
-            var pinCounts = new Dictionary<ushort, int>();
+            bool usePins = count > 0 && pins == count && definition.Pins.Length == pins;
+            Dictionary<ushort, int>? pinCounts = usePins ? new Dictionary<ushort, int>(pins) : null;
             for (int i = 0; i < Math.Max(1, count); i++)
             {
                 string channel = $" 结果 {i + 1}";
-                if (count > 0 && pins == count && definition.Pins.Length == pins)
+                if (usePins)
                 {
-                    ushort pin = definition.Pins[i]; int repeat = pinCounts.GetValueOrDefault(pin) + 1; pinCounts[pin] = repeat;
+                    ushort pin = definition.Pins[i]; int repeat = pinCounts!.GetValueOrDefault(pin) + 1; pinCounts![pin] = repeat;
                     channel = $" PMR {pin}" + (repeat > 1 ? $" #{repeat}" : "");
                 }
                 else if (count == 0) channel = " 无结果";
@@ -539,8 +617,8 @@ public static class StdfParser
             if (returns > 0) { f.Skip(returns * 2); f.Skip((returns + 1) / 2); }
             if (programs > 0) { f.Skip(programs * 2); f.Skip((programs + 1) / 2); }
             f.OptionalBits();
-            string? vector = f.OptionalCn(); f.OptionalCn(); f.OptionalCn(); string? text = f.OptionalCn();
-            f.OptionalCn(); f.OptionalCn(); f.OptionalCn(); f.OptionalU1(); f.OptionalBits();
+            string? vector = f.OptionalCn(); f.OptionalSkipCn(); f.OptionalSkipCn(); string? text = f.OptionalCn();
+            f.OptionalSkipCn(); f.OptionalSkipCn(); f.OptionalSkipCn(); f.OptionalU1(); f.OptionalBits();
             var initial = Default(key);
             string description = Inherit(text, Inherit(vector, initial.Description));
             _defaults.TryAdd(key.Unscoped, new Defaults { Description = description });

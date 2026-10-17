@@ -64,6 +64,7 @@ public static class RetestIdentityService
 
     public static CsvParseResult Prepare(CsvParseResult data, AnalyzerConfig config)
     {
+        AnalysisOperation.CheckCancellation();
         string signature = config.TestMode + ":" + string.Join(",", config.UuidTestNumbers) + ":" +
             string.Join(",", config.MissingTokens.Concat(config.NotApplicableTokens));
         if (data.RetestIdentitySignature == signature || config.TestMode == TestAnalysisMode.CP && data.Records.All(r => !r.IsFtIdentity)) return data;
@@ -71,6 +72,7 @@ public static class RetestIdentityService
         int missing = 0;
         var records = data.Records.Select(source =>
         {
+            AnalysisOperation.CheckCancellation();
             var record = DatasetService.CloneRecord(source);
             record.IsFtIdentity = reader != null;
             record.RetestUuid = reader != null ? reader.Read(source) : source.RetestUuid;
@@ -83,6 +85,7 @@ public static class RetestIdentityService
         {
             Items = data.Items, Records = records, Devices = DatasetService.BuildDevices(records),
             SourceDescription = data.SourceDescription, SerialNumberNotice = data.SerialNumberNotice,
+            StdfMetadata = data.StdfMetadata,
             ReassignedSerialNumberCount = data.ReassignedSerialNumberCount,
             RetestIdentitySignature = signature, MissingUuidCount = missing
         };

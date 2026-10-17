@@ -6,19 +6,38 @@ namespace SemiconductorCsvAnalyzer.Services;
 
 public static class AppSettings
 {
+    private static string _userDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SemiconductorCsvAnalyzer");
+    private static string _legacyDirectory = AppDomain.CurrentDomain.BaseDirectory;
     public static string SettingsPath =>
-        Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app.settings.ini");
+        Path.Combine(_userDirectory, "app.settings.ini");
 
     public static string LastConfigCopyPath =>
-        Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "last_config.ini");
+        Path.Combine(_userDirectory, "last_config.ini");
 
     public static string? LastConfigPath { get; private set; }
+    public static string LoadNotice { get; private set; } = "";
 
     public static void Load()
     {
-        LastConfigPath = null;
-        string path = File.Exists(SettingsPath) ? SettingsPath :
-            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app.settings.txt");
+        LastConfigPath = null; LoadNotice = "";
+        bool hasUserSettings = File.Exists(SettingsPath);
+        string legacy = Path.Combine(_legacyDirectory, "app.settings.ini");
+        string path = hasUserSettings ? SettingsPath : File.Exists(legacy) ? legacy :
+            Path.Combine(_legacyDirectory, "app.settings.txt");
+        try
+        {
+            LoadPath(path);
+            // Preserve an existing user configuration; migrate the previous portable copy only once.
+            string oldCopy = Path.Combine(_legacyDirectory, "last_config.ini");
+            if (!hasUserSettings && !File.Exists(LastConfigCopyPath) && File.Exists(oldCopy))
+                SaveConfig(ConfigLoader.Load(oldCopy));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or FormatException or InvalidOperationException)
+        { LoadNotice = "默认配置读取或迁移失败：" + ex.Message; }
+    }
+
+    private static void LoadPath(string path)
+    {
         if (!File.Exists(path)) return;
 
         foreach (var raw in File.ReadAllLines(path, Encoding.UTF8))
@@ -46,7 +65,7 @@ public static class AppSettings
     public static void SaveConfig(AnalyzerConfig config)
     {
         ConfigLoader.Save(LastConfigCopyPath, config);
-        File.WriteAllText(
+        AtomicFile.WriteAllText(
             SettingsPath,
             "[Settings]" + Environment.NewLine + "LastConfigPath=" + LastConfigCopyPath + Environment.NewLine,
             Encoding.UTF8);

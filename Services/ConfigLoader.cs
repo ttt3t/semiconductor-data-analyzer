@@ -288,6 +288,6 @@ public static class ConfigLoader
     {
         string text = Serialize(config);
         Parse(text); // Validate exactly what will be read back before replacing a file.
-        File.WriteAllText(path, text, new UTF8Encoding(false));
+        AtomicFile.WriteAllText(path, text, new UTF8Encoding(false));
     }
 }

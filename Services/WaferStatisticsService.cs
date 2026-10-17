@@ -15,6 +15,7 @@ public static class WaferStatisticsService
 {
     public static WaferStatisticsResult Build(IReadOnlyList<CsvRecord> records, RetestMode mode, AnalyzerConfig config)
     {
+        AnalysisOperation.CheckCancellation();
         if (mode is not (RetestMode.First or RetestMode.Last)) throw new ArgumentOutOfRangeException(nameof(mode));
         // Reuse BIN Table's whole-chip retest selection and category definitions.
         // Only compact counts survive this method; no measurement columns are copied.

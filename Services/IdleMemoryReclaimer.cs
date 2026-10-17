@@ -11,7 +11,9 @@ internal sealed class IdleMemoryReclaimer : IDisposable
     private readonly DispatcherTimer _timer;
     private readonly Func<bool> _canCollect;
     private long _lastActivity;
-    private long _lastCollection;
+    private static long _lastCollection;
+    private static long _lastAllocated = GC.GetTotalAllocatedBytes();
+    private static readonly object CollectionGate = new();
     private bool _pending, _running, _disposed;
     internal int CollectionCount { get; private set; }
 
@@ -50,26 +52,29 @@ internal sealed class IdleMemoryReclaimer : IDisposable
             _lastActivity = Stopwatch.GetTimestamp();
             return;
         }
-        if (Stopwatch.GetElapsedTime(_lastActivity).TotalSeconds < 1.5
-            || (_lastCollection != 0 && Stopwatch.GetElapsedTime(_lastCollection).TotalSeconds < 5)) return;
+        if (Stopwatch.GetElapsedTime(_lastActivity).TotalSeconds < 5) return;
 
         StopWaiting();
         _running = true;
         try
         {
-            await Task.Run(() =>
+            bool collected = await Task.Run(() =>
             {
-                // Aggressive also decommits unused heap segments; a normal full GC
-                // alone can leave hundreds of MB committed after a file replacement.
-                GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
-                GC.WaitForPendingFinalizers(); // Close/delete unreachable raw snapshots.
-                GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+                lock (CollectionGate)
+                {
+                    if (_disposed || _lastCollection != 0 && Stopwatch.GetElapsedTime(_lastCollection).TotalSeconds < 60) return false;
+                    long allocated = GC.GetTotalAllocatedBytes();
+                    if (allocated - _lastAllocated < 128L * 1024 * 1024) return false;
+                    // Let the runtime decide whether a background collection is worthwhile.
+                    // Never compact twice or wait for finalizers on every UI operation.
+                    GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, blocking: false, compacting: false);
+                    _lastAllocated = allocated; _lastCollection = Stopwatch.GetTimestamp(); return true;
+                }
             });
-            CollectionCount++;
+            if (collected) CollectionCount++;
         }
         finally
         {
-            _lastCollection = Stopwatch.GetTimestamp();
             _running = false;
         }
     }

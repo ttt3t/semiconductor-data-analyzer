@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -49,19 +50,64 @@ public static class IntegratedCsvService
     internal static (double Lower, double Upper)[] CalculateOutlierBounds(IReadOnlyList<TestItemData> items,
         IReadOnlyList<CsvRecord> records, double multiplier)
     {
-        // Row-order reads reuse the disk snapshot's row cache. Only one accumulator
+        // Row-order reads reuse a pooled row buffer. Only one accumulator
         // per item is retained; do not rebuild columns or allocate per-cell objects.
         var stats = new (int Count, double Mean, double M2)[items.Count];
-        foreach (var record in records)
-            for (int i = 0; i < items.Count; i++)
-                if (record.Measurements.TryGetText(items[i].Id, out var raw) && DatasetService.TryValue(raw, out double value))
+        byte[]? rowBuffer = null;
+        MeasurementSchema? lastSchema = null;
+        int[]? schemaIndices = null;
+        try
+        {
+            foreach (var record in records)
+            {
+                AnalysisOperation.CheckCancellation();
+                var measurements = record.Measurements;
+                if (measurements.IsOnDisk && measurements.Schema is { } schema)
                 {
-                    ref var stat = ref stats[i];
-                    stat.Count++;
-                    double delta = value - stat.Mean;
-                    stat.Mean += delta / stat.Count;
-                    stat.M2 += delta * (value - stat.Mean);
+                    if (measurements.Count == 0) continue;
+                    if (!ReferenceEquals(schema, lastSchema))
+                    {
+                        lastSchema = schema;
+                        schemaIndices = new int[items.Count];
+                        for (int i = 0; i < items.Count; i++)
+                            schemaIndices[i] = schema.Indices.TryGetValue(items[i].Id, out int idx) ? idx : -1;
+                    }
+                    var rawRow = measurements.ReadRow(ref rowBuffer);
+                    var indices = schemaIndices!;
+                    for (int i = 0; i < items.Count; i++)
+                    {
+                        int col = indices[i];
+                        if (col < 0 || !measurements.PresentAt(col)) continue;
+                        double value;
+                        if (rawRow.IsNumeric(col))
+                            value = rawRow.ReadNumeric(col);
+                        else if (!DatasetService.TryValue(rawRow.RawTextSpan(col), out value))
+                            continue;
+                        ref var stat = ref stats[i];
+                        stat.Count++;
+                        double delta = value - stat.Mean;
+                        stat.Mean += delta / stat.Count;
+                        stat.M2 += delta * (value - stat.Mean);
+                    }
                 }
+                else
+                {
+                    for (int i = 0; i < items.Count; i++)
+                        if (measurements.TryGetText(items[i].Id, out var raw) && DatasetService.TryValue(raw, out double value))
+                        {
+                            ref var stat = ref stats[i];
+                            stat.Count++;
+                            double delta = value - stat.Mean;
+                            stat.Mean += delta / stat.Count;
+                            stat.M2 += delta * (value - stat.Mean);
+                        }
+                }
+            }
+        }
+        finally
+        {
+            if (rowBuffer != null) ArrayPool<byte>.Shared.Return(rowBuffer);
+        }
         return stats.Select(stat =>
         {
             double radius = stat.Count == 0 ? double.NaN : multiplier * Math.Sqrt(Math.Max(0, stat.M2 / stat.Count));
@@ -75,9 +121,10 @@ public static class IntegratedCsvService
         (double Lower, double Upper)[]? outlierBounds = null)
     {
         string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        byte[]? rowBuffer = null;
         try
         {
-            using (var writer = new StreamWriter(temp, false, new UTF8Encoding(true)))
+            using (var writer = new StreamWriter(temp, false, new UTF8Encoding(true), 65536))
             {
                 bool ftIdentity = records.Any(r => r.RetestUuid != null);
                 bool sourceSerial = ftIdentity || records.Any(r => r.OriginalSerialNumber != null);
@@ -97,19 +144,78 @@ public static class IntegratedCsvService
                 Metadata("#SBIN", i => i.SBin);
                 Metadata("#HBIN", i => i.HBin);
                 Metadata("#DisplayName", i => i.DisplayName);
+                var presence = new char[items.Count];
+                var values = new string[items.Count];
+                MeasurementSchema? lastSchema = null;
+                int[]? schemaIndices = null;
                 foreach (var record in records)
                 {
-                    // Presence distinguishes an untested item from an actually blank measurement.
-                    var presence = new char[items.Count];
-                    var values = new string[items.Count];
-                    for (int i = 0; i < items.Count; i++)
+                    AnalysisOperation.CheckCancellation();
+                    var measurements = record.Measurements;
+                    if (measurements.IsOnDisk && measurements.Schema is { } schema)
                     {
-                        bool present = record.Measurements.TryGetText(items[i].Id, out var raw);
-                        if (present && outlierBounds != null && DatasetService.TryValue(raw, out double value) &&
-                            (value < outlierBounds[i].Lower || value > outlierBounds[i].Upper)) present = false;
-                        // Removed values are absent, not new blank-value errors. Do not mutate the source.
-                        presence[i] = present ? '1' : '0';
-                        values[i] = present ? raw.ToString() : "";
+                        if (!ReferenceEquals(schema, lastSchema))
+                        {
+                            lastSchema = schema;
+                            schemaIndices = new int[items.Count];
+                            for (int i = 0; i < items.Count; i++)
+                                schemaIndices[i] = schema.Indices.TryGetValue(items[i].Id, out int idx) ? idx : -1;
+                        }
+                        var rawRow = measurements.Count > 0 ? measurements.ReadRow(ref rowBuffer) : null;
+                        var indices = schemaIndices!;
+                        for (int i = 0; i < items.Count; i++)
+                        {
+                            int col = indices[i];
+                            bool present = col >= 0 && rawRow != null && measurements.PresentAt(col);
+                            if (!present)
+                            {
+                                presence[i] = '0';
+                                values[i] = "";
+                                continue;
+                            }
+                            if (rawRow!.IsNumeric(col))
+                            {
+                                double num = rawRow.ReadNumeric(col);
+                                if (outlierBounds != null && (num < outlierBounds[i].Lower || num > outlierBounds[i].Upper))
+                                {
+                                    presence[i] = '0';
+                                    values[i] = "";
+                                }
+                                else
+                                {
+                                    presence[i] = '1';
+                                    values[i] = num.ToString("R", CultureInfo.InvariantCulture);
+                                }
+                            }
+                            else
+                            {
+                                var raw = rawRow.RawTextSpan(col);
+                                if (outlierBounds != null && DatasetService.TryValue(raw, out double value) &&
+                                    (value < outlierBounds[i].Lower || value > outlierBounds[i].Upper))
+                                {
+                                    presence[i] = '0';
+                                    values[i] = "";
+                                }
+                                else
+                                {
+                                    presence[i] = '1';
+                                    values[i] = raw.IsEmpty ? "" : raw.ToString();
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Presence distinguishes an untested item from an actually blank measurement.
+                        for (int i = 0; i < items.Count; i++)
+                        {
+                            bool present = measurements.TryGetText(items[i].Id, out var raw);
+                            if (present && outlierBounds != null && DatasetService.TryValue(raw, out double value) &&
+                                (value < outlierBounds[i].Lower || value > outlierBounds[i].Upper)) present = false;
+                            // Removed values are absent, not new blank-value errors. Do not mutate the source.
+                            presence[i] = present ? '1' : '0';
+                            values[i] = present ? raw.ToString() : "";
+                        }
                     }
                     Row(new[] { record.WaferId, record.Id, record.SerialNumber, record.X?.ToString(CultureInfo.InvariantCulture) ?? "",
                         record.Y?.ToString(CultureInfo.InvariantCulture) ?? "", record.Site, record.Result, record.SBin, record.HBin, new string(presence) }
@@ -118,9 +224,14 @@ public static class IntegratedCsvService
                         .Concat(ftIdentity ? new[] { record.RetestUuid ?? "", record.UuidTestNumbers } : Array.Empty<string>()).Concat(values));
                 }
             }
+            AnalysisOperation.CheckCancellation();
             File.Move(temp, path, overwrite: true);
         }
-        finally { if (File.Exists(temp)) File.Delete(temp); }
+        finally
+        {
+            if (rowBuffer != null) ArrayPool<byte>.Shared.Return(rowBuffer);
+            if (File.Exists(temp)) File.Delete(temp);
+        }
     }
 
     public static CsvParseResult Load(string path)
@@ -159,12 +270,14 @@ public static class IntegratedCsvService
             ? value : throw new InvalidDataException("整合 CSV 的坐标无效。");
         var records = new List<CsvRecord>();
         var schema = new MeasurementSchema(items.Select(i => i.Id));
-        var ids = new HashSet<string>();
+        var ids = new HashSet<string>(StringComparer.Ordinal);
         var rawStore = new RawMeasurementStore();
+        var measurements = new string?[items.Count];
         try
         {
             while (reader.ReadFields() is { } row)
             {
+                AnalysisOperation.CheckCancellation();
                 if (row.Length != header.Length || string.IsNullOrWhiteSpace(row[0]) || string.IsNullOrEmpty(row[1]) || !ids.Add(row[1]) ||
                     row[9].Length != items.Count || row[9].Any(c => c != '0' && c != '1') ||
                     sourceSerial && (row[14] is not ("0" or "1") || row[14] == "0" && row[13].Length > 0))
@@ -177,11 +290,11 @@ public static class IntegratedCsvService
                     Site = row[5], Result = row[6], SBin = row[7], HBin = row[8],
                     Product = context ? row[10] : "", Program = context ? row[11] : "", Lot = context ? row[12] : ""
                 };
-                var measurements = new string?[items.Count];
                 for (int i = 0; i < items.Count; i++)
                 {
                     if (row[9][i] == '1') measurements[i] = row[identityCount + i];
                     else if (row[identityCount + i].Length != 0) throw new InvalidDataException("未测试项包含测量值，整合 CSV 数据不一致。");
+                    else measurements[i] = null;
                 }
                 record.Measurements = rawStore.Append(schema, measurements);
                 records.Add(record);

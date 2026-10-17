@@ -21,10 +21,12 @@ public static class DataFileService
     public static CsvParseResult Parse(string path, AnalyzerConfig config, Action<string>? progress = null,
         CancellationToken cancellationToken = default, StdfImportMode stdfMode = StdfImportMode.Standard)
     {
+        if (!cancellationToken.CanBeCanceled) cancellationToken = AnalysisOperation.Token;
+        cancellationToken.ThrowIfCancellationRequested();
         bool stdf = IsStdf(path);
         bool integrated = !stdf && IntegratedCsvService.IsIntegrated(path);
         var result = stdf ? StdfParser.Parse(path, config, progress, cancellationToken, stdfMode)
-            : CsvParser.Parse(path, config, progress);
+            : CsvParser.Parse(path, config, progress, cancellationToken);
         if (SerialNumberService.Normalize(result, !stdf && !integrated && config.SerialNumberColumn <= 0))
             result.SerialNumberNotice = $"文件“{Path.GetFileName(path)}”：{result.SerialNumberNotice}";
         return RetestIdentityService.Prepare(result, config);

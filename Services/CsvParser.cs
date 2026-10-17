@@ -8,16 +8,37 @@ namespace SemiconductorCsvAnalyzer.Services;
 public sealed partial class CsvParseResult
 {
     public string SourceDescription { get; set; } = "";
+    public StdfFileMetadata? StdfMetadata { get; set; }
     public List<TestItemData> Items { get; set; } = new();
     public List<DeviceInfo> Devices { get; set; } = new();
     public List<CsvRecord> Records { get; set; } = new();
-    public IReadOnlyList<string> Wafers => Records.Select(r => r.WaferId).Distinct().ToArray();
+    private List<CsvRecord>? _wafersSource;
+    private int _wafersRecordCount = -1;
+    private IReadOnlyList<string>? _wafersCache;
+    public IReadOnlyList<string> Wafers
+    {
+        get
+        {
+            if (_wafersCache == null || !ReferenceEquals(_wafersSource, Records) || _wafersRecordCount != Records.Count)
+            {
+                _wafersSource = Records;
+                _wafersRecordCount = Records.Count;
+                _wafersCache = Records.Select(r => r.WaferId).Distinct().ToArray();
+            }
+            return _wafersCache;
+        }
+    }
 }
 
 public static class CsvParser
 {
     public static CsvParseResult Parse(string csvPath, AnalyzerConfig config, Action<string>? progress = null)
+        => Parse(csvPath, config, progress, default);
+
+    public static CsvParseResult Parse(string csvPath, AnalyzerConfig config, Action<string>? progress, CancellationToken cancellationToken)
     {
+        if (!cancellationToken.CanBeCanceled) cancellationToken = AnalysisOperation.Token;
+        cancellationToken.ThrowIfCancellationRequested();
         if (IntegratedCsvService.IsIntegrated(csvPath))
         {
             return IntegratedCsvService.Load(csvPath);
@@ -29,7 +50,7 @@ public static class CsvParser
         FileStream stream;
         try
         {
-            stream = new FileStream(csvPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            stream = new FileStream(csvPath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan);
         }
         catch (IOException ex) when (ex.Message.Contains("being used by another process"))
         {
@@ -46,6 +67,7 @@ public static class CsvParser
         using (var reader = new StreamReader(input, encoding, true, 65536, leaveOpen: true))
             while (reader.ReadLine() is { } line)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 rowCount++;
                 maxCols = Math.Max(maxCols, CountColumns(line, config.Delimiter, config.HasQuotedFields));
                 if (headerRows.Contains(rowCount)) rows[rowCount - 1] = ParseLine(line, config.Delimiter, config.HasQuotedFields);
@@ -97,36 +119,54 @@ public static class CsvParser
         if (items.Count == 0)
             throw new InvalidDataException("未解析到任何有效测试项");
 
-        var records = new List<CsvRecord>();
+        var records = new List<CsvRecord>(Math.Max(0, rowCount - config.DataStartRow + 1));
         var schema = new MeasurementSchema(items.Select(i => i.Id));
         string waferId = Path.GetFileNameWithoutExtension(csvPath);
+        string unannotatedWaferId = $"{waferId} (未标注 wafer)";
         var rawStore = new RawMeasurementStore();
         try
         {
             progress?.Invoke("正在读取数据行...");
             input.Position = 0;
             using var dataReader = new StreamReader(input, encoding, true, 65536, leaveOpen: true);
+            var rowCells = new List<string>(maxCols);
+            var quoteBuffer = new StringBuilder(64);
+            var rawMeasurements = new string?[items.Count];
             int r = 0;
             while (dataReader.ReadLine() is { } line)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (++r < config.DataStartRow) continue;
-                var row = ParseLine(line, config.Delimiter, config.HasQuotedFields);
+                ParseLineInto(line, config.Delimiter, config.HasQuotedFields, rowCells, quoteBuffer);
 
-                string sn = GetCell(row, config.SerialNumberColumn - 1);
-                string site = config.SiteColumn > 0 ? GetCell(row, config.SiteColumn - 1) : "";
-                int? x = config.XColumn > 0 ? ParseIntOrNull(GetCell(row, config.XColumn - 1)) : null;
-                int? y = config.YColumn > 0 ? ParseIntOrNull(GetCell(row, config.YColumn - 1)) : null;
-                string sbin = config.SBinColumn > 0 ? GetCell(row, config.SBinColumn - 1).Trim() : "";
-                string hbin = config.HBinColumn > 0 ? GetCell(row, config.HBinColumn - 1).Trim() : "";
+                string sn = GetCell(rowCells, config.SerialNumberColumn - 1);
+                string site = config.SiteColumn > 0 ? GetCell(rowCells, config.SiteColumn - 1) : "";
+                int? x = config.XColumn > 0 ? ParseIntOrNull(GetCell(rowCells, config.XColumn - 1)) : null;
+                int? y = config.YColumn > 0 ? ParseIntOrNull(GetCell(rowCells, config.YColumn - 1)) : null;
+                string sbin = config.SBinColumn > 0 ? GetCell(rowCells, config.SBinColumn - 1).Trim() : "";
+                string hbin = config.HBinColumn > 0 ? GetCell(rowCells, config.HBinColumn - 1).Trim() : "";
 
-                string Context(int column, string fallback) => string.IsNullOrWhiteSpace(GetCell(row, column - 1))
-                    ? fallback : GetCell(row, column - 1).Trim();
+                string Context(int column, string fallback)
+                {
+                    if (column <= 0) return fallback;
+                    string cell = GetCell(rowCells, column - 1);
+                    return string.IsNullOrWhiteSpace(cell) ? fallback : cell.Trim();
+                }
+
+                for (int i = 0; i < items.Count; i++)
+                    rawMeasurements[i] = GetCell(rowCells, items[i].ColumnIndex);
+
+                string rowWafer;
+                if (config.WaferColumn == 0) rowWafer = waferId;
+                else
+                {
+                    string wCell = GetCell(rowCells, config.WaferColumn - 1);
+                    rowWafer = string.IsNullOrWhiteSpace(wCell) ? unannotatedWaferId : wCell.Trim();
+                }
 
                 var record = new CsvRecord
                 {
-                    WaferId = config.WaferColumn == 0 ? waferId :
-                        string.IsNullOrWhiteSpace(GetCell(row, config.WaferColumn - 1)) ? $"{waferId} (未标注 wafer)" :
-                        GetCell(row, config.WaferColumn - 1).Trim(),
+                    WaferId = rowWafer,
                     SerialNumber = sn,
                     X = x,
                     Y = y,
@@ -136,7 +176,7 @@ public static class CsvParser
                     Lot = Context(config.LotColumn, config.Lot),
                     SBin = sbin,
                     HBin = hbin,
-                    Measurements = rawStore.Append(schema, items.Select(item => GetCell(row, item.ColumnIndex)).ToArray())
+                    Measurements = rawStore.Append(schema, rawMeasurements)
                 };
                 records.Add(record);
             }
@@ -178,6 +218,12 @@ public static class CsvParser
         return row[col];
     }
 
+    private static string GetCell(List<string> row, int col)
+    {
+        if ((uint)col >= (uint)row.Count) return "";
+        return row[col];
+    }
+
     private static string[] ParseLine(string line, char delimiter, bool hasQuoted)
     {
         if (!hasQuoted)
@@ -185,6 +231,31 @@ public static class CsvParser
 
         var result = new List<string>();
         var sb = new StringBuilder();
+        ParseLineInto(line, delimiter, true, result, sb);
+        return result.ToArray();
+    }
+
+    private static void ParseLineInto(string line, char delimiter, bool hasQuoted, List<string> result, StringBuilder sb)
+    {
+        result.Clear();
+        if (!hasQuoted)
+        {
+            int start = 0;
+            for (int i = 0; i < line.Length; i++)
+            {
+                if (line[i] == delimiter)
+                {
+                    int len = i - start;
+                    result.Add(len == 0 ? "" : line.Substring(start, len));
+                    start = i + 1;
+                }
+            }
+            int tailLen = line.Length - start;
+            result.Add(tailLen == 0 ? "" : line.Substring(start, tailLen));
+            return;
+        }
+
+        sb.Clear();
         bool inQuotes = false;
 
         for (int i = 0; i < line.Length; i++)
@@ -204,7 +275,7 @@ public static class CsvParser
             }
             else if (c == delimiter && !inQuotes)
             {
-                result.Add(sb.ToString());
+                result.Add(sb.Length == 0 ? "" : sb.ToString());
                 sb.Clear();
             }
             else
@@ -212,8 +283,7 @@ public static class CsvParser
                 sb.Append(c);
             }
         }
-        result.Add(sb.ToString());
-        return result.ToArray();
+        result.Add(sb.Length == 0 ? "" : sb.ToString());
     }
 
     private static bool TryParseDouble(string s, out double value)
@@ -229,7 +299,7 @@ public static class CsvParser
 
     private static int? ParseIntOrNull(string s)
     {
-        if (int.TryParse(s.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int v))
+        if (int.TryParse(s.AsSpan().Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int v))
             return v;
         return null;
     }

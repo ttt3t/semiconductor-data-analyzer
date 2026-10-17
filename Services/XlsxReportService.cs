@@ -18,7 +18,7 @@ public sealed record XlsxReportOptions(IReadOnlyCollection<string> Wafers, Retes
 public static class XlsxReportService
 {
     private static readonly string[] SummaryHeaders = { "关注", "Test Num", "Test Item", "Site", "Wafer", "SBIN", "HBIN", "Unit",
-        "LSL", "USL", "Count", "Fails", "Eorr", "Site σ", "Mean", "Max", "Min", "Median", "σ", "Robust Mean", "Robust Sigma", "Cpk", "InSpec%" };
+        "LSL", "USL", "Count", "Fails", "Error", "Site σ", "Mean", "Max", "Min", "Median", "σ", "Robust Mean", "Robust Sigma", "Cpk", "InSpec%" };
     private static int SummaryLastColumn => SummaryHeaders.Length + 1;
     private static readonly XLColor Ink = XLColor.FromHtml("#20344A"), Header = XLColor.FromHtml("#315B82"),
         Stripe = XLColor.FromHtml("#F1F5F9"), Rule = XLColor.FromHtml("#CBD5E1");
@@ -26,23 +26,38 @@ public static class XlsxReportService
     // A separate STA owns temporary WPF drawings. The main dispatcher keeps animating;
     // workbook/images and its rendering dispatcher are released when this export ends.
     public static Task SaveAsync(string path, CsvParseResult data, AnalyzerConfig config,
-        XlsxReportOptions options, string sourceName)
+        XlsxReportOptions options, string sourceName, CancellationToken cancellationToken = default)
     {
+        if (!cancellationToken.CanBeCanceled) cancellationToken = AnalysisOperation.Token;
+        var token = cancellationToken;
+        var lease = new DatasetLease(data.Records);
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var worker = new Thread(() =>
         {
-            try { Save(path, data, config, options, sourceName); completion.SetResult(); }
+            try
+            {
+                using (lease)
+                {
+                    using var operation = new AnalysisOperation(token);
+                    token.ThrowIfCancellationRequested();
+                    Save(path, data, config, options, sourceName);
+                }
+                completion.SetResult();
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { completion.SetCanceled(token); }
             catch (Exception ex) { completion.SetException(ex); }
             finally { Dispatcher.CurrentDispatcher.InvokeShutdown(); }
         }) { IsBackground = true, Name = "XLSX report export" };
         worker.SetApartmentState(ApartmentState.STA);
-        worker.Start();
+        try { worker.Start(); }
+        catch { lease.Dispose(); throw; }
         return completion.Task;
     }
 
     public static void Save(string path, CsvParseResult data, AnalyzerConfig config,
         XlsxReportOptions options, string sourceName)
     {
+        AnalysisOperation.CheckCancellation();
         if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA)
             throw new InvalidOperationException("报告绘图需要 STA 线程，请调用 SaveAsync。");
         if (data.Records.Count == 0) throw new InvalidDataException("没有可导出的测试记录。");
@@ -81,6 +96,7 @@ public static class XlsxReportService
                 int summaryRow = 8, focusRow = 7;
                 for (int i = 0; i < data.Items.Count; i++)
                 {
+                    AnalysisOperation.CheckCancellation();
                     // Build just this item's selected column, not an extra copy of the full dataset.
                     var item = SelectItem(data.Items[i], records, rowsById, bounds?[i]);
                     foreach (var summary in SummaryService.Build(new[] { item }, sites, wafers,
@@ -92,7 +108,7 @@ public static class XlsxReportService
                     WriteSummary(favorites, focusRow + 1, combined, true);
                     var detail = DetailCalculator.Calculate(new(item, null, options.HistogramMode, config.BinCount,
                         config.IncludeOutOfLimitData, config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma,
-                        ScatterOrder: options.ScatterOrder, WaferOrder: wafers), default);
+                        ScatterOrder: options.ScatterOrder, WaferOrder: wafers), AnalysisOperation.Token);
                     var histogram = new HistogramControl();
                     histogram.Apply(detail.Bins, item.LowLimit, item.HighLimit, detail.Mean, detail.Sigma,
                         config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, item.Unit);
@@ -113,8 +129,10 @@ public static class XlsxReportService
                 BinSheet(hbins, data, config, options, soft: false);
                 summaries.PageSetup.PrintAreas.Add(1, 2, Math.Max(8, summaryRow - 1), SummaryLastColumn);
                 favorites.PageSetup.PrintAreas.Add(1, 2, Math.Max(8, focusRow - 2), SummaryLastColumn);
+                AnalysisOperation.CheckCancellation();
                 workbook.SaveAs(temp);
             }
+            AnalysisOperation.CheckCancellation();
             File.Move(temp, path, overwrite: true);
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }
@@ -126,9 +144,12 @@ public static class XlsxReportService
         var item = DatasetService.CloneItem(source);
         item.Values.Initialize(records, item.Id);
         foreach (var sample in source.Values)
+        {
+            AnalysisOperation.CheckCancellation();
             if (rowsById.TryGetValue(sample.Record.Id, out int row) && records[row].Measurements.ContainsKey(item.Id) &&
                 (!bounds.HasValue || sample.Value >= bounds.Value.Lower && sample.Value <= bounds.Value.Upper))
                 item.Values.SetRow(row, sample.Value);
+        }
         item.Values.Complete();
         foreach (var error in source.Errors)
             if (rowsById.TryGetValue(error.Id, out int row) && records[row].Measurements.ContainsKey(item.Id))
@@ -247,6 +268,7 @@ public static class XlsxReportService
         var mode = options.RetestMode == RetestMode.First ? RetestMode.First : RetestMode.Last;
         foreach (string wafer in data.Wafers.Where(options.Wafers.Contains))
         {
+            AnalysisOperation.CheckCancellation();
             var raw = data.Records.Where(r => r.WaferId == wafer).ToList();
             if (options.RetestMode == RetestMode.OnlyRetests)
             {
@@ -257,6 +279,7 @@ public static class XlsxReportService
             var chosen = new Dictionary<(string Wafer, int? X, int? Y, string Fallback), CsvRecord>();
             foreach (var record in raw)
             {
+                AnalysisOperation.CheckCancellation();
                 if (mode == RetestMode.First) chosen.TryAdd(DatasetService.ChipKey(record), record);
                 else chosen[DatasetService.ChipKey(record)] = record;
             }

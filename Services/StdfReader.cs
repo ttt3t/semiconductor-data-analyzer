@@ -44,7 +44,9 @@ internal sealed class StdfReader : IDisposable
         Offset = 6;
     }
 
-    public bool Next()
+    public bool Next() => ReadNext(false);
+    public bool NextMetadata() => ReadNext(true);
+    private bool ReadNext(bool metadataOnly)
     {
         int first = _stream.ReadByte();
         if (first < 0) return false;
@@ -54,7 +56,13 @@ internal sealed class StdfReader : IDisposable
             _stream.ReadExactly(_header.AsSpan(1));
             _length = LittleEndian ? BinaryPrimitives.ReadUInt16LittleEndian(_header) : BinaryPrimitives.ReadUInt16BigEndian(_header);
             Type = _header[2]; Subtype = _header[3];
-            _stream.ReadExactly(_payload.AsSpan(0, _length));
+            bool relevant = Type == 1 && Subtype is 10 or 20 || Type == 2 && Subtype is 10 or 20;
+            if (metadataOnly && !relevant && _stream.CanSeek)
+            {
+                if (_length > _stream.Length - _stream.Position) throw new EndOfStreamException();
+                _stream.Seek(_length, SeekOrigin.Current);
+            }
+            else _stream.ReadExactly(_payload.AsSpan(0, _length));
         }
         catch (EndOfStreamException ex) { throw new InvalidDataException($"STDF 在字节偏移 {Offset} 处截断，记录长度不足。", ex); }
         Offset += 4 + _length;
@@ -86,8 +94,14 @@ internal ref struct StdfFields
     public short? OptionalI2() => Remaining == 0 ? null : I2();
     public uint? OptionalU4() => Remaining == 0 ? null : U4();
     public float? OptionalR4() => Remaining == 0 ? null : R4();
-    public string Cn() => Encoding.Latin1.GetString(Take(U1()));
+    public string Cn()
+    {
+        byte length = U1();
+        return length == 0 ? "" : Encoding.Latin1.GetString(Take(length));
+    }
     public string? OptionalCn() => Remaining == 0 ? null : Cn();
+    public void SkipCn() => Skip(U1());
+    public void OptionalSkipCn() { if (Remaining > 0) Skip(U1()); }
     public void OptionalBits() { if (Remaining > 0) Skip((U2() + 7) / 8); }
     public void OptionalBytes() { if (Remaining > 0) Skip(U1()); }
     public ushort[] Indices(int count)

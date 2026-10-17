@@ -30,11 +30,13 @@ public static class BinStatisticsService
 
     public static BinStatisticsResult Build(IReadOnlyList<CsvRecord> records, RetestMode mode, AnalyzerConfig config)
     {
+        AnalysisOperation.CheckCancellation();
         if (mode != RetestMode.First && mode != RetestMode.Last) throw new ArgumentOutOfRangeException(nameof(mode));
         // Bin is a whole-chip result: never mix a partial retest's item values to determine its Bin.
         var chosen = new Dictionary<(string Wafer, int? X, int? Y, string Fallback), CsvRecord>();
         foreach (var record in records)
         {
+            AnalysisOperation.CheckCancellation();
             var key = DatasetService.ChipKey(record);
             if (mode == RetestMode.First) chosen.TryAdd(key, record);
             else chosen[key] = record;
@@ -52,6 +54,7 @@ public static class BinStatisticsService
         var siteBins = new Dictionary<(string Site, string Bin), int>();
         foreach (var record in chosen.Values)
         {
+            AnalysisOperation.CheckCancellation();
             if (!string.IsNullOrWhiteSpace(record.SBin))
             {
                 sbins[record.SBin] = sbins.GetValueOrDefault(record.SBin) + 1;
