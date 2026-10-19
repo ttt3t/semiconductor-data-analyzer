@@ -114,12 +114,24 @@ static class Probe
             plot.UseLimitRange = false; Check((double)Field(plot, "_dataMinY")! < 1 && (double)Field(plot, "_dataMaxY")! > 4, "Zoom all restores full measurement extent");
             plot.IsYAxisLocked = true; double lockedMin = (double)Field(plot, "_dataMinY")!; plot.SetSeries(detail.Scatter.Scale(1000), 1000, 3000, "uA");
             Check(Near((double)Field(plot, "_dataMinY")!, lockedMin * 1000), "locked Y range follows physical units across prefix changes"); plotWindow.Close();
-            var filterWindow = new SampleFilterWindow(data.Items, rules, RetestMode.All); filterWindow.Show(); Pump(); Save(filterWindow, "sample-filter.png"); filterWindow.Close();
+            data.Items[0].Focus.IsFocused = true;
+            var filterWindow = new SampleFilterWindow(data.Items, rules, RetestMode.All); filterWindow.Show(); Pump();
+            var choices = ((DockPanel)((DockPanel)filterWindow.Content).Children[2]).Children.OfType<ComboBox>().Single();
+            Check(choices.Items.Count == 1 && ((SampleFilterWindow.RangeRow)choices.Items[0]).Item.Id == "i" &&
+                ((List<SampleFilterWindow.RangeRow>)Field(filterWindow, "_rows")!).Count == 1, "filter choices and existing conditions contain only focused tests");
+            Save(filterWindow, "sample-filter.png"); filterWindow.Close(); data.Items[0].Focus.IsFocused = false;
+            var emptyFilter = new SampleFilterWindow(data.Items, rules, RetestMode.All); emptyFilter.Show(); Pump();
+            Check(((List<SampleFilterWindow.RangeRow>)Field(emptyFilter, "_rows")!).Count == 0 &&
+                !((DockPanel)((DockPanel)emptyFilter.Content).Children[2]).Children.OfType<ComboBox>().Single().IsEnabled, "no focused tests leaves an empty safe filter with cancellation available"); emptyFilter.Close();
             string local = P("user"); Directory.CreateDirectory(local); typeof(AppSettings).GetField("_userDirectory", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, local);
             var main = new MainWindow(new LayoutSettings(P("layout.json")), new RecentFilesService(P("recent.json")), new UiPreferencesService(P("ui.json"))); main.Show(); Wait(main.OpenManagedFilesAsync(new[] { new CsvImportSource(exported) }, config, RetestMode.All));
             var original = (CsvParseResult)Field(main, "_data")!; var ids = original.Items.Select(i => i.Id).ToArray();
             Set(main, "_sampleRanges", new[] { new SampleRange(ids[0], 1, 2) }); Wait((Task)Call(main, "RefreshTestItemList")!);
             var scoped = (CsvParseResult)Field(main, "_scopeData")!; Check(scoped.Records.Count == 2 && ReferenceEquals(original, Field(main, "_data")), "main window commits filtered view while preserving loaded data");
+            var filterAction = (Button)main.FindName("BtnSampleFilter");
+            Check(filterAction.Parent == ((Button)main.FindName("ExportReportButton")).Parent && filterAction.Content is Panel content &&
+                content.Children.OfType<ActionIcon>().Any(i => i.Kind == "Filter") && ((TextBlock)main.FindName("TxtSampleFilterAction")).Text.Contains("1"),
+                "filter action stays beside report with its icon after applying conditions");
             Wait((Task)Call(main, "RefreshTestItemList")!); Check(ReferenceEquals(scoped, Field(main, "_scopeData")), "list recomputation reuses unchanged filtered columns");
             var detailTimer = System.Diagnostics.Stopwatch.StartNew(); while ((bool)Field(main, "_detailPending")! && detailTimer.ElapsedMilliseconds < 10000) { Pump(); Thread.Sleep(5); }
             Save(main, "analyzer.png"); Set(main, "_sampleRanges", Array.Empty<SampleRange>()); Wait((Task)Call(main, "RefreshTestItemList")!); Check(ReferenceEquals(original, Field(main, "_scopeData")), "main window cancellation restores original population");

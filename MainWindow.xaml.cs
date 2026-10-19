@@ -601,7 +601,7 @@ public partial class MainWindow : Window
         _scopeData = prepared.Scope;
         _scopeSource = data; _scopeMode = _retestMode; _scopeRanges = prepared.Ranges;
         _sampleIncludedIds = _sampleRanges.Count == 0 ? null : prepared.Scope.Records.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
-        BtnSampleFilter.Content = _sampleRanges.Count == 0 ? "数据筛选" : $"数据筛选（{_sampleRanges.Count}）";
+        TxtSampleFilterAction.Text = _sampleRanges.Count == 0 ? "数据筛选" : $"数据筛选（{_sampleRanges.Count}）";
         var previousLease = _datasetLease; _datasetLease = lease; previousLease?.Dispose();
         _allItems = prepared.Data.Items;
         _devices = prepared.Scope.Devices;

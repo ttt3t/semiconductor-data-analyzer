@@ -82,6 +82,8 @@
                             <Button x:Name="ImportDataButton" Click="BtnImportData_Click" Style="{StaticResource ToolbarAction}"><StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Import" Style="{StaticResource ButtonIcon}"/><TextBlock Text="追加导入" VerticalAlignment="Center"/></StackPanel></Button>
                             <Button x:Name="ExportDataButton" Click="BtnExportData_Click" Style="{StaticResource ToolbarAction}"><StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Export" Style="{StaticResource ButtonIcon}"/><TextBlock Text="导出数据" VerticalAlignment="Center"/></StackPanel></Button>
                             <Button x:Name="ExportReportButton" Click="BtnExportReport_Click" Style="{StaticResource ToolbarAction}"><StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Report" Style="{StaticResource ButtonIcon}"/><TextBlock Text="XLSX 报告" VerticalAlignment="Center"/></StackPanel></Button>
+                            <Button x:Name="BtnSampleFilter" Click="SampleFilter_Click" Style="{StaticResource ToolbarAction}" AutomationProperties.Name="数据筛选"
+                                    ToolTip="使用已关注测试项的数值范围筛选样品并重算；再次点击可取消筛选"><StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Filter" Style="{StaticResource ButtonIcon}"/><TextBlock x:Name="TxtSampleFilterAction" Text="数据筛选" VerticalAlignment="Center"/></StackPanel></Button>
                         </StackPanel>
                     </StackPanel></Border>
                     <Border Style="{StaticResource CommandGroup}"><StackPanel>
@@ -179,7 +181,6 @@
                             </StackPanel>
                             </StackPanel>
                         </StackPanel>
-                        <Button x:Name="BtnSampleFilter" Content="数据筛选" Click="SampleFilter_Click" Style="{StaticResource ToolbarAction}" Margin="0,0,0,3" ToolTip="按多个测试项的数值范围筛选样品并重算；再次点击可取消筛选"/>
                         <Button x:Name="ValueTableButton" Click="BtnShowValues_Click" Style="{StaticResource ToolbarAction}" Margin="0,0,0,3"><StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Table" Style="{StaticResource ButtonIcon}"/><TextBlock Text="原始值" VerticalAlignment="Center"/></StackPanel></Button>
                         <Button x:Name="CopyStatsButton" Click="BtnCopyAllStats_Click" Style="{StaticResource ToolbarAction}" Margin="0,0,0,3"><StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Copy" Style="{StaticResource ButtonIcon}"/><TextBlock Text="复制" VerticalAlignment="Center"/></StackPanel></Button>
                     </WrapPanel>

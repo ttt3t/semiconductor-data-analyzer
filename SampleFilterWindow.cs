@@ -24,11 +24,17 @@ public sealed class SampleFilterWindow : Window
 
     public SampleFilterWindow(IReadOnlyList<TestItemData> items, IReadOnlyList<SampleRange> rules, RetestMode mode)
     {
+        items = items.Where(i => i.Focus.IsFocused).ToArray();
+        var availableIds = items.Select(i => i.Id).ToHashSet(StringComparer.Ordinal);
+        int removedCount = rules.Count(r => !availableIds.Contains(r.ItemId));
+        rules = rules.Where(r => availableIds.Contains(r.ItemId)).ToArray();
         Title = "数据筛选"; Width = 850; Height = 520; MinWidth = 650; MinHeight = 350;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = System.Windows.Media.Brushes.White;
         var root = new DockPanel { Margin = new Thickness(18) }; Content = root;
-        var note = new TextBlock { Text = "添加测试项和闭区间范围，多个条件取交集；留空表示不限。输入单位与主列表一致。\n" +
+        var note = new TextBlock { Text = (items.Count == 0 ? "请先在主列表勾选关注的测试项。" : "仅列出主列表已关注的测试项。") +
+            (removedCount > 0 ? $" {removedCount} 个未关注项的原筛选条件将在应用时移除；返回则保留当前筛选。" : "") +
+            "\n添加测试项和闭区间范围，多个条件取交集；留空表示不限。输入单位与主列表一致。\n" +
             (mode != RetestMode.All ? "按当前首测/末测口径匹配（仅复测取末次复测值），允许分段测试；满足条件的芯片保留原始记录。" :
             "按当前口径逐条匹配记录；同条记录必须满足所有条件，缺测和非数值不通过筛选。"),
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) };
@@ -39,8 +45,9 @@ public sealed class SampleFilterWindow : Window
         actions.Children.Add(Button("取消数据筛选", () => { Rules = Array.Empty<SampleRange>(); DialogResult = true; }));
         actions.Children.Add(Button("应用", Apply)); actions.Children.Add(Button("返回", () => DialogResult = false));
         var choose = new DockPanel { Margin = new Thickness(0, 0, 0, 10) }; DockPanel.SetDock(choose, Dock.Top); root.Children.Add(choose);
-        var picker = new ComboBox { IsEditable = true, IsTextSearchEnabled = true, DisplayMemberPath = "Name", ItemsSource = items.Select(i => new RangeRow { Item = i }).ToArray(), MaxDropDownHeight = 320, MinWidth = 280, VerticalContentAlignment = VerticalAlignment.Center };
+        var picker = new ComboBox { IsEditable = true, IsTextSearchEnabled = true, DisplayMemberPath = "Name", ItemsSource = items.Select(i => new RangeRow { Item = i }).ToArray(), MaxDropDownHeight = 320, MinWidth = 280, VerticalContentAlignment = VerticalAlignment.Center, IsEnabled = items.Count > 0 };
         var add = Button("添加条件", () => { if (picker.SelectedItem is RangeRow row && !_rows!.Any(r => r.Item.Id == row.Item.Id)) { _rows!.Add(new RangeRow { Item = row.Item }); _grid!.Items.Refresh(); } });
+        add.IsEnabled = items.Count > 0;
         DockPanel.SetDock(add, Dock.Right); choose.Children.Add(add);
         var remove = Button("移除选中", () => { if (_grid!.SelectedItem is RangeRow row) { _rows!.Remove(row); _grid.Items.Refresh(); } });
         DockPanel.SetDock(remove, Dock.Right); choose.Children.Add(remove); choose.Children.Add(picker);
