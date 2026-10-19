@@ -1,0 +1,178 @@
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Runtime;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Threading;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    const BindingFlags Hidden = BindingFlags.Instance | BindingFlags.NonPublic;
+    static string folder = "";
+    static MainWindow? current;
+    static readonly List<Retired> retired = new();
+    static readonly List<object> samples = new();
+    static readonly List<WeakReference> closedMaps = new();
+    sealed record Retired(int Round, WeakReference Data, WeakReference Items, WeakReference Records,
+        WeakReference Column, WeakReference Numbers, WeakReference? Store, WeakReference Summaries, WeakReference View);
+    static object? Field(object value, string name) => value.GetType().GetField(name, Hidden)!.GetValue(value);
+    static void Set(object value, string name, object? data) => value.GetType().GetField(name, Hidden)!.SetValue(value, data);
+    static object? Call(object value, string name, params object?[] args) => value.GetType().GetMethod(name, Hidden)!.Invoke(value, args);
+    static void Pump()
+    {
+        var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.SystemIdle,
+            new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame);
+    }
+    static void Pause(int milliseconds)
+    {
+        // Leave a real dispatcher idle period. Repeatedly posting frame-exit work
+        // can starve native low-priority timer messages and falsify idle-GC results.
+        var frame = new DispatcherFrame();
+        var timer = new DispatcherTimer(DispatcherPriority.SystemIdle) { Interval = TimeSpan.FromMilliseconds(milliseconds) };
+        timer.Tick += (_, _) => { timer.Stop(); frame.Continue = false; };
+        timer.Start();
+        try { Dispatcher.PushFrame(frame); }
+        finally { timer.Stop(); }
+    }
+    static void Until(Func<bool> done)
+    {
+        var watch = Stopwatch.StartNew();
+        while (!done()) { if (watch.Elapsed.TotalSeconds > 120) throw new TimeoutException("Reopen did not settle; check for a modal notice."); Pump(); Thread.Sleep(5); }
+    }
+    static void Wait(Task task) { Until(() => task.IsCompleted); task.GetAwaiter().GetResult(); }
+    static void Settle(MainWindow main)
+    { Until(() => !(bool)Field(main, "_detailPending")! && ((SemaphoreSlim)Field(main, "_detailGate")!).CurrentCount == 1); Pause(150); }
+    static Task Open(MainWindow main, string path, AnalyzerConfig config)
+    {
+        // Same operation ownership, parser, preparation and commit as OpenDataAsync.
+        // Only suppress the serial-number notice (a blocking MessageBox in unattended runs).
+        return (Task)Call(main, "RunBusyAsync", (Func<Task>)(async () =>
+        {
+            long start = GC.GetTotalAllocatedBytes(); var timer = Stopwatch.StartNew();
+            var data = await Task.Run(() => DataFileService.Parse(path, config));
+            long parsed = GC.GetTotalAllocatedBytes(); long parseMs = timer.ElapsedMilliseconds;
+            var prepare = (Task)Call(main, "PrepareAnalysisAsync", data, config)!;
+            await prepare;
+            long prepared = GC.GetTotalAllocatedBytes();
+            Call(main, "CommitAnalysis", data, prepare.GetType().GetProperty("Result")!.GetValue(prepare));
+            Set(main, "_sources", new List<CsvImportSource> { new(path) });
+            Set(main, "_currentCsvPath", path); Set(main, "_currentDataName", Path.GetFileName(path));
+            Call(main, "RefreshOpenMaps");
+            Console.WriteLine($"ALLOC file={Path.GetFileName(path)} parse-MB={(parsed-start)/1048576.0:F2} prepare-MB={(prepared-parsed)/1048576.0:F2} commit-MB={(GC.GetTotalAllocatedBytes()-prepared)/1048576.0:F2} parse-ms={parseMs}");
+        }))!;
+    }
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static void Capture(MainWindow main, int round)
+    {
+        var data = (CsvParseResult)Field(main, "_data")!; if (data.Records.Count == 0) return;
+        var column = data.Items[data.Items.Count / 2].Values;
+        object numbers = Field(column, "_singleNumbers") ?? Field(column, "_numbers")!;
+        object? store = typeof(MeasurementCollection).GetProperty("RawStore", Hidden)!.GetValue(data.Records[0].Measurements);
+        retired.Add(new(round, new(data), new(data.Items), new(data.Records), new(column), new(numbers),
+            store == null ? null : new(store), new(Field(main, "_summaries")!), new(Field(main, "_summaryView")!)));
+    }
+    static void FullGc(bool compact)
+    {
+        if (compact) GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, true, compact);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, true, compact);
+        Pump();
+    }
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static void AssertRetiredCollected()
+    {
+        if (retired.Any(r => r.Data.IsAlive || r.Items.IsAlive || r.Records.IsAlive || r.Column.IsAlive || r.Numbers.IsAlive || r.Summaries.IsAlive || r.View.IsAlive) ||
+            OpenRetiredStores() != 0 || closedMaps.Any(w => w.IsAlive))
+            throw new InvalidOperationException("Retired data or closed Map windows remain rooted after full collection; inspect samples.jsonl.");
+    }
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static int OpenRetiredStores() => retired.Count(r => r.Store?.Target is { } store && !(bool)Field(store, "_disposed")!);
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static void CloseMaps(Application app)
+    {
+        foreach (var map in app.Windows.OfType<WaferMapWindow>().ToArray())
+        { closedMaps.Add(new(map)); map.Close(); }
+    }
+    static void Measure(int round, string phase, string name, long loadMilliseconds = 0)
+    {
+        using var process = Process.GetCurrentProcess(); process.Refresh(); var info = GC.GetGCMemoryInfo();
+        object reclaimer = Field(current!, "_memoryReclaimer")!;
+        long lastCollection = (long)reclaimer.GetType().GetField("_lastCollection", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        var row = new
+        {
+            Round = round, Phase = phase, File = name, LoadMilliseconds = loadMilliseconds,
+            WorkingSetMB = Math.Round(process.WorkingSet64 / 1048576.0, 2), PrivateMB = Math.Round(process.PrivateMemorySize64 / 1048576.0, 2),
+            ManagedMB = Math.Round(GC.GetTotalMemory(false) / 1048576.0, 2), HeapMB = Math.Round(info.HeapSizeBytes / 1048576.0, 2),
+            CommittedHeapMB = Math.Round(info.TotalCommittedBytes / 1048576.0, 2), FragmentedMB = Math.Round(info.FragmentedBytes / 1048576.0, 2),
+            Handles = process.HandleCount, Gen2 = GC.CollectionCount(2), AllocatedMB = Math.Round(GC.GetTotalAllocatedBytes() / 1048576.0, 2),
+            OldDatasets = retired.Count(r => r.Data.IsAlive), OldItemLists = retired.Count(r => r.Items.IsAlive),
+            OldRecords = retired.Count(r => r.Records.IsAlive), OldColumns = retired.Count(r => r.Column.IsAlive), OldArrays = retired.Count(r => r.Numbers.IsAlive),
+            OldSummaries = retired.Count(r => r.Summaries.IsAlive), OldViews = retired.Count(r => r.View.IsAlive), OpenOldStores = OpenRetiredStores(),
+            ClosedMapsAlive = closedMaps.Count(w => w.IsAlive), Windows = Application.Current.Windows.Count,
+            CanReclaim = (bool)typeof(MainWindow).GetProperty("CanReclaimMemory", Hidden)!.GetValue(current)!,
+            ReclaimPending = (bool)Field(reclaimer, "_pending")!,
+            Collections = (int)reclaimer.GetType().GetProperty("CollectionCount", Hidden)!.GetValue(reclaimer)!,
+            IdleSeconds = Math.Round(Stopwatch.GetElapsedTime((long)Field(reclaimer, "_lastActivity")!).TotalSeconds, 2),
+            SinceReclaimSeconds = lastCollection == 0 ? (double?)null : Math.Round(Stopwatch.GetElapsedTime(lastCollection).TotalSeconds, 2)
+        };
+        samples.Add(row); string text = JsonSerializer.Serialize(row); Console.WriteLine(text);
+        File.AppendAllText(Path.Combine(folder, "samples.jsonl"), text + Environment.NewLine);
+    }
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            int cycles = int.Parse(args[2]), idle = int.Parse(args[3]); bool forceEach = args[4].StartsWith("collect"); bool maps = args[4].Contains("maps");
+            int finalIdle = int.Parse(args[5]);
+            var paths = args.Skip(6).Select(Path.GetFullPath).ToArray(); var config = ConfigLoader.Load(args[1]);
+            // App.xaml has no shared resources. A plain Application avoids App's
+            // automatic product-management startup window and isolates the analyzer.
+            var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            string local = Path.Combine(folder, "user"); Directory.CreateDirectory(local);
+            typeof(AppSettings).GetField("_userDirectory", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, local);
+            typeof(AppSettings).GetField("_legacyDirectory", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, local);
+            ConfigLoader.Save(Path.Combine(local, "last_config.ini"), config);
+            var main = new MainWindow(new LayoutSettings(Path.Combine(folder, "layout.json")),
+                new RecentFilesService(Path.Combine(folder, "recent.json")), new UiPreferencesService(Path.Combine(folder, "ui.json")));
+            current = main;
+            Set(main, "_config", config);
+            main.Width = 1250; main.Height = 800; main.Show(); Pause(300);
+            Measure(0, "empty", "");
+            for (int round = 1; round <= cycles; round++)
+            {
+                string path = paths[(round - 1) % paths.Length]; Capture(main, round - 1);
+                var watch = Stopwatch.StartNew(); Console.WriteLine("OPEN " + round + " " + Path.GetFileName(path));
+                Wait(Open(main, path, config));
+                var grid = (DataGrid)main.FindName("DgTestItems");
+                grid.SelectedIndex = Math.Min(round % 7, grid.Items.Count - 1); Settle(main);
+                if (maps && round % 2 == 1)
+                {
+                    Call(main, "ShowBinMap", "SBIN", true); Call(main, "ShowBinMap", "HBIN", false);
+                    Call(main, "BtnPfMap_Click", main, new RoutedEventArgs()); Pause(100);
+                }
+                else if (maps)
+                    CloseMaps(app);
+                Measure(round, "loaded", Path.GetFileName(path), watch.ElapsedMilliseconds);
+                Pause(idle);
+                if (forceEach) { FullGc(false); Pause(100); }
+                Measure(round, forceEach ? "collected" : "idle", Path.GetFileName(path));
+            }
+            Pause(finalIdle); Measure(cycles, "settled-idle", "");
+            FullGc(false); Pause(300); Measure(cycles, "final-full-gc", "");
+            FullGc(true); Pause(300); Measure(cycles, "final-compact-gc", ""); AssertRetiredCollected();
+            Capture(main, cycles); CloseMaps(app); main.Close(); Pause(500); FullGc(true); Pause(500); Measure(cycles, "closed", ""); AssertRetiredCollected();
+            File.WriteAllText(Path.Combine(folder, "samples.json"), JsonSerializer.Serialize(samples, new JsonSerializerOptions { WriteIndented = true }));
+            Console.WriteLine("PROBE COMPLETE " + folder); app.Shutdown(); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

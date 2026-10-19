@@ -2,7 +2,6 @@ using System.Buffers;
 using System.Globalization;
 using System.IO;
 using System.Text;
-using Microsoft.VisualBasic.FileIO;
 using SemiconductorCsvAnalyzer.Models;
 
 namespace SemiconductorCsvAnalyzer.Services;
@@ -241,23 +240,30 @@ public static class IntegratedCsvService
     {
         using var file = SourceFileReader.Open(path);
         var stamp = new SourceFileStamp(file);
-        using var reader = new TextFieldParser(file, Encoding.UTF8, detectEncoding: true, leaveOpen: true)
-        { TextFieldType = FieldType.Delimited, HasFieldsEnclosedInQuotes = true, TrimWhiteSpace = false };
-        reader.SetDelimiters(",");
-        var marker = reader.ReadFields();
+        using var reader = new StreamReader(file, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, 65536, leaveOpen: true);
+        using var rows = CsvText.ReadExactRecords(reader, AnalysisOperation.Token).GetEnumerator();
+        string[]? ReadFields()
+        {
+            // Reuse the ordinary CSV reader. TextFieldParser creates large temporary
+            // substrings for wide integrated records (thousands of measurements).
+            while (rows.MoveNext())
+                if (!string.IsNullOrWhiteSpace(rows.Current)) return CsvParser.ParseLine(rows.Current, ',', true);
+            return null;
+        }
+        var marker = ReadFields();
         bool ftIdentity = marker != null && string.Join(",", marker) == Marker4;
         bool sourceSerial = ftIdentity || marker != null && string.Join(",", marker) == Marker3;
         bool context = sourceSerial || marker != null && string.Join(",", marker) == Marker2;
         int identityCount = IdentityColumns + (context ? 3 : 0) + (sourceSerial ? 2 : 0) + (ftIdentity ? 2 : 0);
         if (marker == null || (!context && string.Join(",", marker) != Marker)) throw new InvalidDataException("不支持的整合 CSV 格式。");
-        var header = reader.ReadFields() ?? throw new InvalidDataException("整合 CSV 缺少表头。");
+        var header = ReadFields() ?? throw new InvalidDataException("整合 CSV 缺少表头。");
         if (header.Length < identityCount || !header.Take(identityCount).SequenceEqual(Headers.Concat(context ? ContextHeaders : Array.Empty<string>())
             .Concat(sourceSerial ? SourceSerialHeaders : Array.Empty<string>())
             .Concat(ftIdentity ? UuidHeaders : Array.Empty<string>())))
             throw new InvalidDataException("整合 CSV 表头不完整。");
         string[] Metadata(string name)
         {
-            var row = reader.ReadFields();
+            var row = ReadFields();
             if (row == null || row.Length != header.Length || row[0] != name)
                 throw new InvalidDataException($"整合 CSV 缺少或损坏了 {name} 定义。");
             return row;
@@ -280,7 +286,7 @@ public static class IntegratedCsvService
         var measurements = new string?[items.Count];
         try
         {
-            while (reader.ReadFields() is { } row)
+            while (ReadFields() is { } row)
             {
                 AnalysisOperation.CheckCancellation();
                 if (row.Length != header.Length || string.IsNullOrWhiteSpace(row[0]) || string.IsNullOrEmpty(row[1]) || !ids.Add(row[1]) ||

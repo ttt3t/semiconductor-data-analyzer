@@ -119,6 +119,46 @@ static class Probe
         Check(loaded.Items[0].Values.Select(v => v.Value).SequenceEqual(a.Values.Select(v => v.Value)) && loaded.Items[0].Errors.Count == 2, "integrated export round trip retains sparse values and invalid text");
         string stdf = Stdf(); var stdfData = StdfParser.Parse(stdf, config); using var stdfLease = new DatasetLease(stdfData.Records);
         Check(stdfData.Items.All(i => Field(i.Values, "_singleNumbers") is float[]) && stdfData.Items[0].Values[0].Value == (double)1.3f, "real STDF R4 import selects exact float storage");
+        IntegratedText();
+    }
+
+    static void IntegratedText()
+    {
+        var item = new TestItemData { Id = "text", Name = "测项,\"名称\"\r\n第二行", DisplayName = " Display\nName ", Unit = " µA " };
+        string raw = "  bad,\"value\"\r\n\rreturn\nnext  ";
+        var rows = Rows(2); rows[0].Measurements["text"] = raw;
+        rows[1].Measurements["text"] = new string('x', 70000) + "\"\r\nend";
+        rows[0].SerialNumber = " \"SN\",\r\n001 ";
+        var data = DatasetService.Build(new() { item }, rows); using var lease = new DatasetLease(rows);
+        string file = P("quoted-integrated.csv"); IntegratedCsvService.Save(file, data);
+        string csv = File.ReadAllText(file); csv = csv.Insert(csv.IndexOf('\n') + 1, "\r\n\n");
+        File.WriteAllText(file, csv, new UTF8Encoding(true));
+        var loaded = IntegratedCsvService.Load(file); using var loadedLease = new DatasetLease(loaded.Records);
+        var target = loaded.Items.Single();
+        Check(target.Name == item.Name && target.DisplayName == item.DisplayName && target.Unit == item.Unit, "integrated names and units preserve commas, quotes, Unicode and CR/LF");
+        Check(loaded.Records[0].SerialNumber == rows[0].SerialNumber && loaded.Records[0].Measurements[target.Id] == raw, "integrated raw cells preserve leading spaces and all original line endings");
+        Check(loaded.Records[1].Measurements[target.Id] == rows[1].Measurements["text"], "wide quoted fields remain exact across stream buffer boundaries");
+        Check(loaded.Records.Count == 2 && target.Errors.Count == 2, "blank physical lines are skipped without discarding quoted invalid cells");
+        bool failed = false; File.AppendAllText(file, "\"unclosed");
+        try { IntegratedCsvService.Load(file); } catch (InvalidDataException ex) { failed = ex.Message.Contains("引号"); }
+        Check(failed, "malformed integrated quoted records fail instead of committing partial data");
+        File.WriteAllText(file, csv);
+        using var cancellation = new CancellationTokenSource(); cancellation.Cancel(); failed = false;
+        using (new AnalysisOperation(cancellation.Token))
+            try { IntegratedCsvService.Load(file); } catch (OperationCanceledException) { failed = true; }
+        Check(failed, "integrated streaming input obeys cancellation");
+        var wideItems = Enumerable.Range(0, 1000).Select(i => new TestItemData
+            { Id = "wide" + i, Name = "Wide" + i, DisplayName = "Wide" + i, TestNumber = i.ToString() }).ToList();
+        var wideRows = Rows(64);
+        foreach (var row in wideRows) row.Measurements = wideItems.ToDictionary(i => i.Id, _ => "1.23456789");
+        var wide = DatasetService.Build(wideItems, wideRows); using var wideLease = new DatasetLease(wideRows);
+        string wideFile = P("wide-integrated.csv"); IntegratedCsvService.Save(wideFile, wide);
+        long before = GC.GetTotalAllocatedBytes();
+        var wideLoaded = IntegratedCsvService.Load(wideFile); using var wideLoadedLease = new DatasetLease(wideLoaded.Records);
+        long allocated = GC.GetTotalAllocatedBytes() - before, bytes = new FileInfo(wideFile).Length;
+        Check(wideLoaded.Items.Count == 1000 && wideLoaded.Records.Count == 64 && allocated < bytes * 20 + 8L * 1024 * 1024,
+            "wide integrated CSV has bounded allocation instead of per-field large substring churn");
+        Console.WriteLine($"MEASURE wide-integrated source-bytes={bytes}, allocated-bytes={allocated}");
     }
 
     static string Stdf()
@@ -201,6 +241,11 @@ static class Probe
         var second = Create(() => true); Call(second, "RequestStartup"); Tick(second);
         Check(Count(second) == 0, "opening a second window does not compact the process again");
         Call(r, "Request"); Tick(r); Check(Count(r) == 1, "ordinary requests obey collection cooldown");
+        Check((bool)Field(r, "_pending")!, "cooldown defers rather than discards the final lifecycle request");
+        type.GetField("_lastCollection", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, Stopwatch.GetTimestamp() - Stopwatch.Frequency * 61);
+        type.GetField("_lastAllocated", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, GC.GetTotalAllocatedBytes() - 129L * 1024 * 1024);
+        Tick(r);
+        Check(Count(r) == 2 && !(bool)Field(r, "_pending")!, "deferred lifecycle request collects when cooldown expires");
         Call(r, "Request"); ((IDisposable)r).Dispose();
         Check(!(bool)Field(r, "_pending")!, "disposal stops timers and input subscriptions");
         ((IDisposable)second).Dispose();

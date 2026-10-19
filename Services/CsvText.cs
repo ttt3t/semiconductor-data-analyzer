@@ -6,6 +6,40 @@ namespace SemiconductorCsvAnalyzer.Services;
 /// <summary>CSV records can span physical lines; configured row numbers count logical records.</summary>
 internal static class CsvText
 {
+    // Integrated exports must round-trip CR/LF inside quoted raw fields exactly.
+    // Read in blocks without TextFieldParser's per-field substring allocations.
+    internal static IEnumerable<string> ReadExactRecords(TextReader reader, CancellationToken token,
+        int maxRecordCharacters = 8 * 1024 * 1024)
+    {
+        var buffer = new char[65536];
+        var record = new StringBuilder();
+        bool inQuotes = false, skipLf = false;
+        int read;
+        while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            token.ThrowIfCancellationRequested();
+            for (int i = 0; i < read; i++)
+            {
+                char c = buffer[i];
+                if (skipLf) { skipLf = false; if (c == '\n') continue; }
+                if (c == '"') inQuotes = !inQuotes; // Escaped pairs toggle twice.
+                if (!inQuotes && c is '\r' or '\n')
+                {
+                    skipLf = c == '\r';
+                    yield return record.ToString();
+                    record.Clear();
+                    continue;
+                }
+                if (record.Length >= maxRecordCharacters)
+                    throw new InvalidDataException("CSV 记录过长，请检查引号是否闭合。");
+                record.Append(c);
+            }
+        }
+        token.ThrowIfCancellationRequested();
+        if (inQuotes) throw new InvalidDataException("CSV 引号未闭合。");
+        if (record.Length > 0) yield return record.ToString();
+    }
+
     public static Encoding EncodingFor(string name)
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);

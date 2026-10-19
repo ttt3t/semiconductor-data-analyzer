@@ -63,6 +63,10 @@ internal sealed class IdleMemoryReclaimer : IDisposable
             return;
         }
         if (Stopwatch.GetElapsedTime(_lastActivity).TotalSeconds < 5) return;
+        // Keep the request pending until the process-wide cooldown expires. Dropping
+        // it here could leave the last replaced dataset uncollected indefinitely.
+        long last = Interlocked.Read(ref _lastCollection);
+        if (!_startupPending && last != 0 && Stopwatch.GetElapsedTime(last).TotalSeconds < 60) return;
 
         StopWaiting();
         bool startup = _startupPending;
@@ -70,7 +74,7 @@ internal sealed class IdleMemoryReclaimer : IDisposable
         _running = true;
         try
         {
-            bool collected = await Task.Run(() =>
+            bool? collected = await Task.Run<bool?>(() =>
             {
                 lock (CollectionGate)
                 {
@@ -83,7 +87,7 @@ internal sealed class IdleMemoryReclaimer : IDisposable
                         // Never copy a large loaded dataset just to lower an idle number.
                         compactStartup = GC.GetTotalMemory(false) <= 32L * 1024 * 1024;
                     }
-                    if (!compactStartup && _lastCollection != 0 && Stopwatch.GetElapsedTime(_lastCollection).TotalSeconds < 60) return false;
+                    if (!compactStartup && _lastCollection != 0 && Stopwatch.GetElapsedTime(_lastCollection).TotalSeconds < 60) return null;
                     long allocated = GC.GetTotalAllocatedBytes();
                     if (!compactStartup && allocated - _lastAllocated < 128L * 1024 * 1024) return false;
                     if (compactStartup)
@@ -94,14 +98,15 @@ internal sealed class IdleMemoryReclaimer : IDisposable
                     else
                     {
                         // Keep lifecycle reclamation asynchronous and rate limited.
-                        GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, blocking: false, compacting: false);
+                        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: false, compacting: false);
                     }
                     // Do not trim the process working set: live pages would fault
                     // back in during scrolling, without freeing the live dataset.
                     _lastAllocated = allocated; _lastCollection = Stopwatch.GetTimestamp(); return true;
                 }
             });
-            if (collected) CollectionCount++;
+            if (collected == true) CollectionCount++;
+            else if (collected == null && !_disposed && !_pending) Request();
         }
         finally
         {
