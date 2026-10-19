@@ -130,7 +130,7 @@
                         <DataGrid x:Name="DgFiles" SelectionMode="Extended" ColumnHeaderStyle="{StaticResource FilterableHeader}">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="文件" Binding="{Binding Name}" Width="180"/><DataGridTextColumn Header="批次" Binding="{Binding Lot}" Width="110"/>
-                                <DataGridTextColumn Header="步骤" Binding="{Binding Stage}" Width="180"/><DataGridTextColumn Header="晶圆覆盖" Binding="{Binding Wafer}" Width="110"/>
+                                <DataGridTextColumn Header="步骤" Binding="{Binding Stage}" Width="180"/><DataGridTextColumn Header="晶圆片号" Binding="{Binding Wafer}" Width="110"/>
                                 <DataGridTextColumn Header="测试时间" Binding="{Binding File.TestTimeText}" Width="180"/>
                                 <DataGridTextColumn Header="记录数" Binding="{Binding Records}" Width="80"/><DataGridTextColumn Header="状态" Binding="{Binding Status}" Width="180"/>
                                 <DataGridTextColumn Header="原路径" Binding="{Binding Path}" Width="450"/>

@@ -49,6 +49,7 @@ public static class StdfParser
                 for (int i = 0; i < pass.Records.Count; i++) orderedRecords.Add(pass.Records[i].Record);
             }
             var result = DatasetService.Build(catalog.Items, orderedRecords);
+            MeasurementDisplay.Configure(result.Items);
             result.StdfMetadata = catalog.Metadata.Complete();
             result.SourceDescription = "STDF V4" + (mode == StdfImportMode.Advantest93K ? "（93k：TSR 测试名称）" : "") +
                 (catalog.HasFunctional ? "；FTR：0=Pass、1=Fail" : "") +
@@ -171,7 +172,7 @@ public static class StdfParser
             {
                 if (!discovering) throw new InvalidDataException("STDF 两次读取的测试阈值不一致。");
                 item = new TestItemData { ColumnIndex = Items.Count, TestNumber = key.Test.Number.ToString(CultureInfo.InvariantCulture),
-                    Unit = limits.Unit, LowLimit = limits.Lower, HighLimit = limits.Upper };
+                    Unit = limits.Unit, LowLimit = limits.Lower, HighLimit = limits.Upper, IsStdfMeasurement = true };
                 family.Variants.Add(limits, item); Items.Add(item);
             }
             hasMultipleVariants = family.Variants.Count > 1;

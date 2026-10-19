@@ -9,7 +9,7 @@ public static class MapDataService
         bool IncludeSite(string value) => site == null || (string.IsNullOrWhiteSpace(value) ? "(空)" : value) == site;
         // Pool all wafer measurements once. A wafer switch must not change the meaning of a color.
         // Retain the PF map's existing valid-measurement and Site population.
-        var scale = HeatmapScale.Create(item.Values.Where(v => IncludeSite(v.Site)).Select(v => v.Value));
+        var scale = HeatmapScale.Create(item.Values.Where(v => IncludeSite(v.Site)).Select(v => v.Value * item.DisplayFactor));
         return data.Wafers.Select(wafer =>
         {
             var latest = new Dictionary<(int X, int Y), CsvRecord>();
@@ -25,11 +25,11 @@ public static class MapDataService
                 return new WaferDie
                 {
                     WaferId = wafer, X = r.X!.Value, Y = r.Y!.Value, Site = r.Site, SerialNumber = r.SerialNumber,
-                    SBin = r.SBin, HBin = r.HBin, Result = r.Result, Unit = item.Unit,
-                    Value = valid ? value : null, RawValue = raw, Category = category, Color = WaferMapWindow.ColorForCategory(category)
+                    SBin = r.SBin, HBin = r.HBin, Result = r.Result, Unit = item.ShownUnit,
+                    Value = valid ? value * item.DisplayFactor : null, RawValue = MeasurementDisplay.ExportText(item, raw), Category = category, Color = WaferMapWindow.ColorForCategory(category)
                 };
             }).ToList();
-            return new WaferMapPage(wafer, dies, scale, item.Unit, true);
+            return new WaferMapPage(wafer, dies, scale, item.ShownUnit, true);
         }).ToList();
     }
 

@@ -38,7 +38,7 @@ public static class DetailCalculator
         var statistics = StatisticsService.Calculate(values, item.LowLimit, item.HighLimit);
         token.ThrowIfCancellationRequested();
         var scatter = ScatterSeries.BuildSorted(values, item.LowLimit, item.HighLimit, request.ScatterOrder, token, request.WaferOrder);
-        return new(values, statistics, scatter);
+        return new(values, statistics, scatter.Scale(item.DisplayFactor));
     }
 
     internal static DetailResult CreateHistogram(DetailRequest request, PreparedDetail prepared, CancellationToken token)
@@ -59,7 +59,9 @@ public static class DetailCalculator
             bins = HistogramService.CreateFixedBins(values, request.BinCount, item.LowLimit,
                 item.HighLimit, request.IncludeOutOfLimit);
         token.ThrowIfCancellationRequested();
-        return new(statistics, bins, mean, sigma, prepared.Scatter);
+        double factor = item.DisplayFactor;
+        if (factor != 1) foreach (var bin in bins) { bin.From *= factor; bin.To *= factor; }
+        return new(statistics, bins, mean * factor, sigma * factor, prepared.Scatter);
     }
 }
 
@@ -92,7 +94,7 @@ public sealed class DetailCache
             !(_waferOrder == null ? request.WaferOrder == null : request.WaferOrder != null && _waferOrder.SequenceEqual(request.WaferOrder)))
         {
             var scatter = ScatterSeries.BuildSorted(_prepared.Values, request.Item.LowLimit,
-                request.Item.HighLimit, request.ScatterOrder, token, request.WaferOrder);
+                request.Item.HighLimit, request.ScatterOrder, token, request.WaferOrder).Scale(request.Item.DisplayFactor);
             token.ThrowIfCancellationRequested();
             _prepared = _prepared with { Scatter = scatter };
             foreach (var cached in _modes.Keys.ToArray()) _modes[cached] = _modes[cached] with { Scatter = scatter };

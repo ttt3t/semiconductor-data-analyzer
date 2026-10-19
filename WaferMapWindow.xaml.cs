@@ -142,6 +142,24 @@ public partial class WaferMapWindow : Window
     private void ApplySelectedPage()
     {
         if (!_ready || WaferList.SelectedItem is not WaferMapPage page) return;
+        if (_customRange is { } previous && _unit != page.Unit)
+        {
+            if (MeasurementDisplay.ConversionFactor(_unit, page.Unit) is double factor &&
+                double.IsFinite(previous.Blue * factor) && double.IsFinite(previous.Green * factor) && double.IsFinite(previous.Red * factor))
+            {
+                _customRange = (previous.Blue * factor, previous.Green * factor, previous.Red * factor);
+                TxtHeatBlue.Text = _customRange.Value.Blue.ToString("G17", CultureInfo.InvariantCulture);
+                TxtHeatGreen.Text = _customRange.Value.Green.ToString("G17", CultureInfo.InvariantCulture);
+                TxtHeatRed.Text = _customRange.Value.Red.ToString("G17", CultureInfo.InvariantCulture);
+            }
+            else
+            {
+                _customRange = null; _useCustomRange = false; _useSigmaRange = true;
+                _updatingHeatRange = true;
+                SigmaRangeMode.IsChecked = true; CustomRangeMode.IsChecked = MinMaxRangeMode.IsChecked = false;
+                _updatingHeatRange = false;
+            }
+        }
         _pfDies = page.Dies;
         _heatmapScale = _useCustomRange && _customRange is { } custom
             ? page.HeatmapScale?.WithCustomRange(custom.Blue, custom.Green, custom.Red)

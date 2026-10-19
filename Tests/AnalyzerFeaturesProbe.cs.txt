@@ -1,0 +1,136 @@
+using System.IO;
+using System.Reflection;
+using System.Text;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Threading;
+using ClosedXML.Excel;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Controls;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int count; static string folder = "";
+    static string P(string name) => Path.Combine(folder, name);
+    static void Check(bool condition, string message) { if (!condition) throw new Exception(message); count++; Console.WriteLine("PASS " + message); }
+    static bool Near(double? a, double b) => a.HasValue && Math.Abs(a.Value - b) <= Math.Max(1e-12, Math.Abs(b) * 1e-10);
+    static object? Field(object target, string name) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target);
+    static void Set(object target, string name, object value) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, value);
+    static object? Call(object target, string name, params object[] args) => target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(target, args);
+    static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame); }
+    static void Wait(Task task) { var timer = System.Diagnostics.Stopwatch.StartNew(); while (!task.IsCompleted) { if (timer.ElapsedMilliseconds > 45000) throw new TimeoutException(); Pump(); Thread.Sleep(2); } task.GetAwaiter().GetResult(); Pump(); }
+    static void Save(Window window, string name)
+    {
+        window.UpdateLayout(); var root = (FrameworkElement)window.Content; root.UpdateLayout();
+        var drawing = new System.Windows.Media.DrawingVisual(); using (var dc = drawing.RenderOpen()) { var bounds = new Rect(0, 0, root.ActualWidth, root.ActualHeight); dc.DrawRectangle(window.Background ?? System.Windows.Media.Brushes.White, null, bounds); dc.DrawRectangle(new System.Windows.Media.VisualBrush(root), null, bounds); }
+        var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap((int)root.ActualWidth, (int)root.ActualHeight, 96, 96, System.Windows.Media.PixelFormats.Pbgra32); bitmap.Render(drawing);
+        var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder(); encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap)); using var file = File.Create(P(name)); encoder.Save(file);
+    }
+    static CsvParseResult Data(string unit = "A", bool stdf = true)
+    {
+        var item = new TestItemData { Id = "i", Name = "Current", DisplayName = "Current", TestNumber = "101", Unit = unit, IsStdfMeasurement = stdf, LowLimit = .001, HighLimit = .003 };
+        var second = new TestItemData { Id = "j", Name = "Voltage", DisplayName = "Voltage", TestNumber = "102", Unit = "V", LowLimit = 0, HighLimit = 2 };
+        var records = new List<CsvRecord>();
+        void Add(string id, int x, string site, string wafer, string bin, params (string, string)[] values) => records.Add(new CsvRecord { Id = id, X = x, Y = 0, WaferId = wafer, SerialNumber = id, Site = site, SBin = bin, HBin = bin, Measurements = values.ToDictionary(v => v.Item1, v => v.Item2) });
+        Add("r1", 0, "1", "W1", "1", ("i", ".001"), ("j", "1"));
+        Add("r2", 1, "2", "W1", "2", ("i", ".004"), ("j", "3"));
+        Add("r3", 0, "1", "W2", "1", ("i", ".002"), ("j", "1.5"));
+        Add("r4", 2, "2", "W2", "2", ("i", "bad"), ("j", "1"));
+        var data = DatasetService.Build(new() { item, second }, records); MeasurementDisplay.Configure(data.Items); return data;
+    }
+    static string Stdf()
+    {
+        string path = P("synthetic-units.stdf"); using var output = File.Create(path); using var writer = new BinaryWriter(output);
+        void C(BinaryWriter w, string text) { var bytes = Encoding.ASCII.GetBytes(text); w.Write((byte)bytes.Length); w.Write(bytes); }
+        void R(byte type, byte sub, Action<BinaryWriter> fill) { using var buffer = new MemoryStream(); using (var w = new BinaryWriter(buffer, Encoding.ASCII, true)) fill(w); writer.Write((ushort)buffer.Length); writer.Write(type); writer.Write(sub); writer.Write(buffer.ToArray()); }
+        R(0, 10, w => { w.Write((byte)2); w.Write((byte)4); });
+        R(1, 10, w => { w.Write((uint)0); w.Write((uint)0); w.Write((byte)1); w.Write((byte)'P'); w.Write((byte)' '); w.Write((byte)' '); w.Write((ushort)0); w.Write((byte)' '); foreach (string v in new[] { "LOT", "PRODUCT", "NODE", "TESTER", "JOB", "REV" }) C(w, v); });
+        R(2, 10, w => { w.Write((byte)1); w.Write((byte)1); w.Write((uint)0); C(w, "W-STDF"); });
+        R(5, 10, w => { w.Write((byte)1); w.Write((byte)1); });
+        R(15, 10, w => { w.Write((uint)101); w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((byte)0); w.Write(.002f); C(w, "Current"); C(w, ""); w.Write((byte)0); w.Write((sbyte)0); w.Write((sbyte)0); w.Write((sbyte)0); w.Write(.001f); w.Write(.003f); C(w, "A"); });
+        R(5, 20, w => { w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((ushort)1); w.Write((ushort)1); w.Write((ushort)1); w.Write((short)2); w.Write((short)3); w.Write((uint)0); C(w, "STDF-1"); });
+        R(2, 20, w => { w.Write((byte)1); w.Write((byte)1); for (int i = 0; i < 6; i++) w.Write((uint)0); C(w, "W-STDF"); }); R(1, 20, w => { w.Write((uint)0); w.Write((byte)' '); }); return path;
+    }
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            var app = new App(); app.InitializeComponent(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown; SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var operation = new AnalysisOperation(); var config = new AnalyzerConfig();
+            var data = Data(); using var lease = new DatasetLease(data.Records); var item = data.Items[0];
+            Check(item.ShownUnit == "mA" && item.DisplayFactor == 1000 && item.Unit == "A" && Near(item.LowLimit, .001), "STDF display prefixes preserve backend units and thresholds");
+            Check(Near(item.Values[0].Value, .001) && data.Records[0].Measurements["i"] == ".001", "display configuration does not mutate numeric or raw measurements");
+            var summary = SummaryService.Build(data.Items, new[] { "1", "2" }, true, config)[0];
+            Check(Near(summary.Mean, 7.0 / 3) && summary.Unit == "mA" && Near(summary.Max, 4) && Near(summary.Min, 1) && summary.Fails == 1 && summary.Eorr == 1, "all summary dimensions scale with counts and classifications unchanged");
+            summary.RunValue = 4; Check(summary.RunValueFails, "Run failure highlight compares display values against display limits"); summary.RunValue = 2; Check(!summary.RunValueFails, "Run in-spec classification preserved after scaling");
+            foreach (var sample in new[] { ("A", .000002, "uA"), ("V", -.002, "mV"), ("s", .000002, "us"), ("S", .000002, "uS"), ("Hz", 2500000.0, "MHz"), ("Hz", 2000.0, "kHz"), ("A", 0.0, "A"), ("mA", .002, "mA") })
+            {
+                var unitItem = new TestItemData { Id = "u", Unit = sample.Item1, IsStdfMeasurement = true };
+                var one = DatasetService.Build(new() { unitItem }, new() { new CsvRecord { Measurements = new Dictionary<string, string> { ["u"] = sample.Item2.ToString("R", System.Globalization.CultureInfo.InvariantCulture) } } });
+                MeasurementDisplay.Configure(one.Items); Check(unitItem.ShownUnit == sample.Item3, "SI prefix " + sample.Item1 + " " + sample.Item2);
+            }
+            var csv = Data(stdf: false); MeasurementDisplay.Configure(csv.Items); Check(csv.Items[0].DisplayFactor == 1 && csv.Items[0].ShownUnit == "A", "ordinary CSV values and units retain their original interpretation");
+            Check(MeasurementDisplay.ConversionFactor("mA", "uA") == 1000 && MeasurementDisplay.ConversionFactor("MHz", "Hz") == 1000000 && MeasurementDisplay.ConversionFactor("A", "V") == null, "prefix conversion preserves case and physical dimensions");
+            var detail = DetailCalculator.Calculate(new(item, null, 0, 20, true, true, true, true, true), default);
+            Check(Near(detail.Mean, summary.Mean) && Near(detail.Scatter.Minimum, 1) && Near(detail.Scatter.Maximum, 4) && detail.Bins.All(b => b.From >= 1 && b.To <= 4.00001), "histogram and scatter share scaled coordinates");
+            var cache = new DetailCache(); var grouped = cache.Calculate(new(item, null, 0, 20, true, true, true, true, true, ScatterOrder: ScatterOrder.Site), default);
+            Check(Near(grouped.Scatter.Maximum, 4), "cached scatter reorder retains display scale");
+            var maps = MapDataService.PfPages(data, item, null);
+            Check(maps.All(m => m.Unit == "mA" && Near(m.HeatmapScale!.Mean, summary.Mean)) && Near(maps[0].Dies[0].Value, 1), "multi-wafer PF map shares scaled legend and values");
+            var mapWindow = new WaferMapWindow("synthetic", maps); mapWindow.Show(); Pump(); Set(mapWindow, "_customRange", (0.0, 2.0, 5.0)); Set(mapWindow, "_useCustomRange", true);
+            item.DisplayFactor = 1000000; item.DisplayUnit = "uA"; mapWindow.SetPages(MapDataService.PfPages(data, item, null));
+            Check(((ValueTuple<double, double, double>)Field(mapWindow, "_customRange")!).Item2 == 2000, "PF custom color anchors follow unit prefix changes"); mapWindow.Close(); item.DisplayFactor = 1000; item.DisplayUnit = "mA";
+            string exported = P("scaled.csv"); IntegratedCsvService.Save(exported, data, data.Wafers.ToArray(), RetestMode.All);
+            var reopened = CsvParser.Parse(exported, config); Check(reopened.Items[0].Unit == "mA" && Near(reopened.Items[0].LowLimit, 1) && Near(reopened.Items[0].Values[0].Value, 1), "scaled data export round trips without repeated scaling");
+            Check(StatisticsService.Calculate(reopened.Items[0].Values, reopened.Items[0].LowLimit, reopened.Items[0].HighLimit).InSpec == 2 && data.Items[0].Unit == "A", "export preserves failure results and leaves source untouched");
+            string realStdf = Stdf(); var stdf = DataFileService.Parse(realStdf, config);
+            Check(stdf.Items[0].IsStdfMeasurement && stdf.Items[0].ShownUnit == "mA" && Math.Abs(stdf.Items[0].Values[0].Value - .002) < 1e-8, "standard STDF import enables presentation scaling");
+            string report = P("scaled.xlsx"); Wait(XlsxReportService.SaveAsync(report, data, config, new(data.Wafers.ToArray(), RetestMode.All, null, 0, true, new[] { item.Id }), "synthetic"));
+            using (var workbook = new XLWorkbook(report)) Check(workbook.Worksheets.Count == 4 && workbook.Worksheet(1).Cell(8, 9).GetString() == "mA" && Near(workbook.Worksheet(1).Cell(8, 10).GetDouble(), 1) && Near(workbook.Worksheet(1).Cell(8, 16).GetDouble(), 7.0 / 3), "XLSX summary and focused chart report use consistent display units");
+            var rules = new[] { new SampleRange("i", .001, .002), new SampleRange("j", null, 1.1) };
+            var filtered = SampleFilterService.Apply(data, rules, RetestMode.All);
+            Check(filtered.Records.Count == 1 && filtered.Records[0].Id == "r1", "multiple range conditions take intersection with inclusive boundaries");
+            Check(filtered.Items[0].Values.Count == 1 && filtered.Items[0].ShownUnit == "mA" && BinStatisticsService.Build(filtered.Records, RetestMode.Last, config).ChipCount == 1 && MapDataService.PfPages(filtered, filtered.Items[0], null).Sum(p => p.Dies.Count) == 1, "filtered statistics, BIN and maps share one sample population");
+            Check(SampleFilterService.Apply(data, new[] { new SampleRange("i", 1, 2) }, RetestMode.All).Records.Count == 0, "empty filter result is supported");
+            Check(ReferenceEquals(data, SampleFilterService.Apply(data, Array.Empty<SampleRange>(), RetestMode.All)) && data.Records.Count == 4, "removing filters restores original dataset without re-reading files");
+            bool bad = false; try { SampleFilterService.Apply(data, new[] { new SampleRange("i", 2, 1) }, RetestMode.All); } catch (InvalidDataException) { bad = true; } Check(bad, "invalid range fails before changing active data");
+            var a = new TestItemData { Id = "a" }; var b = new TestItemData { Id = "b" };
+            CsvRecord R(string id, params (string, string)[] values) => new() { Id = id, WaferId = "W", X = 0, Y = 0, Measurements = values.ToDictionary(p => p.Item1, p => p.Item2) };
+            var retests = DatasetService.Build(new() { a, b }, new() { R("first", ("a", "1"), ("b", "5")), R("later-a", ("a", "2")), R("later-b", ("b", "3")) });
+            var retestRules = new[] { new SampleRange("a", 2, 2), new SampleRange("b", 3, 3) };
+            Check(SampleFilterService.Apply(retests, retestRules, RetestMode.Last).Records.Count == 3 && SampleFilterService.Apply(retests, retestRules, RetestMode.First).Records.Count == 0, "first and last filter membership respects partial retest deduplication");
+            Check(SampleFilterService.Apply(retests, retestRules, RetestMode.OnlyRetests).Records.Count == 3 && DatasetService.SelectRetests(SampleFilterService.Apply(retests, retestRules, RetestMode.OnlyRetests), RetestMode.OnlyRetests).Items[0].Values.Count == 1, "only-retest filtering retains identity history and retest measurements");
+            Check(SampleFilterService.Apply(retests, retestRules, RetestMode.All).Records.Count == 0, "all-record mode does not join conditions from unrelated test records");
+            Check(ScatterPlotControl.LimitRange(1, 3) == (0.0, 4.0) && ScatterPlotControl.LimitRange(null, 3) == null && ScatterPlotControl.LimitRange(3, 1) == null, "Zoom limit uses half-span padding and safely falls back for absent limits");
+            var plot = new ScatterPlotControl { Width = 900, Height = 350 }; plot.SetSeries(detail.Scatter, 1, 3, "mA"); var plotWindow = new Window { Content = plot }; plotWindow.Show(); Pump(); plot.UseLimitRange = true;
+            Check(Near((double)Field(plot, "_dataMinY")!, 0) && Near((double)Field(plot, "_dataMaxY")!, 4), "Zoom limit updates rendered vertical range");
+            for (int i = 0; i < 110; i++) Call(plot, "ZoomAt", new Point(400, 150), 120);
+            Check((double)Field(plot, "_scaleX")! > 10000, "scatter supports substantially wider zoom magnification");
+            for (int i = 0; i < 220; i++) Call(plot, "ZoomAt", new Point(400, 150), -120);
+            Check((double)Field(plot, "_scaleX")! < .01, "scatter can zoom out beyond its original 20 percent bound");
+            plot.UseLimitRange = false; Check((double)Field(plot, "_dataMinY")! < 1 && (double)Field(plot, "_dataMaxY")! > 4, "Zoom all restores full measurement extent");
+            plot.IsYAxisLocked = true; double lockedMin = (double)Field(plot, "_dataMinY")!; plot.SetSeries(detail.Scatter.Scale(1000), 1000, 3000, "uA");
+            Check(Near((double)Field(plot, "_dataMinY")!, lockedMin * 1000), "locked Y range follows physical units across prefix changes"); plotWindow.Close();
+            var filterWindow = new SampleFilterWindow(data.Items, rules, RetestMode.All); filterWindow.Show(); Pump(); Save(filterWindow, "sample-filter.png"); filterWindow.Close();
+            string local = P("user"); Directory.CreateDirectory(local); typeof(AppSettings).GetField("_userDirectory", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, local);
+            var main = new MainWindow(new LayoutSettings(P("layout.json")), new RecentFilesService(P("recent.json")), new UiPreferencesService(P("ui.json"))); main.Show(); Wait(main.OpenManagedFilesAsync(new[] { new CsvImportSource(exported) }, config, RetestMode.All));
+            var original = (CsvParseResult)Field(main, "_data")!; var ids = original.Items.Select(i => i.Id).ToArray();
+            Set(main, "_sampleRanges", new[] { new SampleRange(ids[0], 1, 2) }); Wait((Task)Call(main, "RefreshTestItemList")!);
+            var scoped = (CsvParseResult)Field(main, "_scopeData")!; Check(scoped.Records.Count == 2 && ReferenceEquals(original, Field(main, "_data")), "main window commits filtered view while preserving loaded data");
+            Wait((Task)Call(main, "RefreshTestItemList")!); Check(ReferenceEquals(scoped, Field(main, "_scopeData")), "list recomputation reuses unchanged filtered columns");
+            var detailTimer = System.Diagnostics.Stopwatch.StartNew(); while ((bool)Field(main, "_detailPending")! && detailTimer.ElapsedMilliseconds < 10000) { Pump(); Thread.Sleep(5); }
+            Save(main, "analyzer.png"); Set(main, "_sampleRanges", Array.Empty<SampleRange>()); Wait((Task)Call(main, "RefreshTestItemList")!); Check(ReferenceEquals(original, Field(main, "_scopeData")), "main window cancellation restores original population");
+            bool failed = false; try { Wait(main.OpenManagedFilesAsync(new[] { new CsvImportSource(P("absent.stdf")) }, config, RetestMode.All)); } catch (InvalidDataException ex) { failed = ex.Message.Contains("absent.stdf"); }
+            Check(failed && ReferenceEquals(original, Field(main, "_data")) && main.IsVisible, "failed managed open identifies the first file and keeps previous data and window"); main.Close();
+            string logs = P("logs-" + Guid.NewGuid().ToString("N"));
+            string reason = OpenFailureReport.Describe(new AggregateException(new InvalidDataException("units mismatch")), new[] { P("bad.csv") }, logs);
+            Check(reason.Contains("units mismatch") && reason.Contains("bad.csv") && Directory.GetFiles(logs, "*.log").Length == 1, "managed failure reports contain the cause, selected path and detailed log");
+            var canceled = new CancellationTokenSource(); canceled.Cancel(); bool canceledOk = false; using (new AnalysisOperation(canceled.Token)) try { SampleFilterService.Apply(data, rules, RetestMode.All); } catch (OperationCanceledException) { canceledOk = true; } Check(canceledOk, "filter work respects cancellation");
+            Console.WriteLine($"ALL {count} CHECKS PASSED"); app.Shutdown(); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

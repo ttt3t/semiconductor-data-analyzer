@@ -147,16 +147,17 @@ public partial class MainWindow
     {
         var record = (uint)_runIndex < (uint)_data.Records.Count ? _data.Records[_runIndex] : null;
         string site = record == null ? "" : SiteKey(record.Site);
+        bool included = record != null && (_sampleIncludedIds == null || _sampleIncludedIds.Contains(record.Id));
         // Read one position from each numeric column; never materialize raw strings or scan every die.
         foreach (var summary in _summaries)
         {
             double? value = null;
-            if (record != null && (summary.IsCombined || summary.Site == site) &&
+            if (included && record != null && (summary.IsCombined || summary.Site == site) &&
                 (summary.IsWaferCombined || summary.Wafer == record.WaferId) &&
                 _runItems.TryGetValue(summary.Data.Id, out var source))
             {
                 double number = source.Values.GetSourceRowValue(_runIndex);
-                if (double.IsFinite(number)) value = number;
+                if (double.IsFinite(number)) value = number * summary.Data.DisplayFactor;
             }
             summary.RunValue = value;
         }

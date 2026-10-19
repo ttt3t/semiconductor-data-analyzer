@@ -11,6 +11,13 @@ public sealed class TestItemData
     public string SBin { get; set; } = "";
     public string HBin { get; set; } = "";
     public string Unit { get; set; } = "";
+    // Presentation only. Raw columns, thresholds and UUID identities keep source units.
+    public bool IsStdfMeasurement { get; set; }
+    public double DisplayFactor { get; set; } = 1;
+    public string DisplayUnit { get; set; } = "";
+    public string ShownUnit => DisplayUnit.Length > 0 ? DisplayUnit : Unit;
+    public double? DisplayLowLimit => LowLimit * DisplayFactor;
+    public double? DisplayHighLimit => HighLimit * DisplayFactor;
     public double? LowLimit { get; set; }
     public double? HighLimit { get; set; }
     public TestValueColumn Values { get; } = new();

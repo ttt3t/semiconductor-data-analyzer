@@ -138,9 +138,9 @@ public static class IntegratedCsvService
                     .Concat(sourceSerial ? SourceSerialHeaders : Array.Empty<string>())
                     .Concat(ftIdentity ? UuidHeaders : Array.Empty<string>()).Concat(items.Select(i => i.Name)));
                 Metadata("#TestNumber", i => i.TestNumber);
-                Metadata("#LSL", i => Number(i.LowLimit));
-                Metadata("#USL", i => Number(i.HighLimit));
-                Metadata("#Unit", i => i.Unit);
+                Metadata("#LSL", i => Number(i.DisplayLowLimit));
+                Metadata("#USL", i => Number(i.DisplayHighLimit));
+                Metadata("#Unit", i => i.ShownUnit);
                 Metadata("#SBIN", i => i.SBin);
                 Metadata("#HBIN", i => i.HBin);
                 Metadata("#DisplayName", i => i.DisplayName);
@@ -217,6 +217,8 @@ public static class IntegratedCsvService
                             values[i] = present ? raw.ToString() : "";
                         }
                     }
+                    for (int i = 0; i < items.Count; i++)
+                        if (presence[i] == '1') values[i] = MeasurementDisplay.ExportText(items[i], values[i]);
                     Row(new[] { record.WaferId, record.Id, record.SerialNumber, record.X?.ToString(CultureInfo.InvariantCulture) ?? "",
                         record.Y?.ToString(CultureInfo.InvariantCulture) ?? "", record.Site, record.Result, record.SBin, record.HBin, new string(presence) }
                         .Concat(context ? new[] { record.Product, record.Program, record.Lot } : Array.Empty<string>())

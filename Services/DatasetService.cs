@@ -256,7 +256,10 @@ public static class DatasetService
     public static CsvParseResult LoadSources(IReadOnlyList<CsvImportSource> sources, AnalyzerConfig config)
     {
         if (sources.Count == 0) throw new InvalidDataException("没有可重新读取的数据文件。");
-        var result = ParseSource(sources[0], config);
+        CsvParseResult result;
+        try { result = ParseSource(sources[0], config); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        { throw new InvalidDataException($"文件“{sources[0].Path}”导入失败：{ex.Message}", ex); }
         return sources.Count == 1 ? result : AppendSources(result, sources.Skip(1).ToArray(), config);
     }
 
@@ -379,6 +382,7 @@ public static class DatasetService
     private static CsvParseResult CompleteMerge(CsvParseResult definitions)
     {
         var merged = Build(definitions.Items, definitions.Records);
+        MeasurementDisplay.Configure(merged.Items);
         string priorNotice = definitions.SerialNumberNotice;
         merged.ReassignedSerialNumberCount = definitions.ReassignedSerialNumberCount;
         if (SerialNumberService.Normalize(merged))
@@ -487,6 +491,7 @@ public static class DatasetService
     {
         Id = item.Id, Focus = item.Focus, ColumnIndex = item.ColumnIndex, Name = item.Name, DisplayName = item.DisplayName,
         TestNumber = item.TestNumber, Unit = item.Unit, SBin = item.SBin, HBin = item.HBin,
+        IsStdfMeasurement = item.IsStdfMeasurement, DisplayFactor = item.DisplayFactor, DisplayUnit = item.DisplayUnit,
         LowLimit = item.LowLimit, HighLimit = item.HighLimit
     };
 }

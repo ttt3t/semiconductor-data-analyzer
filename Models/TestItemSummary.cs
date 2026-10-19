@@ -13,7 +13,7 @@ public sealed class TestItemSummary : INotifyPropertyChanged
     public string DisplayName => Data.DisplayName;
     public string SBin => Data.SBin;
     public string HBin => Data.HBin;
-    public string Unit => Data.Unit;
+    public string Unit => Data.ShownUnit;
 
     public string Site { get; set; } = "";
     public string Wafer { get; set; } = CombinedWafer;
@@ -43,7 +43,7 @@ public sealed class TestItemSummary : INotifyPropertyChanged
     }
     public event PropertyChangedEventHandler? PropertyChanged;
     public bool RunValueFails => RunValue is double value && double.IsFinite(value) && Data != null &&
-        (Data.LowLimit is double low && value < low || Data.HighLimit is double high && value > high);
+        (Data.DisplayLowLimit is double low && value < low || Data.DisplayHighLimit is double high && value > high);
     public double? Median { get; set; }
     public double Sigma { get; set; }
     public double? RobustMean { get; set; }
@@ -57,8 +57,8 @@ public sealed class TestItemSummary : INotifyPropertyChanged
     public double SiteSort => NumericText.SortKey(Site);
     public double SBinSort => NumericText.SortKey(SBin);
     public double HBinSort => NumericText.SortKey(HBin);
-    public double LslSort => NumericText.SortKey(Data?.LowLimit);
-    public double UslSort => NumericText.SortKey(Data?.HighLimit);
+    public double LslSort => NumericText.SortKey(Data?.DisplayLowLimit);
+    public double UslSort => NumericText.SortKey(Data?.DisplayHighLimit);
 
     public bool IsCombined => Site == CombinedSite;
 }

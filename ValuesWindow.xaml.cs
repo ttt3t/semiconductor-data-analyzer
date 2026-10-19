@@ -15,9 +15,10 @@ public partial class ValuesWindow : Window
     private sealed class ValueRow
     {
         private readonly TestValue _sample;
-        public ValueRow(TestValue sample) { _sample = sample; RawText = sample.RawText; }
+        private readonly double _factor;
+        public ValueRow(TestValue sample, double factor) { _sample = sample; _factor = factor; RawText = factor == 1 ? sample.RawText : (sample.Value * factor).ToString("G17", System.Globalization.CultureInfo.InvariantCulture); }
         public string RawText { get; }
-        public double Value => _sample.Value;
+        public double Value => _sample.Value * _factor;
         public string SerialNumber => _sample.SerialNumber;
         public int? X => _sample.X;
         public int? Y => _sample.Y;
@@ -29,11 +30,11 @@ public partial class ValuesWindow : Window
         public double HBinSort => _sample.HBinSort;
     }
 
-    public ValuesWindow(string title, IReadOnlyList<TestValue> values)
+    public ValuesWindow(string title, IReadOnlyList<TestValue> values, double displayFactor = 1)
     {
         InitializeComponent();
         var lease = new DatasetLease(values.Select(v => v.Record));
-        try { _values = values.Select(value => new ValueRow(value)).ToArray(); }
+        try { _values = values.Select(value => new ValueRow(value, displayFactor)).ToArray(); }
         catch { lease.Dispose(); throw; }
         Closed += (_, _) => lease.Dispose();
         Title = title;

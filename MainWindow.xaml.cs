@@ -138,7 +138,7 @@ public partial class MainWindow : Window
             _summaries = new();
             _allItems = new();
             _devices = new();
-            _data = new();
+            _data = new(); _scopeData = _scopeSource = null; _sampleRanges = _scopeRanges = Array.Empty<SampleRange>(); _sampleIncludedIds = null;
             _sources.Clear();
             _datasetLease?.Dispose(); _datasetLease = null;
             _runIndex = -1;
@@ -461,9 +461,9 @@ public partial class MainWindow : Window
     private async void BtnExportData_Click(object sender, RoutedEventArgs e)
     {
         if (_isBusy) return;
-        if (_data.Records.Count == 0)
-        { MessageBox.Show("没有可导出的数据。", "导出数据", MessageBoxButton.OK, MessageBoxImage.Information); return; }
-        var options = new ExportDataWindow(_data.Wafers, _config.OutlierSigma) { Owner = this };
+        if (ActiveData.Records.Count == 0)
+        { MessageBox.Show("没有可导出的数据，请先取消或调整数据筛选。", "导出数据", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        var options = new ExportDataWindow(ActiveData.Wafers, _config.OutlierSigma) { Owner = this };
         if (options.ShowDialog() != true) return;
         var wafers = options.SelectedWafers;
         var mode = options.Mode;
@@ -475,7 +475,7 @@ public partial class MainWindow : Window
         {
             await RunBusyAsync(async () =>
             {
-                int count = await Task.Run(() => IntegratedCsvService.Save(file.FileName, _data, wafers, mode, outlierSigma));
+                int count = await Task.Run(() => IntegratedCsvService.Save(file.FileName, ActiveData, wafers, mode, outlierSigma));
                 TxtStatus.Text = $"已导出 {wafers.Length} 个 wafer、{count} 条测试记录（含异常原文），可直接重新打开" +
                     (outlierSigma.HasValue ? $"；已剔除均值 ± {outlierSigma.Value:G}σ 以外的测项值" : "");
             });
@@ -487,10 +487,10 @@ public partial class MainWindow : Window
     private async void BtnExportReport_Click(object sender, RoutedEventArgs e)
     {
         if (_isBusy) return;
-        if (_data.Records.Count == 0)
-        { MessageBox.Show("请先打开 CSV / STDF 数据。", "导出报告", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        if (ActiveData.Records.Count == 0)
+        { MessageBox.Show("没有可导出的数据，请先打开文件或调整数据筛选。", "导出报告", MessageBoxButton.OK, MessageBoxImage.Information); return; }
         var focused = _data.Items.Where(i => i.Focus.IsFocused).Select(i => i.Id).ToArray();
-        var options = new ExportDataWindow(_data.Wafers, _config.OutlierSigma, report: true,
+        var options = new ExportDataWindow(ActiveData.Wafers, _config.OutlierSigma, report: true,
             histogramMode: _binMode, combineSites: _combineSites, focusedCount: focused.Length,
             combineWafers: _combineWafers) { Owner = this };
         options.HistogramModeChanged += mode => CmbBinMode.SelectedIndex = mode;
@@ -505,7 +505,7 @@ public partial class MainWindow : Window
         {
             await RunBusyAsync(async () =>
             {
-                await XlsxReportService.SaveAsync(file.FileName, _data, _config, report, _currentDataName);
+                await XlsxReportService.SaveAsync(file.FileName, ActiveData, _config, report, _currentDataName + (_sampleRanges.Count > 0 ? "（已应用数据筛选）" : ""));
                 TxtStatus.Text = $"报告已导出：4 个工作表，{focused.Length} 个关注测项";
             });
         }
@@ -556,28 +556,34 @@ public partial class MainWindow : Window
         }
     }
 
-    private sealed record PreparedAnalysis(CsvParseResult Data, List<string> Sites, List<TestItemSummary> Summaries, CsvParseResult Source);
+    private sealed record PreparedAnalysis(CsvParseResult Data, List<string> Sites, List<TestItemSummary> Summaries,
+        CsvParseResult Source, CsvParseResult Scope, IReadOnlyList<SampleRange> Ranges);
 
     private Task<PreparedAnalysis> PrepareAnalysisAsync(CsvParseResult data, AnalyzerConfig config)
     {
         var mode = _retestMode;
         bool combine = _combineSites;
         bool combineWafers = _combineWafers;
+        var ranges = ReferenceEquals(data, _data) ? _sampleRanges.ToArray() : Array.Empty<SampleRange>();
+        var cachedScope = ReferenceEquals(data, _scopeSource) && _scopeMode == mode && _scopeRanges.SequenceEqual(ranges) ? _scopeData : null;
         return Task.Run(() =>
         {
             AnalysisOperation.CheckCancellation();
             data = RetestIdentityService.Prepare(data, config);
-            var analysis = DatasetService.SelectRetests(data, mode);
-            var sites = CollectSites(data.Items, data.Records);
+            var scope = ReferenceEquals(data, _scopeSource) && cachedScope != null ? cachedScope : SampleFilterService.Apply(data, ranges, mode);
+            var analysis = DatasetService.SelectRetests(scope, mode);
+            var sites = CollectSites(scope.Items, scope.Records);
             return new PreparedAnalysis(analysis, sites,
-                SummaryService.Build(analysis.Items, sites, data.Wafers, combine, combineWafers, config), data);
+                SummaryService.Build(analysis.Items, sites, scope.Wafers, combine, combineWafers, config), data, scope, ranges);
         });
     }
 
     private async Task RefreshTestItemList()
     {
+        var previousScope = ActiveData;
         var prepared = await PrepareAnalysisAsync(_data, _config);
         CommitAnalysis(_data, prepared);
+        if (!ReferenceEquals(previousScope, ActiveData)) RefreshOpenMaps();
     }
 
     private void CommitAnalysis(CsvParseResult data, PreparedAnalysis prepared)
@@ -591,9 +597,14 @@ public partial class MainWindow : Window
         ClearDetail();
         bool changedData = !ReferenceEquals(_data, data);
         _data = data;
+        _sampleRanges = prepared.Ranges;
+        _scopeData = prepared.Scope;
+        _scopeSource = data; _scopeMode = _retestMode; _scopeRanges = prepared.Ranges;
+        _sampleIncludedIds = _sampleRanges.Count == 0 ? null : prepared.Scope.Records.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+        BtnSampleFilter.Content = _sampleRanges.Count == 0 ? "数据筛选" : $"数据筛选（{_sampleRanges.Count}）";
         var previousLease = _datasetLease; _datasetLease = lease; previousLease?.Dispose();
         _allItems = prepared.Data.Items;
-        _devices = data.Devices;
+        _devices = prepared.Scope.Devices;
         _allSites = prepared.Sites;
         _summaries = prepared.Summaries;
         InitializeRun(changedData);
@@ -864,7 +875,8 @@ public partial class MainWindow : Window
     {
         if (_allItems.Count == 0) return;
         TxtBottomInfo.Text =
-            $"测试项 {_allItems.Count} 个 | Site {_allSites.Count} 个 | Wafer {_data.Wafers.Count} 个 | 表格 {_summaries.Count} 行 | 唯一芯片 {_devices.Count} 颗";
+            $"测试项 {_allItems.Count} 个 | Site {_allSites.Count} 个 | Wafer {ActiveData.Wafers.Count} 个 | 表格 {_summaries.Count} 行 | 唯一芯片 {_devices.Count} 颗" +
+            (_sampleRanges.Count > 0 ? $" | 筛选记录 {ActiveData.Records.Count:N0}/{_data.Records.Count:N0}" : "");
     }
 
     #endregion
@@ -972,15 +984,15 @@ public partial class MainWindow : Window
                 DgTestItems.IsScrollActive) return;
             var stats = result.Statistics;
             TxtItemTitle.Text = itemTitle;
-            TxtUnit.Text = string.IsNullOrWhiteSpace(request.Item.Unit)
+            TxtUnit.Text = string.IsNullOrWhiteSpace(request.Item.ShownUnit)
                 ? $"Count={stats.Count}  InSpec%={stats.InSpecPercent:F1}"
-                : $"Unit：{request.Item.Unit}    Count={stats.Count}  InSpec%={stats.InSpecPercent:F1}";
+                : $"Unit：{request.Item.ShownUnit}    Count={stats.Count}  InSpec%={stats.InSpecPercent:F1}";
             if (!ReferenceEquals(_displayedBins, result.Bins))
-                Histogram.Apply(result.Bins, request.Item.LowLimit, request.Item.HighLimit,
+                Histogram.Apply(result.Bins, request.Item.DisplayLowLimit, request.Item.DisplayHighLimit,
                     result.Mean, result.Sigma, request.ShowLsl, request.ShowUsl, request.ShowMean,
-                    request.ShowThreeSigma, request.Item.Unit);
+                    request.ShowThreeSigma, request.Item.ShownUnit);
             if (!ReferenceEquals(_displayedScatter, result.Scatter))
-                ScatterPlot.SetSeries(result.Scatter, request.Item.LowLimit, request.Item.HighLimit, request.Item.Unit);
+                ScatterPlot.SetSeries(result.Scatter, request.Item.DisplayLowLimit, request.Item.DisplayHighLimit, request.Item.ShownUnit);
             _displayedItem = request.Item;
             _displayedSite = request.Site;
             _displayedWafer = request.Wafer;
@@ -1042,7 +1054,7 @@ public partial class MainWindow : Window
             : $"Site {_currentSite}";
         string title = $"Value 表  {_currentItem.DisplayName}  ({(_currentWafer == null ? "ALL Wafers" : "Wafer " + _currentWafer)} · {siteLabel})";
 
-        var window = new ValuesWindow(title, filtered) { Owner = this };
+        var window = new ValuesWindow(title + " · " + _currentItem.ShownUnit, filtered, _currentItem.DisplayFactor) { Owner = this };
         window.Closed += (_, _) => _memoryReclaimer.Request();
         window.Show();
     }
@@ -1164,7 +1176,7 @@ public partial class MainWindow : Window
     {
         if (_isBusy) return;
         if (_data.Records.Count == 0) { MessageBox.Show("请先打开 CSV / STDF 文件。", "良率预测"); return; }
-        try { new YieldSimulationWindow(_data, _config, _retestMode) { Owner = this }.ShowDialog(); }
+        try { new YieldSimulationWindow(ActiveData, _config, _retestMode) { Owner = this }.ShowDialog(); }
         catch (Exception ex) { MessageBox.Show(ex.Message, "良率预测"); }
         finally { _memoryReclaimer.Request(); }
     }
@@ -1183,8 +1195,8 @@ public partial class MainWindow : Window
             await RunBusyAsync(async () =>
             {
                 var result = await Task.Run(() => (
-                    First: BinStatisticsService.Build(_data.Records, RetestMode.First, _config),
-                    Last: BinStatisticsService.Build(_data.Records, RetestMode.Last, _config)));
+                    First: BinStatisticsService.Build(ActiveData.Records, RetestMode.First, _config),
+                    Last: BinStatisticsService.Build(ActiveData.Records, RetestMode.Last, _config)));
                 window = new BinStatisticsWindow(result.First, result.Last) { Owner = this };
             });
             window!.ShowDialog();
@@ -1203,8 +1215,8 @@ public partial class MainWindow : Window
             await RunBusyAsync(async () =>
             {
                 var result = await Task.Run(() => (
-                    First: WaferStatisticsService.Build(_data.Records, RetestMode.First, _config),
-                    Last: WaferStatisticsService.Build(_data.Records, RetestMode.Last, _config)));
+                    First: WaferStatisticsService.Build(ActiveData.Records, RetestMode.First, _config),
+                    Last: WaferStatisticsService.Build(ActiveData.Records, RetestMode.Last, _config)));
                 window = new WaferTableWindow(result.First, result.Last) { Owner = this };
             });
             window!.ShowDialog();
@@ -1233,8 +1245,8 @@ public partial class MainWindow : Window
         }
 
         string? site = _combineSites || _currentSite == TestItemSummary.CombinedSite ? null : _currentSite;
-        var mapItem = _data.Items.FirstOrDefault(i => i.Id == _currentItem.Id) ?? _currentItem;
-        var pages = MapDataService.PfPages(_data, mapItem, site);
+        var mapItem = ActiveData.Items.FirstOrDefault(i => i.Id == _currentItem.Id) ?? _currentItem;
+        var pages = MapDataService.PfPages(ActiveData, mapItem, site);
         if (pages.All(p => p.Dies.Count == 0))
         {
             MessageBox.Show("当前测试项没有有效的 X/Y 坐标", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -1264,7 +1276,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var pages = MapDataService.BinPages(_data, soft);
+        var pages = MapDataService.BinPages(ActiveData, soft);
         if (pages.All(p => p.Dies.Count == 0))
         {
             MessageBox.Show("没有有效的 X/Y 坐标，无法绘制 Map", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -1289,7 +1301,7 @@ public partial class MainWindow : Window
 
     private void RefreshOpenMaps()
     {
-        foreach (var map in _openMaps) map.Window.SetPages(map.Pages(_data));
+        foreach (var map in _openMaps) map.Window.SetPages(map.Pages(ActiveData));
     }
 
     private static bool IsInSpec(double value, double? lsl, double? usl)

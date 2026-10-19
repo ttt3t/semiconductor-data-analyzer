@@ -179,6 +179,7 @@
                             </StackPanel>
                             </StackPanel>
                         </StackPanel>
+                        <Button x:Name="BtnSampleFilter" Content="数据筛选" Click="SampleFilter_Click" Style="{StaticResource ToolbarAction}" Margin="0,0,0,3" ToolTip="按多个测试项的数值范围筛选样品并重算；再次点击可取消筛选"/>
                         <Button x:Name="ValueTableButton" Click="BtnShowValues_Click" Style="{StaticResource ToolbarAction}" Margin="0,0,0,3"><StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Table" Style="{StaticResource ButtonIcon}"/><TextBlock Text="原始值" VerticalAlignment="Center"/></StackPanel></Button>
                         <Button x:Name="CopyStatsButton" Click="BtnCopyAllStats_Click" Style="{StaticResource ToolbarAction}" Margin="0,0,0,3"><StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Copy" Style="{StaticResource ButtonIcon}"/><TextBlock Text="复制" VerticalAlignment="Center"/></StackPanel></Button>
                     </WrapPanel>
@@ -547,6 +548,11 @@
                                     <TextBlock Text="锁定纵轴" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </ToggleButton>
+                            <RadioButton Content="Zoom limit" GroupName="ScatterRange" Margin="9,0,5,0" VerticalAlignment="Center"
+                                         IsChecked="{Binding UseLimitRange, ElementName=ScatterPlot, Mode=TwoWay}"
+                                         ToolTip="纵轴：LSL − 0.5 × (USL − LSL) 至 USL + 0.5 × (USL − LSL)；无双侧有效阈值时显示全部数据"/>
+                            <RadioButton Content="Zoom all" GroupName="ScatterRange" Margin="4,0,4,0" VerticalAlignment="Center"
+                                         IsChecked="True" Checked="ScatterZoomAll_Checked" ToolTip="显示全部测量值的纵轴范围"/>
                         </WrapPanel>
                         <controls:ScatterPlotControl x:Name="ScatterPlot"/>
                     </DockPanel>

@@ -110,11 +110,11 @@ public static class XlsxReportService
                         config.IncludeOutOfLimitData, config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma,
                         ScatterOrder: options.ScatterOrder, WaferOrder: wafers), AnalysisOperation.Token);
                     var histogram = new HistogramControl();
-                    histogram.Apply(detail.Bins, item.LowLimit, item.HighLimit, detail.Mean, detail.Sigma,
-                        config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, item.Unit);
+                    histogram.Apply(detail.Bins, item.DisplayLowLimit, item.DisplayHighLimit, detail.Mean, detail.Sigma,
+                        config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, item.ShownUnit);
                     Plot(favorites, focusRow + 3, 2, histogram, "Histogram_" + i, 1440, 400);
                     var scatter = new ScatterPlotControl();
-                    scatter.SetSeries(detail.Scatter, item.LowLimit, item.HighLimit, item.Unit);
+                    scatter.SetSeries(detail.Scatter, item.DisplayLowLimit, item.DisplayHighLimit, item.ShownUnit);
                     Plot(favorites, focusRow + 21, 2, scatter, "Scatter_" + i, 1440, 400);
                     histogram.Bins = null; scatter.SetSeries(ScatterSeries.Empty, null, null, "");
                     favorites.PageSetup.AddHorizontalPageBreak(focusRow + 39);
@@ -218,8 +218,8 @@ public static class XlsxReportService
     private static void WriteSummary(IXLWorksheet sheet, int row, TestItemSummary summary, bool focused)
     {
         var item = summary.Data;
-        object?[] values = { focused ? "✓" : "", item.TestNumber, item.DisplayName, summary.Site, summary.Wafer, item.SBin, item.HBin, item.Unit,
-            item.LowLimit, item.HighLimit, summary.Count, summary.Fails, summary.Eorr, summary.SiteSigma,
+        object?[] values = { focused ? "✓" : "", item.TestNumber, item.DisplayName, summary.Site, summary.Wafer, item.SBin, item.HBin, item.ShownUnit,
+            item.DisplayLowLimit, item.DisplayHighLimit, summary.Count, summary.Fails, summary.Eorr, summary.SiteSigma,
             summary.Count > 0 ? summary.Mean : null, summary.Max, summary.Min, summary.Median, summary.Count > 0 ? summary.Sigma : null,
             summary.RobustMean, summary.RobustSigma, summary.Cpk, summary.Count > 0 ? summary.InSpecPercent / 100 : null };
         for (int i = 0; i < values.Length; i++) Value(sheet.Cell(row, i + 2), values[i]);

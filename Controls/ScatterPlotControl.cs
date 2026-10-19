@@ -46,6 +46,25 @@ public class ScatterPlotControl : CachedPlotControl
 
     private (double Min, double Max)? _lockedYRange;
 
+    public static readonly DependencyProperty UseLimitRangeProperty = DependencyProperty.Register(
+        nameof(UseLimitRange), typeof(bool), typeof(ScatterPlotControl), new FrameworkPropertyMetadata(false, (d, _) =>
+        {
+            var plot = (ScatterPlotControl)d;
+            plot._lockedYRange = null;
+            plot.UpdateVerticalRange();
+            plot.InvalidatePlot();
+            plot._overlayLayer.InvalidateVisual();
+        }));
+    public bool UseLimitRange { get => (bool)GetValue(UseLimitRangeProperty); set => SetValue(UseLimitRangeProperty, value); }
+
+    public static (double Min, double Max)? LimitRange(double? lsl, double? usl)
+    {
+        if (lsl is not double low || usl is not double high || !double.IsFinite(low) || !double.IsFinite(high) || high <= low) return null;
+        double half = (high - low) * .5;
+        double min = low - half, max = high + half;
+        return double.IsFinite(min) && double.IsFinite(max) ? (min, max) : null;
+    }
+
     private void UpdateYAxisLock()
     {
         if (IsYAxisLocked && _pointCount > 0)
@@ -67,6 +86,7 @@ public class ScatterPlotControl : CachedPlotControl
         double pad = (_series.Maximum - _series.Minimum) * 0.05;
         if (pad <= 0) pad = Math.Max(Math.Abs(_series.Minimum) * 0.01, 1e-12);
         var range = (_series.Minimum - pad, _series.Maximum + pad);
+        if (UseLimitRange && LimitRange(Lsl, Usl) is { } limits) range = limits;
         if (IsYAxisLocked)
         {
             _lockedYRange ??= range; // A lock enabled before selecting a test captures its first range.
@@ -198,6 +218,9 @@ public class ScatterPlotControl : CachedPlotControl
 
     public void SetSeries(ScatterSeries series, double? lsl, double? usl, string unit)
     {
+        if (_lockedYRange is { } locked && MeasurementDisplay.ConversionFactor(Unit, unit) is double ratio)
+            _lockedYRange = double.IsFinite(locked.Min * ratio) && double.IsFinite(locked.Max * ratio)
+                ? (locked.Min * ratio, locked.Max * ratio) : null;
         _batch++;
         Values = null;
         Lsl = lsl;
@@ -255,7 +278,7 @@ public class ScatterPlotControl : CachedPlotControl
     private void ResetZoom()
     {
         _scaleX = 1; _offsetX = 0;
-        if (!IsYAxisLocked) { _scaleY = 1; _offsetY = 0; }
+        if (!IsYAxisLocked) UpdateVerticalRange();
         InvalidatePlot();
         _overlayLayer.InvalidateVisual();
     }
@@ -270,13 +293,13 @@ public class ScatterPlotControl : CachedPlotControl
 
     private void ZoomAt(Point mouse, int delta)
     {
-        double nextScale = Math.Clamp(_scaleX * (delta > 0 ? 1.15 : 1.0 / 1.15), 0.2, 50);
+        double nextScale = Math.Clamp(_scaleX * (delta > 0 ? 1.15 : 1.0 / 1.15), 0.001, 100000);
         double zoomFactor = nextScale / _scaleX;
 
         _offsetX = mouse.X - _left - (mouse.X - _left - _offsetX) * zoomFactor;
         if (!IsYAxisLocked)
         {
-            double nextScaleY = Math.Clamp(_scaleY * zoomFactor, 0.2, 50);
+            double nextScaleY = Math.Clamp(_scaleY * zoomFactor, 0.001, 100000);
             double originY = _top + _plotH;
             _offsetY = originY - mouse.Y - (originY - mouse.Y - _offsetY) * (nextScaleY / _scaleY);
             _scaleY = nextScaleY;

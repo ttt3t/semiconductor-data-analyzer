@@ -16,6 +16,13 @@ public sealed class ScatterSeries
     public ScatterOrder Order { get; private init; } = ScatterOrder.SerialNumber;
     public ScatterGroup[] Groups { get; private init; } = Array.Empty<ScatterGroup>();
 
+    public ScatterSeries Scale(double factor) => factor == 1 ? this : new ScatterSeries
+    {
+        Points = Points.Select(p => p with { Value = p.Value * factor }).ToArray(),
+        SampleCount = SampleCount, Minimum = Minimum * factor, Maximum = Maximum * factor,
+        Order = Order, Groups = Groups
+    };
+
     private readonly record struct SortKey(int SourceIndex, int Wafer, double SiteNumber, string Site,
         double SerialNumber, string Serial);
 

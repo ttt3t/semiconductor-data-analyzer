@@ -91,19 +91,20 @@ public static class SummaryService
         var (stats, robust, median) = StatisticsService.CalculateSummaryMetrics(
             values, item.LowLimit, item.HighLimit, config.RemoveOutliers, config.OutlierSigma);
         long.TryParse(item.TestNumber, out long testNumber);
+        double factor = item.DisplayFactor;
         return new TestItemSummary
         {
             Data = item, Site = site, Wafer = wafer ?? TestItemSummary.CombinedWafer,
             IsWaferCombined = wafer == null, TestNumberValue = testNumber,
-            LslText = item.LowLimit?.ToString(format) ?? "-", UslText = item.HighLimit?.ToString(format) ?? "-",
+            LslText = item.DisplayLowLimit?.ToString(format) ?? "-", UslText = item.DisplayHighLimit?.ToString(format) ?? "-",
             Count = stats.Count,
             Fails = stats.Count - stats.InSpec,
-            Max = stats.Count > 0 ? stats.Max : null, Min = stats.Count > 0 ? stats.Min : null,
+            Max = stats.Count > 0 ? stats.Max * factor : null, Min = stats.Count > 0 ? stats.Min * factor : null,
             Eorr = errors,
             SiteSigma = site == TestItemSummary.CombinedSite
                 ? StatisticsService.CalculateSiteYieldSigma(values, item.LowLimit, item.HighLimit) : null,
-            Mean = stats.Mean, Median = median, Sigma = stats.StdDev,
-            RobustMean = robust.Mean, RobustSigma = robust.Sigma, Cpk = stats.Cpk, Cp = stats.Cp, InSpecPercent = stats.InSpecPercent
+            Mean = stats.Mean * factor, Median = median * factor, Sigma = stats.StdDev * factor,
+            RobustMean = robust.Mean * factor, RobustSigma = robust.Sigma * factor, Cpk = stats.Cpk, Cp = stats.Cp, InSpecPercent = stats.InSpecPercent
         };
     }
 }

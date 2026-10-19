@@ -254,13 +254,22 @@ public partial class ProductManagementWindow : Window
     {
         if (_product == null || _busy) return;
         MainWindow? window = null;
+        string[] paths = DgFiles.SelectedItems.OfType<FileRow>().Select(r => r.File.FilePath).ToArray();
+        SetBusy(true);
         try
         {
             var sources = ManagedAnalysisService.Sources(_product, DgFiles.SelectedItems.OfType<FileRow>().Select(r => r.File.Id));
-            var config = ConfigLoader.Parse(sources[0].ConfigText, _product.Name + ".ini"); window = new MainWindow(); window.Show();
+            var config = ConfigLoader.Parse(sources[0].ConfigText, _product.Name + ".ini"); window = new MainWindow { Owner = this }; window.Show();
             await window.OpenManagedFilesAsync(sources, config, _product.RetestMode);
         }
-        catch (Exception ex) { window?.Close(); TxtStatus.Text = "打开失败：" + ex.Message; }
+        catch (OperationCanceledException) { window?.Close(); TxtStatus.Text = "已取消打开。"; }
+        catch (Exception ex)
+        {
+            TxtStatus.Text = "打开失败：" + ex.Message;
+            MessageBox.Show(this, OpenFailureReport.Describe(ex, paths), "数据打开失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            window?.Close();
+        }
+        finally { if (!_closed) SetBusy(false); }
     }
     private async void Relocate_Click(object sender, RoutedEventArgs e)
     {
