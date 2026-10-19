@@ -65,4 +65,5 @@ public sealed class AnalyzerConfig
 
     public string ConfigFileName { get; set; } = "";
     public Dictionary<string, List<string>> SBinCategories { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> SBinDescriptions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }

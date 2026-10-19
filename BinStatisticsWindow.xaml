@@ -43,6 +43,7 @@
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="分类" Binding="{Binding Category, Mode=OneTime}" Width="*"/>
                         <DataGridTextColumn Header="SBIN" Binding="{Binding Bin, Mode=OneTime}" SortMemberPath="BinSort" Width="70"/>
+                        <DataGridTextColumn Header="释义" Binding="{Binding Description, Mode=OneTime}" Width="140"/>
                         <DataGridTextColumn Header="数量" Binding="{Binding Count, Mode=OneTime}" Width="70"/>
                         <DataGridTextColumn Header="占比%" Binding="{Binding Percent, Mode=OneTime, StringFormat=F2}" Width="75"/>
                     </DataGrid.Columns>
@@ -73,11 +74,12 @@
             <DockPanel Grid.Row="2" Grid.ColumnSpan="3">
                 <TextBlock Text="SBIN 各 Site 占比" FontWeight="Bold" DockPanel.Dock="Top" Margin="0,0,0,6"/>
                 
-                <DataGrid x:Name="DgSites" FrozenColumnCount="2" CanUserReorderColumns="False"
+                <DataGrid x:Name="DgSites" FrozenColumnCount="3" CanUserReorderColumns="False"
                           HeadersVisibility="Column" EnableColumnVirtualization="True">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="分类" Binding="{Binding Category, Mode=OneTime}" Width="150"/>
                         <DataGridTextColumn Header="SBIN" Binding="{Binding Bin, Mode=OneTime}" SortMemberPath="BinSort" Width="80"/>
+                        <DataGridTextColumn Header="释义" Binding="{Binding Description, Mode=OneTime}" Width="180"/>
                     </DataGrid.Columns>
                 </DataGrid>
             </DockPanel>

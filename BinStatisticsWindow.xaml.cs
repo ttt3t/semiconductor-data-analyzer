@@ -81,7 +81,7 @@ public partial class BinStatisticsWindow : Window
         DgCategories.ItemsSource = new ListCollectionView(result.Categories);
         var indices = _sites.Select(s => result.Sites.IndexOf(s)).ToArray();
         var siteRows = result.SiteRows.Select(r => new BinSiteRow(r.Category, r.Bin,
-            indices.Select(i => i >= 0 ? r.Percentages[i] : null).ToArray())).ToList();
+            indices.Select(i => i >= 0 ? r.Percentages[i] : null).ToArray()) { Description = r.Description }).ToList();
         DgSites.ItemsSource = new ListCollectionView(siteRows);
         TxtInfo.Text = $"晶圆内去重芯片：{result.ChipCount}  |  无 SBIN：{result.MissingSBin}  |  无 HBIN：{result.MissingHBin}  |  " +
             $"Pass：{100.0 * result.PassCount / Math.Max(1, result.ChipCount):F2}%  |  Pass + PartialPass：{100.0 * (result.PassCount + result.PartialPassCount) / Math.Max(1, result.ChipCount):F2}%";
@@ -99,10 +99,10 @@ public partial class BinStatisticsWindow : Window
         Row("复测模式", FirstMode.IsChecked == true ? "只保留首测" : "复测覆盖首测");
         text.AppendLine();
         Row("SBIN 明细");
-        Row("分类", "SBIN", "数量", "占比%");
+        Row("分类", "SBIN", "释义", "数量", "占比%");
         // Read the entire sorted view, not just selected/realized cells.
         foreach (var row in DgSbin.Items.OfType<BinCountRow>())
-            Row(row.Category, row.Bin, Number(row.Count), Percent(row.Percent));
+            Row(row.Category, row.Bin, row.Description, Number(row.Count), Percent(row.Percent));
         text.AppendLine();
         Row("HBIN 明细");
         Row("HBIN", "数量", "占比%");
@@ -115,9 +115,9 @@ public partial class BinStatisticsWindow : Window
             Row(row.Category, Number(row.Count), Percent(row.Percent));
         text.AppendLine();
         Row("SBIN 各 Site 占比");
-        Row(new[] { "分类", "SBIN" }.Concat(_sites.Select(s => $"Site {s} 占比%" )).ToArray());
+        Row(new[] { "分类", "SBIN", "释义" }.Concat(_sites.Select(s => $"Site {s} 占比%" )).ToArray());
         foreach (var row in DgSites.Items.OfType<BinSiteRow>())
-            Row(new[] { row.Category, row.Bin }.Concat(row.Percentages.Select(p => p.HasValue ? Percent(p.Value) : "–")).ToArray());
+            Row(new[] { row.Category, row.Bin, row.Description }.Concat(row.Percentages.Select(p => p.HasValue ? Percent(p.Value) : "–")).ToArray());
         return text.ToString();
     }
 

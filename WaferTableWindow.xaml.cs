@@ -13,6 +13,7 @@ public partial class WaferTableWindow : Window
 {
     public sealed record DisplayRow(string Bin, string Category, double?[] Values)
     {
+        public string Description { get; init; } = "";
         public double BinSort => NumericText.SortKey(Bin);
     }
     private WaferStatisticsResult? _first, _last;
@@ -78,10 +79,10 @@ public partial class WaferTableWindow : Window
                 column.Binding = ValueBinding(i, counts);
             }
             var rows = sourceRows.Select(r => new DisplayRow(r.Bin, r.Category, indices.Select(i =>
-                i < 0 ? (double?)null : counts ? r.Counts[i] : r.Percentages[i]).ToArray())).ToList();
+                i < 0 ? (double?)null : counts ? r.Counts[i] : r.Percentages[i]).ToArray()) { Description = r.Description }).ToList();
             grid.ItemsSource = new ListCollectionView(rows);
         }
-        Show(DgWafers, 2, result.Rows, result.ValidSBinCounts, "SBIN");
+        Show(DgWafers, 3, result.Rows, result.ValidSBinCounts, "SBIN");
         Show(DgHBinWafers, 1, result.HBinRows, result.ValidHBinCounts, "HBIN");
         Show(DgCategoryWafers, 1, result.CategoryRows, result.ValidSBinCounts, "SBIN");
         TxtInfo.Text = $"Wafer {_wafers.Count} 个  |  去重芯片 {result.ChipCounts.Sum()}  |  无 SBIN {result.ChipCounts.Sum() - result.ValidSBinCounts.Sum()}  |  无 HBIN {result.ChipCounts.Sum() - result.ValidHBinCounts.Sum()}  |  当前显示：{(counts ? "数量（颗）" : "占比（%）")}";
@@ -123,7 +124,7 @@ public partial class WaferTableWindow : Window
                 return (index < 0 || index >= denominators.Length ? 0 : denominators[index]).ToString(CultureInfo.CurrentCulture);
             })));
         }
-        Table("SBIN 各 Wafer", DgWafers, new[] { "SBIN", "分类" }, r => new[] { r.Bin, r.Category },
+        Table("SBIN 各 Wafer", DgWafers, new[] { "SBIN", "分类", "释义" }, r => new[] { r.Bin, r.Category, r.Description },
             result?.ValidSBinCounts ?? Array.Empty<int>(), "有效 SBIN 芯片数");
         Table("HBIN 各 Wafer", DgHBinWafers, new[] { "HBIN" }, r => new[] { r.Bin },
             result?.ValidHBinCounts ?? Array.Empty<int>(), "有效 HBIN 芯片数");

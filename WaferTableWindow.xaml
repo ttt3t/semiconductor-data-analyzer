@@ -51,10 +51,11 @@
             </Grid.ColumnDefinitions>
             <DockPanel>
                 <TextBlock DockPanel.Dock="Top" Text="SBIN 各 Wafer" FontWeight="Bold" Margin="0,0,0,8"/>
-                <DataGrid x:Name="DgWafers" FrozenColumnCount="2">
+                <DataGrid x:Name="DgWafers" FrozenColumnCount="3">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="SBIN" Binding="{Binding Bin, Mode=OneTime}" SortMemberPath="BinSort" Width="75"/>
                         <DataGridTextColumn Header="分类" Binding="{Binding Category, Mode=OneTime}" Width="110"/>
+                        <DataGridTextColumn Header="释义" Binding="{Binding Description, Mode=OneTime}" Width="160"/>
                     </DataGrid.Columns>
                 </DataGrid>
             </DockPanel>

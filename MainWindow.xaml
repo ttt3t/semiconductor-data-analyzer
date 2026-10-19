@@ -491,20 +491,25 @@
             <Grid Grid.Column="2" ClipToBounds="True">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition x:Name="HistogramRow" Height="1.1*" MinHeight="190"/>
-                    <RowDefinition Height="8"/>
-                    <RowDefinition x:Name="ScatterRow" Height="*" MinHeight="158"/>
+                    <RowDefinition x:Name="HistogramRow" Height="1.1*" MinHeight="0"/>
+                    <RowDefinition x:Name="PlotDividerRow" Height="8"/>
+                    <RowDefinition x:Name="ScatterRow" Height="*" MinHeight="0"/>
                 </Grid.RowDefinitions>
                 <Border Grid.Row="0" Background="White" BorderBrush="{StaticResource BorderSoft}" BorderThickness="1" CornerRadius="7" Padding="9,4" Margin="0,0,0,5">
                     <Grid>
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="1.3*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="1.3*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                         <TextBlock x:Name="TxtItemTitle" Text="选择测试项查看分布" FontSize="11" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
                                    VerticalAlignment="Center" AutomationProperties.HelpText="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                         <TextBlock x:Name="TxtUnit" Grid.Column="1" Text="" Margin="10,0,0,0" FontSize="10" Foreground="{StaticResource TextSecondary}" TextTrimming="CharacterEllipsis"
                                    VerticalAlignment="Center" TextAlignment="Right" AutomationProperties.HelpText="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0" VerticalAlignment="Center">
+                            <RadioButton x:Name="PlotBoth" Content="双图" GroupName="PlotLayout" Tag="Both" IsChecked="True" Checked="PlotView_Checked" Margin="3,0" ToolTip="恢复直方图和散点图"/>
+                            <RadioButton x:Name="PlotHistogram" Content="直方" GroupName="PlotLayout" Tag="Histogram" Checked="PlotView_Checked" Margin="3,0" ToolTip="仅显示直方图"/>
+                            <RadioButton x:Name="PlotScatter" Content="散点" GroupName="PlotLayout" Tag="Scatter" Checked="PlotView_Checked" Margin="3,0" ToolTip="仅显示散点图"/>
+                        </StackPanel>
                     </Grid>
                 </Border>
-                <Border Grid.Row="1" BorderBrush="{StaticResource BorderSoft}" BorderThickness="1" Background="White" CornerRadius="9" Padding="4">
+                <Border x:Name="HistogramPanel" Grid.Row="1" BorderBrush="{StaticResource BorderSoft}" BorderThickness="1" Background="White" CornerRadius="9" Padding="4">
                     <DockPanel>
                         <WrapPanel DockPanel.Dock="Top" Margin="8,1,0,0">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
@@ -522,9 +527,10 @@
                         <controls:HistogramControl x:Name="Histogram"/>
                     </DockPanel>
                 </Border>
-                <GridSplitter Grid.Row="2" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Center"
-                              ResizeDirection="Rows" ResizeBehavior="PreviousAndNext" Background="Transparent" Cursor="SizeNS"/>
-                <Border Grid.Row="3" BorderBrush="{StaticResource BorderSoft}" BorderThickness="1" Background="White" CornerRadius="9" Padding="4">
+                <GridSplitter x:Name="PlotDivider" Grid.Row="2" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                              ResizeDirection="Rows" ResizeBehavior="PreviousAndNext" Background="Transparent" Cursor="SizeNS"
+                              DragCompleted="PlotDivider_DragCompleted" MouseDoubleClick="PlotDivider_DoubleClick" ToolTip="拖到顶部仅显示散点图；拖到底部仅显示直方图；双击恢复双图"/>
+                <Border x:Name="ScatterPanel" Grid.Row="3" BorderBrush="{StaticResource BorderSoft}" BorderThickness="1" Background="White" CornerRadius="9" Padding="4">
                     <DockPanel>
                         <WrapPanel DockPanel.Dock="Top" Margin="8,1,0,0">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">

@@ -96,7 +96,9 @@ static class Probe
             Check(filtered.Items[0].Values.Count == 1 && filtered.Items[0].ShownUnit == "mA" && BinStatisticsService.Build(filtered.Records, RetestMode.Last, config).ChipCount == 1 && MapDataService.PfPages(filtered, filtered.Items[0], null).Sum(p => p.Dies.Count) == 1, "filtered statistics, BIN and maps share one sample population");
             Check(SampleFilterService.Apply(data, new[] { new SampleRange("i", 1, 2) }, RetestMode.All).Records.Count == 0, "empty filter result is supported");
             Check(ReferenceEquals(data, SampleFilterService.Apply(data, Array.Empty<SampleRange>(), RetestMode.All)) && data.Records.Count == 4, "removing filters restores original dataset without re-reading files");
-            bool bad = false; try { SampleFilterService.Apply(data, new[] { new SampleRange("i", 2, 1) }, RetestMode.All); } catch (InvalidDataException) { bad = true; } Check(bad, "invalid range fails before changing active data");
+            bool bad = false; try { SampleFilterService.Apply(data, new[] { new SampleRange("i", double.NaN, 1) }, RetestMode.All); } catch (InvalidDataException) { bad = true; } Check(bad, "nonfinite range fails before changing active data");
+            Check(SampleFilterService.Apply(data, new[] { new SampleRange("i", .004, .001) }, RetestMode.All).Records.Select(r => r.Id).SequenceEqual(new[] { "r1", "r2" }), "inverted bounds select both tails including equality");
+            Check(SampleFilterService.Apply(data, new[] { new SampleRange("i", .001, .002), new SampleRange("j", 2.5, null) }, RetestMode.All, SampleMatchMode.Union).Records.Count == 3, "union retains any matching condition without treating invalid values as matches");
             var a = new TestItemData { Id = "a" }; var b = new TestItemData { Id = "b" };
             CsvRecord R(string id, params (string, string)[] values) => new() { Id = id, WaferId = "W", X = 0, Y = 0, Measurements = values.ToDictionary(p => p.Item1, p => p.Item2) };
             var retests = DatasetService.Build(new() { a, b }, new() { R("first", ("a", "1"), ("b", "5")), R("later-a", ("a", "2")), R("later-b", ("b", "3")) });
@@ -135,6 +137,7 @@ static class Probe
             Wait((Task)Call(main, "RefreshTestItemList")!); Check(ReferenceEquals(scoped, Field(main, "_scopeData")), "list recomputation reuses unchanged filtered columns");
             var detailTimer = System.Diagnostics.Stopwatch.StartNew(); while ((bool)Field(main, "_detailPending")! && detailTimer.ElapsedMilliseconds < 10000) { Pump(); Thread.Sleep(5); }
             Save(main, "analyzer.png"); Set(main, "_sampleRanges", Array.Empty<SampleRange>()); Wait((Task)Call(main, "RefreshTestItemList")!); Check(ReferenceEquals(original, Field(main, "_scopeData")), "main window cancellation restores original population");
+            ExtendedChecks(main, original, config);
             bool failed = false; try { Wait(main.OpenManagedFilesAsync(new[] { new CsvImportSource(P("absent.stdf")) }, config, RetestMode.All)); } catch (InvalidDataException ex) { failed = ex.Message.Contains("absent.stdf"); }
             Check(failed && ReferenceEquals(original, Field(main, "_data")) && main.IsVisible, "failed managed open identifies the first file and keeps previous data and window"); main.Close();
             string logs = P("logs-" + Guid.NewGuid().ToString("N"));
@@ -144,5 +147,100 @@ static class Probe
             Console.WriteLine($"ALL {count} CHECKS PASSED"); app.Shutdown(); return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+
+    static void ExtendedChecks(MainWindow main, CsvParseResult original, AnalyzerConfig config)
+    {
+        original.Items[0].Focus.IsFocused = true;
+        Call(main, "SampleFilter_Click", main, new RoutedEventArgs());
+        var popup = (SampleFilterWindow)Field(main, "_sampleFilterWindow")!;
+        Check(popup.IsVisible && main.IsEnabled, "filter is modeless and leaves the analyzer interactive");
+        var list = (DataGrid)main.FindName("DgTestItems"); list.SelectedIndex = Math.Max(0, list.Items.Count - 1); Pump();
+        Check(popup.IsVisible && list.SelectedIndex >= 0, "main test selection remains available with filter open");
+        string id = original.Items[0].Id, second = original.Items[1].Id;
+        Wait((Task)Call(main, "ApplySampleFiltersAsync", new[] { new SampleRange(id, 1, 2), new SampleRange(second, 2.5, null) }, SampleMatchMode.Union)!);
+        Check(((CsvParseResult)Field(main, "_scopeData")!).Records.Count == 3, "modeless filter applies union through the shared calculation pipeline");
+        Wait((Task)Call(main, "ApplySampleFiltersAsync", Array.Empty<SampleRange>(), SampleMatchMode.Intersection)!); popup.Close();
+        list.SelectedIndex = 0;
+        var chartWait = System.Diagnostics.Stopwatch.StartNew(); while ((bool)Field(main, "_detailPending")! && chartWait.ElapsedMilliseconds < 10000) { Pump(); Thread.Sleep(5); }
+        Call(main, "SetPlotView", "Histogram"); main.UpdateLayout();
+        Check(((FrameworkElement)main.FindName("ScatterPanel")).Visibility == Visibility.Collapsed && ((FrameworkElement)main.FindName("HistogramPanel")).ActualHeight > 200, "histogram-only layout uses the full chart area"); Save(main, "histogram-only.png");
+        Call(main, "SetPlotView", "Scatter"); main.UpdateLayout();
+        Check(((FrameworkElement)main.FindName("HistogramPanel")).Visibility == Visibility.Collapsed && ((FrameworkElement)main.FindName("ScatterPanel")).ActualHeight > 200, "scatter-only layout uses the full chart area"); Save(main, "scatter-only.png");
+        Call(main, "SetPlotView", "Both"); main.UpdateLayout();
+        Check(((FrameworkElement)main.FindName("HistogramPanel")).Visibility == Visibility.Visible && ((FrameworkElement)main.FindName("ScatterPanel")).Visibility == Visibility.Visible, "both plots restore without replacing controls or data");
+        ((RowDefinition)main.FindName("HistogramRow")).Height = new GridLength(0); main.UpdateLayout();
+        Call(main, "PlotDivider_DragCompleted", main, new System.Windows.Controls.Primitives.DragCompletedEventArgs(0, 0, false));
+        Check(((FrameworkElement)main.FindName("HistogramPanel")).Visibility == Visibility.Collapsed, "dragging divider to top maximizes scatter"); Call(main, "SetPlotView", "Both");
+        ((RowDefinition)main.FindName("ScatterRow")).Height = new GridLength(0); main.UpdateLayout();
+        Call(main, "PlotDivider_DragCompleted", main, new System.Windows.Controls.Primitives.DragCompletedEventArgs(0, 0, false));
+        Check(((FrameworkElement)main.FindName("ScatterPanel")).Visibility == Visibility.Collapsed, "dragging divider to bottom maximizes histogram"); Call(main, "SetPlotView", "Both");
+
+        var labels = ConfigLoader.Parse(ConfigLoader.Serialize(config) + "\n[SBinDescriptions]\n02=开路=Open\n3=短路\n");
+        labels.PartialPassHBins = new() { "3" }; labels.SBinCategories["电性"] = new() { "2", "3" };
+        Check(ConfigLoader.Parse(ConfigLoader.Serialize(labels)).SBinDescriptions["2"] == "开路=Open", "SBIN descriptions normalize bin spelling and round trip through INI");
+        bool duplicate = false; try { ConfigLoader.Parse(ConfigLoader.Serialize(labels) + "\n[SBinDescriptions]\n2=重复\n"); } catch (InvalidDataException) { duplicate = true; } Check(duplicate, "duplicate SBIN descriptions are rejected");
+        var settings = new SettingsWindow(labels, _ => Task.CompletedTask); settings.Show(); Pump();
+        ((TabControl)settings.FindName("SettingsTabs")).SelectedItem = settings.FindName("SBinDescriptionTab");
+        ((TextBox)settings.FindName("TxtSBinDescriptions")).Text = "2=新的开路说明\n3=短路";
+        var edited = (AnalyzerConfig)Call(settings, "ReadConfig")!;
+        Check(edited.SBinDescriptions["2"] == "新的开路说明", "SBIN settings editor writes the INI configuration"); settings.Close();
+
+        var first = new TestItemData { Id = "a", Name = "Current", DisplayName = "Current", TestNumber = "101", Unit = "A", IsStdfMeasurement = true, LowLimit = 0, HighLimit = .005 };
+        var secondItem = new TestItemData { Id = "b", Name = "Voltage", DisplayName = "Voltage", TestNumber = "102", Unit = "V", LowLimit = 10, HighLimit = 15 };
+        CsvRecord R(string sn, int x, string hbin, string a, string? b) => new() { Id = sn, SerialNumber = sn, WaferId = "W", X = x, Y = 0, Site = "1", HBin = hbin, SBin = hbin,
+            Measurements = b == null ? new Dictionary<string, string> { ["a"] = a } : new Dictionary<string, string> { ["a"] = a, ["b"] = b } };
+        var records = new List<CsvRecord> { R("g1", 0, "1", "0", "10"), R("g2", 1, "1", ".002", "12"), R("g3", 2, "1", ".004", "14"),
+            R("f-first", 3, "1", ".001", "11"), R("other-first", 4, "2", ".100", "55"), R("f-last", 3, "2", ".100", "999"),
+            R("other-last", 4, "1", ".002", "12"), R("partial", 5, "3", ".007", "17"), R("invalid", 6, "2", "bad", null) };
+        var data = DatasetService.Build(new() { first, secondItem }, records); MeasurementDisplay.Configure(data.Items);
+        var bins = BinStatisticsService.Build(records, RetestMode.Last, labels);
+        Check(bins.SBins.Single(r => r.Bin == "2").Description == "开路=Open" && bins.SiteRows.Single(r => r.Bin == "2").Description == "开路=Open", "SBIN and Site rows share descriptions with unchanged counts");
+        var wafers = WaferStatisticsService.Build(records, RetestMode.Last, labels);
+        Check(wafers.Rows.Single(r => r.Bin == "2").Description == "开路=Open", "Wafer SBIN rows preserve descriptions");
+        var binWindow = new BinStatisticsWindow(BinStatisticsService.Build(records, RetestMode.First, labels), bins); binWindow.Show(); Pump();
+        Check((string)Call(binWindow, "BuildClipboardText")! is string clipboard && clipboard.Contains("开路=Open") && clipboard.Contains("释义"), "BIN Table clipboard includes meanings in detail and Site sections"); Save(binWindow, "bin-descriptions.png"); binWindow.Close();
+        var waferWindow = new WaferTableWindow(WaferStatisticsService.Build(records, RetestMode.First, labels), wafers); waferWindow.Show(); Pump();
+        Check(((DataGrid)waferWindow.FindName("DgWafers")).Columns.Count == 4 && ((string)Call(waferWindow, "BuildClipboardText")!).Contains("开路=Open"), "Wafer Table adds description without shifting numeric wafer columns"); Save(waferWindow, "wafer-descriptions.png"); waferWindow.Close();
+        string path = P("fail-chips.xlsx"); var result = FailChipXlsxService.Save(path, data, labels, new[] { "W" }, RetestMode.All);
+        Check(result.FailChips == 3 && result.ReferenceSerial == "g2" && result.Records == 5, "Fail export uses latest HBIN, includes PartialPass as fail, and chooses closest good-only reference");
+        using (var doc = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(path, false))
+        {
+            var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(doc).ToArray();
+            foreach (var error in errors) Console.WriteLine(error.Description + " at " + error.Path?.XPath);
+            Check(errors.Length == 0, "streamed XLSX conforms to the Open XML schema");
+        }
+        using (var workbook = new XLWorkbook(path))
+        {
+            var sheet = workbook.Worksheet(1); var rows = sheet.RowsUsed().Where(r => records.Any(s => s.Id == r.Cell(12).GetString())).ToDictionary(r => r.Cell(12).GetString());
+            Check(rows.Count == 5 && rows["f-last"].RowNumber() == rows["f-first"].RowNumber() + 1 && !rows.ContainsKey("other-first"), "first and retest records are adjacent inside chip blocks and recovered good chips are excluded");
+            Check(rows["f-first"].Cell(13).Style.Fill.BackgroundColor.Color.ToArgb() == System.Drawing.Color.FromArgb(255, 226, 240, 217).ToArgb() &&
+                rows["f-last"].Cell(13).Style.Fill.BackgroundColor.Color.ToArgb() == System.Drawing.Color.FromArgb(255, 252, 224, 232).ToArgb(), "measurement cells are green on pass and pink on fail");
+            Check(Near(rows["g2"].Cell(13).GetDouble(), 2) && sheet.Cell(7, 13).GetString() == "mA" && Near(sheet.Cell(9, 13).GetDouble(), 5), "Fail XLSX applies STDF display units to values and limits");
+            Check(rows["invalid"].Cell(13).GetString() == "bad" && rows["invalid"].Cell(14).IsEmpty(), "invalid text and missing values remain distinguishable in export");
+        }
+        var noGood = new CsvParseResult { Items = data.Items, Records = records.Where(r => r.X == 3 || r.X == 5).ToList() };
+        var missingRef = FailChipXlsxService.Save(P("no-reference.xlsx"), noGood, labels, new[] { "W" }, RetestMode.All);
+        Check(missingRef.ReferenceSerial == null && missingRef.FailChips == 2, "all-fail population exports without inventing a good reference");
+        string untouched = P("keep.xlsx"); File.WriteAllText(untouched, "keep"); bool noFails = false;
+        try { FailChipXlsxService.Save(untouched, new CsvParseResult { Items = data.Items, Records = records.Where(r => r.X < 3).ToList() }, labels, new[] { "W" }, RetestMode.All); }
+        catch (InvalidDataException) { noFails = true; } Check(noFails && File.ReadAllText(untouched) == "keep", "no-fail selection leaves an existing destination untouched");
+        var lastOnly = FailChipXlsxService.Save(P("last-only.xlsx"), data, labels, new[] { "W" }, RetestMode.Last);
+        Check(lastOnly.Records == 4 && data.Records.Count == 9 && Near(first.Values[1].Value, .002), "export honors retest selection and does not alter source measurements");
+        var onlyRetests = FailChipXlsxService.Save(P("only-retests.xlsx"), data, labels, new[] { "W" }, RetestMode.OnlyRetests);
+        Check(onlyRetests.FailChips == 1 && onlyRetests.Records == 2 && onlyRetests.ReferenceSerial == "other-last", "only-retest export retains selected fail history and a valid retested reference");
+        var ftRecords = records.Where(r => r.X == 3).Select((r, i) => new CsvRecord { Id = r.Id, WaferId = i == 0 ? "W" : "W2", SerialNumber = r.SerialNumber,
+            X = i * 20, Y = 0, Lot = "L", IsFtIdentity = true, RetestUuid = "UUID", HBin = r.HBin, Measurements = r.Measurements }).ToList();
+        var ft = FailChipXlsxService.Save(P("ft-history.xlsx"), new CsvParseResult { Items = data.Items, Records = ftRecords }, labels, new[] { "W", "W2" }, RetestMode.All);
+        Check(ft.FailChips == 1 && ft.Records == 2, "FT UUID groups one chip across coordinate and wafer changes");
+        string clippedPath = P("fail-outliers.xlsx"); FailChipXlsxService.Save(clippedPath, data, labels, new[] { "W" }, RetestMode.All, 1);
+        using (var clipped = new XLWorkbook(clippedPath))
+        {
+            var r = clipped.Worksheet(1).RowsUsed().Single(r => r.Cell(12).GetString() == "f-last");
+            Check(r.Cell(13).IsEmpty() && r.Cell(13).Style.Fill.BackgroundColor.Color.ToArgb() == System.Drawing.Color.FromArgb(255, 241, 243, 245).ToArgb(), "optional outlier clipping blanks only the affected measurement with a neutral style");
+        }
+        var cancellation = new CancellationTokenSource(); cancellation.Cancel(); bool stopped = false;
+        using (new AnalysisOperation(cancellation.Token)) try { FailChipXlsxService.Save(P("cancelled.xlsx"), data, labels, new[] { "W" }, RetestMode.All); } catch (OperationCanceledException) { stopped = true; }
+        Check(stopped && !File.Exists(P("cancelled.xlsx")), "cancelled Fail export leaves no partial destination");
     }
 }

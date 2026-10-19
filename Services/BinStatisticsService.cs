@@ -5,11 +5,13 @@ namespace SemiconductorCsvAnalyzer.Services;
 
 public sealed record BinCountRow(string Bin, string Category, int Count, double Percent)
 {
+    public string Description { get; init; } = "";
     public double BinSort => NumericText.SortKey(Bin);
 }
 public sealed record BinCategoryRow(string Category, int Count, double Percent);
 public sealed record BinSiteRow(string Category, string Bin, double?[] Percentages)
 {
+    public string Description { get; init; } = "";
     public double BinSort => NumericText.SortKey(Bin);
 }
 public sealed record BinStatisticsResult(int ChipCount, int MissingSBin, int MissingHBin,
@@ -73,7 +75,8 @@ public static class BinStatisticsService
         }
         var order = categoryCounts.Keys.Select((name, index) => (name, index)).ToDictionary(p => p.name, p => p.index);
         double Percent(int count, int total) => total == 0 ? 0 : count * 100.0 / total;
-        var sRows = sbins.Select(p => new BinCountRow(p.Key, Category(p.Key), p.Value, Percent(p.Value, sTotal)))
+        var sRows = sbins.Select(p => new BinCountRow(p.Key, Category(p.Key), p.Value, Percent(p.Value, sTotal))
+            { Description = config.SBinDescriptions.GetValueOrDefault(NormalizeBin(p.Key), "") })
             .OrderBy(r => order[r.Category]).ThenBy(r => r.BinSort).ThenBy(r => r.Bin, StringComparer.OrdinalIgnoreCase).ToList();
         var hRows = hbins.Select(p => new BinCountRow(p.Key, "", p.Value, Percent(p.Value, hTotal)))
             .OrderBy(r => r.BinSort).ThenBy(r => r.Bin, StringComparer.OrdinalIgnoreCase).ToList();
@@ -84,7 +87,8 @@ public static class BinStatisticsService
             PassCount = chosen.Values.Count(r => hbinClassifier.Classify(r.HBin) == OriginalDisposition.Pass),
             PartialPassCount = chosen.Values.Count(r => hbinClassifier.Classify(r.HBin) == OriginalDisposition.PartialPass),
             SiteRows = sRows.Select(r => new BinSiteRow(r.Category, r.Bin, sites.Select(s =>
-                siteTotals.GetValueOrDefault(s) == 0 ? (double?)null : Percent(siteBins.GetValueOrDefault((s, r.Bin)), siteTotals[s])).ToArray())).ToList()
+                siteTotals.GetValueOrDefault(s) == 0 ? (double?)null : Percent(siteBins.GetValueOrDefault((s, r.Bin)), siteTotals[s])).ToArray())
+                { Description = r.Description }).ToList()
         };
     }
 }

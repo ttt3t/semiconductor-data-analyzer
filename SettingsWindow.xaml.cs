@@ -114,11 +114,18 @@ public partial class SettingsWindow : Window
         _fileName = string.IsNullOrEmpty(config.ConfigFileName) ? "config.ini" : Path.ChangeExtension(config.ConfigFileName, ".ini");
         TxtConfig.Text = ConfigLoader.Serialize(config);
         ShowAnalysisControls(config);
+        ShowSBinDescriptions(config);
         ShowIdentityControls(config);
     }
 
     private AnalyzerConfig ReadConfig()
     {
+        if (_sbinDescriptionsDirty)
+        {
+            string descriptionIni = ReplaceSBinDescriptions(TxtConfig.Text, TxtSBinDescriptions.Text);
+            _ = ConfigLoader.Parse(descriptionIni, _fileName);
+            TxtConfig.Text = descriptionIni; _sbinDescriptionsDirty = false;
+        }
         if (_identityDirty)
         {
             var numbers = RetestIdentityService.ParseTestNumbers(TxtUuidTestNumbers.Text);
@@ -164,6 +171,7 @@ public partial class SettingsWindow : Window
             string line = lines[i].Trim();
             if (line.StartsWith('[') && line.EndsWith(']')) { section = line[1..^1].Trim(); continue; }
             if (section.Equals("SBinCategories", StringComparison.OrdinalIgnoreCase) ||
+                section.Equals("SBinDescriptions", StringComparison.OrdinalIgnoreCase) ||
                 section.Equals("ProgramCompatibility", StringComparison.OrdinalIgnoreCase)) continue;
             int equals = line.IndexOf('=');
             if (equals <= 0 || line.StartsWith(';') || line.StartsWith('#')) continue;
@@ -203,9 +211,10 @@ public partial class SettingsWindow : Window
         var selected = SettingsTabs.SelectedItem as TabItem;
         try
         {
-            if (ReferenceEquals(_lastTab, AnalysisTab) || ReferenceEquals(_lastTab, IdentityTab)) _ = ReadConfig();
+            if (ReferenceEquals(_lastTab, AnalysisTab) || ReferenceEquals(_lastTab, IdentityTab) || ReferenceEquals(_lastTab, SBinDescriptionTab)) _ = ReadConfig();
             if (ReferenceEquals(selected, AnalysisTab)) ShowAnalysisControls(ConfigLoader.Parse(TxtConfig.Text, _fileName));
             if (ReferenceEquals(selected, IdentityTab)) ShowIdentityControls(ConfigLoader.Parse(TxtConfig.Text, _fileName));
+            if (ReferenceEquals(selected, SBinDescriptionTab)) ShowSBinDescriptions(ConfigLoader.Parse(TxtConfig.Text, _fileName));
             _lastTab = selected;
             BtnApplyAnalysis.Visibility = ReferenceEquals(selected, AppearanceTab) ? Visibility.Collapsed : Visibility.Visible;
         }

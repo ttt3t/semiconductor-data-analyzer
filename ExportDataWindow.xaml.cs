@@ -30,6 +30,7 @@ public partial class ExportDataWindow : Window
     public bool CombineWafers => ReportCombineWafers.IsChecked == true;
     public bool ShowBinNumbers => ReportBinNumbers.IsChecked == true;
     public bool ShowSiteBorders => ReportSiteBorders.IsChecked == true;
+    public bool FailChipsOnly => ChkFailChips.IsChecked == true;
     public RetestMode Mode => KeepFirst.IsChecked == true ? RetestMode.First : KeepLast.IsChecked == true ? RetestMode.Last
         : KeepRetests.IsChecked == true ? RetestMode.OnlyRetests : RetestMode.All;
     public ExportDataWindow(IEnumerable<string> wafers, double defaultOutlierSigma = 6,
@@ -40,6 +41,7 @@ public partial class ExportDataWindow : Window
             ? defaultOutlierSigma : 6).ToString("G", CultureInfo.InvariantCulture);
         if (report)
         {
+            DataFormatSettings.Visibility = Visibility.Collapsed;
             Title = "导出 XLSX 报告";
             Width = 870; MinWidth = 810;
             Height = 740; MinHeight = 700;

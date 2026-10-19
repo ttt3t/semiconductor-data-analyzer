@@ -124,6 +124,7 @@ public partial class MainWindow : Window
         Closed += (_, _) =>
         {
             _closing = true;
+            _sampleFilterWindow?.Close(); _sampleFilterWindow = null;
             CloseValueFilter();
             _detailVersion++;
             _detailTimer.Stop();
@@ -468,13 +469,22 @@ public partial class MainWindow : Window
         var wafers = options.SelectedWafers;
         var mode = options.Mode;
         var outlierSigma = options.OutlierSigma;
-        var file = new SaveFileDialog { Filter = "CSV 文件 (*.csv)|*.csv", DefaultExt = ".csv", AddExtension = true,
-            FileName = "integrated.csv", Title = "导出数据" };
+        bool failOnly = options.FailChipsOnly;
+        var file = new SaveFileDialog { Filter = failOnly ? "Excel 文件 (*.xlsx)|*.xlsx" : "CSV 文件 (*.csv)|*.csv",
+            DefaultExt = failOnly ? ".xlsx" : ".csv", AddExtension = true,
+            FileName = failOnly ? "Fail芯片数据.xlsx" : "integrated.csv", Title = "导出数据" };
         if (file.ShowDialog(this) != true) return;
         try
         {
             await RunBusyAsync(async () =>
             {
+                if (failOnly)
+                {
+                    var exported = await Task.Run(() => FailChipXlsxService.Save(file.FileName, ActiveData, _config, wafers, mode, outlierSigma));
+                    TxtStatus.Text = $"已导出 {exported.FailChips} 颗 Fail 芯片、{exported.Records} 条记录" +
+                        (exported.ReferenceSerial == null ? "；没有可用的良品参考。" : $"；良品参考 SN：{exported.ReferenceSerial}");
+                    return;
+                }
                 int count = await Task.Run(() => IntegratedCsvService.Save(file.FileName, ActiveData, wafers, mode, outlierSigma));
                 TxtStatus.Text = $"已导出 {wafers.Length} 个 wafer、{count} 条测试记录（含异常原文），可直接重新打开" +
                     (outlierSigma.HasValue ? $"；已剔除均值 ± {outlierSigma.Value:G}σ 以外的测项值" : "");
@@ -557,7 +567,7 @@ public partial class MainWindow : Window
     }
 
     private sealed record PreparedAnalysis(CsvParseResult Data, List<string> Sites, List<TestItemSummary> Summaries,
-        CsvParseResult Source, CsvParseResult Scope, IReadOnlyList<SampleRange> Ranges);
+        CsvParseResult Source, CsvParseResult Scope, IReadOnlyList<SampleRange> Ranges, SampleMatchMode Match);
 
     private Task<PreparedAnalysis> PrepareAnalysisAsync(CsvParseResult data, AnalyzerConfig config)
     {
@@ -565,16 +575,17 @@ public partial class MainWindow : Window
         bool combine = _combineSites;
         bool combineWafers = _combineWafers;
         var ranges = ReferenceEquals(data, _data) ? _sampleRanges.ToArray() : Array.Empty<SampleRange>();
-        var cachedScope = ReferenceEquals(data, _scopeSource) && _scopeMode == mode && _scopeRanges.SequenceEqual(ranges) ? _scopeData : null;
+        var match = ReferenceEquals(data, _data) ? _sampleMatch : SampleMatchMode.Intersection;
+        var cachedScope = ReferenceEquals(data, _scopeSource) && _scopeMode == mode && _scopeMatch == match && _scopeRanges.SequenceEqual(ranges) ? _scopeData : null;
         return Task.Run(() =>
         {
             AnalysisOperation.CheckCancellation();
             data = RetestIdentityService.Prepare(data, config);
-            var scope = ReferenceEquals(data, _scopeSource) && cachedScope != null ? cachedScope : SampleFilterService.Apply(data, ranges, mode);
+            var scope = ReferenceEquals(data, _scopeSource) && cachedScope != null ? cachedScope : SampleFilterService.Apply(data, ranges, mode, match);
             var analysis = DatasetService.SelectRetests(scope, mode);
             var sites = CollectSites(scope.Items, scope.Records);
             return new PreparedAnalysis(analysis, sites,
-                SummaryService.Build(analysis.Items, sites, scope.Wafers, combine, combineWafers, config), data, scope, ranges);
+                SummaryService.Build(analysis.Items, sites, scope.Wafers, combine, combineWafers, config), data, scope, ranges, match);
         });
     }
 
@@ -600,6 +611,7 @@ public partial class MainWindow : Window
         _sampleRanges = prepared.Ranges;
         _scopeData = prepared.Scope;
         _scopeSource = data; _scopeMode = _retestMode; _scopeRanges = prepared.Ranges;
+        _sampleMatch = _scopeMatch = prepared.Match;
         _sampleIncludedIds = _sampleRanges.Count == 0 ? null : prepared.Scope.Records.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
         TxtSampleFilterAction.Text = _sampleRanges.Count == 0 ? "数据筛选" : $"数据筛选（{_sampleRanges.Count}）";
         var previousLease = _datasetLease; _datasetLease = lease; previousLease?.Dispose();
@@ -611,6 +623,7 @@ public partial class MainWindow : Window
         ApplySearchFilter(keepName, keepSite, keepWafer);
         UpdateBottomInfo();
         ScheduleDetail();
+        _sampleFilterWindow?.UpdateItems(data.Items, _retestMode);
     }
 
     private async Task RunBusyAsync(Func<Task> operation)

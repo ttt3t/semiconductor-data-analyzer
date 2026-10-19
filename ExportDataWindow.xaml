@@ -1,10 +1,14 @@
 <Window x:Class="SemiconductorCsvAnalyzer.ExportDataWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="导出数据" Width="570" Height="700" MinWidth="490" MinHeight="620"
+        Title="导出数据" Width="570" Height="740" MinWidth="490" MinHeight="650"
         WindowStartupLocation="CenterOwner">
     <DockPanel Margin="20">
         <StackPanel x:Name="ExportOptions" DockPanel.Dock="Bottom" Margin="0,12,0,0">
+            <GroupBox x:Name="DataFormatSettings" Header="导出类型" Margin="0,0,0,10">
+                <CheckBox x:Name="ChkFailChips" Content="仅导出 Fail 芯片（XLSX，附一颗良品参考）" Margin="12"
+                          ToolTip="芯片按末次 HBIN 是否属于 Pass 分类；按所选复测口径输出，同颗芯片连续成块。"/>
+            </GroupBox>
             <GroupBox Header="2. 测试记录保留方式">
                 <StackPanel Margin="12">
                     <RadioButton x:Name="KeepAll" Content="首测与复测均保留" IsChecked="True" Margin="0,0,0,8"/>

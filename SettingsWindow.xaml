@@ -197,6 +197,14 @@
                     </Grid>
                 </Grid>
             </TabItem>
+            <TabItem x:Name="SBinDescriptionTab" Header="SBIN 释义">
+                <DockPanel Margin="20">
+                    <TextBlock DockPanel.Dock="Top" Text="每行填写 SBIN=释义，例如 2=开路。应用后显示在 BIN / Wafer Table，分类规则保持独立。"
+                               TextWrapping="Wrap" Margin="0,0,0,10"/>
+                    <TextBox x:Name="TxtSBinDescriptions" AcceptsReturn="True" AcceptsTab="True" FontFamily="Consolas"
+                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextChanged="SBinDescriptions_Changed"/>
+                </DockPanel>
+            </TabItem>
             <TabItem x:Name="IniTab" Header="INI 配置">
                 <DockPanel TextElement.Foreground="{StaticResource TextPrimary}" TextElement.FontWeight="Normal" Margin="18">
                     

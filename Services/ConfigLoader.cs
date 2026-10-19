@@ -49,6 +49,12 @@ public static class ConfigLoader
 
     private static void Apply(AnalyzerConfig c, string? section, string key, string value)
     {
+        if (string.Equals(section, "SBinDescriptions", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!c.SBinDescriptions.TryAdd(BinStatisticsService.NormalizeBin(key), value))
+                throw new InvalidDataException($"SBIN 释义重复：{key}");
+            return;
+        }
         if (string.Equals(section, "ProgramCompatibility", StringComparison.OrdinalIgnoreCase))
         {
             if (!c.ProgramCompatibility.TryAdd(key, List(value)))
@@ -287,6 +293,10 @@ public static class ConfigLoader
             + "; 坏点=1,2,3" + Environment.NewLine + "; 坏线=4,5,6" + Environment.NewLine;
         foreach (var category in c.SBinCategories)
             text += category.Key + "=" + string.Join(",", category.Value) + Environment.NewLine;
+        text += Environment.NewLine + "[SBinDescriptions]" + Environment.NewLine
+            + "; 每行：SBIN=释义，例如 2=开路；未配置的 SBIN 留空。" + Environment.NewLine;
+        foreach (var description in c.SBinDescriptions)
+            text += description.Key + "=" + description.Value + Environment.NewLine;
         text += Environment.NewLine + "[ProgramCompatibility]" + Environment.NewLine
             + "; 可选：经确认兼容的程序组=程序A,程序B；默认只使用相同程序。" + Environment.NewLine;
         foreach (var group in c.ProgramCompatibility)

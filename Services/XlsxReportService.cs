@@ -310,7 +310,7 @@ public static class XlsxReportService
             }
             int statRow = Math.Max(row + 26, legendRow + 2);
             var bins = soft ? stats.SBins : stats.HBins;
-            WriteHeader(sheet, statRow, 2, soft ? new[] { "SBIN", "数量", "占比", "分类" } : new[] { "HBIN", "数量", "占比" });
+            WriteHeader(sheet, statRow, 2, soft ? new[] { "SBIN", "数量", "占比", "分类", "释义" } : new[] { "HBIN", "数量", "占比" });
             int detailRow = statRow + 1;
             foreach (var bin in bins)
             {
@@ -321,7 +321,7 @@ public static class XlsxReportService
                 Value(sheet.Cell(detailRow, 3), bin.Count);
                 sheet.Cell(detailRow, 4).Value = bin.Percent / 100;
                 sheet.Cell(detailRow, 4).Style.NumberFormat.Format = "0.00%";
-                if (soft) sheet.Cell(detailRow, 5).Value = bin.Category;
+                if (soft) { sheet.Cell(detailRow, 5).Value = bin.Category; sheet.Cell(detailRow, 6).Value = bin.Description; }
                 detailRow++;
             }
             if (soft)

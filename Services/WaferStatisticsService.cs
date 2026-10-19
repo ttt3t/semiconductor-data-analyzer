@@ -2,7 +2,8 @@ using SemiconductorCsvAnalyzer.Models;
 
 namespace SemiconductorCsvAnalyzer.Services;
 
-public sealed record WaferBinRow(string Bin, string Category, int[] Counts, double?[] Percentages);
+public sealed record WaferBinRow(string Bin, string Category, int[] Counts, double?[] Percentages)
+{ public string Description { get; init; } = ""; }
 public sealed record WaferStatisticsResult(List<string> Wafers, int[] ChipCounts, int[] ValidSBinCounts,
     List<WaferBinRow> Rows)
 {
@@ -30,7 +31,8 @@ public static class WaferStatisticsService
             .ThenBy(r => r.BinSort).ThenBy(r => r.Bin, StringComparer.Ordinal)
             .Select(r => new WaferBinRow(r.Bin, r.Category,
                 lookup.Select(bins => bins.GetValueOrDefault(r.Bin)).ToArray(),
-                lookup.Select((bins, i) => valid[i] == 0 ? (double?)null : 100.0 * bins.GetValueOrDefault(r.Bin) / valid[i]).ToArray()))
+                lookup.Select((bins, i) => valid[i] == 0 ? (double?)null : 100.0 * bins.GetValueOrDefault(r.Bin) / valid[i]).ToArray())
+                { Description = r.Description })
             .ToList();
         var hValid = summaries.Select(s => s.ChipCount - s.MissingHBin).ToArray();
         var hLookup = summaries.Select(s => s.HBins.ToDictionary(r => r.Bin, r => r.Count, StringComparer.Ordinal)).ToArray();

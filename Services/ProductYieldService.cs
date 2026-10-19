@@ -33,6 +33,7 @@ public static class ProductYieldService
         var config = file.ConfigText.Length > 0 ? ConfigLoader.Parse(file.ConfigText, product.Name + "-文件配置.ini") : original;
         config.PassHBins = original.PassHBins; config.PartialPassHBins = original.PartialPassHBins;
         config.SBinCategories = original.SBinCategories;
+        config.SBinDescriptions = original.SBinDescriptions;
         config.TestMode = kind == "FT" ? TestAnalysisMode.FT : TestAnalysisMode.CP;
         config.UuidTestNumbers = RetestIdentityService.ParseTestNumbers(product.UuidTestNumbers);
         return config;
