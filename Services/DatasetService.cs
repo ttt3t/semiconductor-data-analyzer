@@ -152,7 +152,7 @@ public static class DatasetService
         }
         catch { rawStore?.Dispose(); throw; }
 
-        foreach (var item in items) { item.Values.Initialize(records, item.Id); item.Errors.Clear(); }
+        foreach (var item in items) { item.Values.Initialize(records, item.Id, item.IsStdfMeasurement); item.Errors.Clear(); }
         var devices = new Dictionary<(string Wafer, int? X, int? Y, string Record), DeviceInfo>(records.Count);
         TestItemData[]? defaultItemsArray = null;
         MeasurementSchema? lastSchema = null;

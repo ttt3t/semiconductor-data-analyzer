@@ -1,6 +1,8 @@
 <Project>
   <PropertyGroup>
     <Version>2.0.4</Version>
+    <!-- Desktop workloads use the smaller workstation GC in both entry projects. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
     <!-- Both entry projects compile the same WPF views; keep their generated resource references separate. -->
     <BaseIntermediateOutputPath>obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
     <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;bin\**</DefaultItemExcludes>

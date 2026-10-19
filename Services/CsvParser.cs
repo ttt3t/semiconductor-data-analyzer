@@ -47,17 +47,8 @@ public static class CsvParser
         try { encoding = CsvText.EncodingFor(config.EncodingName); }
         catch { encoding = Encoding.UTF8; }
 
-        FileStream stream;
-        try
-        {
-            stream = new FileStream(csvPath, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan);
-        }
-        catch (IOException ex) when (ex.Message.Contains("being used by another process"))
-        {
-            throw new IOException("文件正在被 Excel 或其他程序占用，请先关闭后再试。", ex);
-        }
-
-        using var input = stream;
+        using var input = SourceFileReader.Open(csvPath);
+        var stamp = new SourceFileStamp(input);
         // Keep only definition rows. A first pass preserves validation against the
         // widest row without retaining the whole file and a second split-string copy.
         var headerRows = new HashSet<int>(new[] { config.TestItemRow, config.LowLimitRow,
@@ -80,6 +71,7 @@ public static class CsvParser
                     if (rowCount < config.DataStartRow) definitionSignatures.Add(CsvText.Signature(cells));
                 }
             }
+        stamp.Validate(input);
         if (rowCount < config.DataStartRow)
             throw new InvalidDataException($"CSV 行数不足，需要至少 {config.DataStartRow} 行");
         if (config.WaferColumn > maxCols)
@@ -168,6 +160,7 @@ public static class CsvParser
         try
         {
             progress?.Invoke("正在读取数据行...");
+            stamp.Validate(input);
             input.Position = 0;
             using var dataReader = new StreamReader(input, encoding, true, 65536, leaveOpen: true);
             var rowCells = new List<string>(maxCols);
@@ -259,6 +252,7 @@ public static class CsvParser
                 records.Add(record);
             }
 
+            stamp.Validate(input);
             rawStore.Seal();
             var parsed = DatasetService.Build(items, records);
             if (skippedHeaders > 0) parsed.SourceDescription = $"已跳过 {skippedHeaders} 行重复表头";

@@ -21,7 +21,8 @@ public static class IntegratedCsvService
 
     public static bool IsIntegrated(string path)
     {
-        using var reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        using var file = SourceFileReader.Open(path);
+        using var reader = new StreamReader(file, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
         return reader.ReadLine() is Marker or Marker2 or Marker3 or Marker4;
     }
 
@@ -238,7 +239,9 @@ public static class IntegratedCsvService
 
     public static CsvParseResult Load(string path)
     {
-        using var reader = new TextFieldParser(path, Encoding.UTF8)
+        using var file = SourceFileReader.Open(path);
+        var stamp = new SourceFileStamp(file);
+        using var reader = new TextFieldParser(file, Encoding.UTF8, detectEncoding: true, leaveOpen: true)
         { TextFieldType = FieldType.Delimited, HasFieldsEnclosedInQuotes = true, TrimWhiteSpace = false };
         reader.SetDelimiters(",");
         var marker = reader.ReadFields();
@@ -301,6 +304,7 @@ public static class IntegratedCsvService
                 record.Measurements = rawStore.Append(schema, measurements);
                 records.Add(record);
             }
+            stamp.Validate(file);
             rawStore.Seal();
             return DatasetService.Build(items, records);
         }

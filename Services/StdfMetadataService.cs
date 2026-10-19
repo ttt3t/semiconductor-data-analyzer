@@ -30,8 +30,8 @@ public static class StdfMetadataService
     public static StdfFileMetadata Read(string path, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
-        var info = new FileInfo(path); long length = info.Length; DateTime modified = info.LastWriteTimeUtc;
-        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan);
+        using var file = SourceFileReader.Open(path);
+        var stamp = new SourceFileStamp(file);
         using var reader = new StdfReader(file);
         var builder = new StdfMetadataBuilder();
         while (reader.NextMetadata())
@@ -40,8 +40,7 @@ public static class StdfMetadataService
             try { builder.Read(reader.Type, reader.Subtype, reader.Fields); }
             catch (InvalidDataException ex) { throw new InvalidDataException($"STDF 基本信息 {reader.Type}/{reader.Subtype}（截至字节 {reader.Offset}）：{ex.Message}", ex); }
         }
-        token.ThrowIfCancellationRequested(); info.Refresh();
-        if (!info.Exists || info.Length != length || info.LastWriteTimeUtc != modified) throw new IOException("读取 STDF 基本信息期间文件发生变化，请重新导入。");
+        token.ThrowIfCancellationRequested(); stamp.Validate(file);
         return builder.Complete();
     }
 }

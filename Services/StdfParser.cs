@@ -18,21 +18,25 @@ public static class StdfParser
     {
         if (!cancellationToken.CanBeCanceled) cancellationToken = AnalysisOperation.Token;
         if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
-        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan);
+        using var file = SourceFileReader.Open(path);
+        var stamp = new SourceFileStamp(file);
         string name = Path.GetFileName(path);
         if (name.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)) name = name[..^3];
         name = Path.GetFileNameWithoutExtension(name);
         var catalog = new Catalog(mode);
         progress?.Invoke("正在读取 STDF 测试定义…");
         new Pass(catalog, config, name, null, cancellationToken).Read(file);
+        stamp.Validate(file);
         catalog.FinishNames();
         cancellationToken.ThrowIfCancellationRequested();
         progress?.Invoke("正在读取 STDF 芯片与测量值…");
+        stamp.Validate(file);
         var store = new RawMeasurementStore();
         try
         {
             var pass = new Pass(catalog, config, name, store, cancellationToken);
             pass.Read(file);
+            stamp.Validate(file);
             store.Seal();
             if (pass.Records.Count == 0) throw new InvalidDataException("STDF 不包含完成的芯片记录（PRR）。");
             var orderedRecords = new List<CsvRecord>(pass.Records.Count);

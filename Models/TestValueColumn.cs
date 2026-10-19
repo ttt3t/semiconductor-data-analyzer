@@ -2,23 +2,35 @@ using System.Collections;
 
 namespace SemiconductorCsvAnalyzer.Models;
 
-/// <summary>One double per source row, sharing the dataset's record table.</summary>
+/// <summary>Column values share the record table; sparse columns retain source row indexes.</summary>
 public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
 {
     private double[] _numbers = Array.Empty<double>();
+    private float[]? _singleNumbers;
     private IReadOnlyList<CsvRecord> _records = Array.Empty<CsvRecord>();
     private int[]? _validRows;
+    private bool _compact, _completed;
     private string? _testId;
     private int _count;
     public int Count => _count;
     public bool IsReadOnly => false;
-    internal double GetSourceRowValue(int row) => _numbers[row];
-    internal double GetValueAt(int index) => _numbers[Row(index)];
+    internal double GetSourceRowValue(int row)
+    {
+        if ((uint)row >= (uint)_records.Count) throw new ArgumentOutOfRangeException(nameof(row));
+        int offset = _compact ? Array.BinarySearch(_validRows!, row) : row;
+        return offset < 0 ? double.NaN : Number(offset);
+    }
+    internal double GetValueAt(int index)
+    {
+        int row = Row(index);
+        return Number(_compact ? index : row);
+    }
     internal CsvRecord GetRecordAt(int index) => _records[Row(index)];
+    private double Number(int offset) => _singleNumbers is { } singles ? singles[offset] : _numbers[offset];
 
     internal bool TryGetContiguousValues(out ReadOnlySpan<double> values)
     {
-        if (_validRows == null)
+        if (_singleNumbers == null && (_validRows == null || _compact))
         {
             values = _numbers.AsSpan(0, _count);
             return true;
@@ -29,32 +41,81 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
 
     internal void CopyValuesTo(Span<double> destination)
     {
-        if (_validRows == null)
+        if (destination.Length < _count) throw new ArgumentException("Destination is too short.", nameof(destination));
+        if (TryGetContiguousValues(out var values))
         {
-            _numbers.AsSpan(0, _count).CopyTo(destination);
+            values.CopyTo(destination);
             return;
         }
         var rows = _validRows;
-        var numbers = _numbers;
+        bool consecutive = rows == null || _compact;
         for (int i = 0; i < _count; i++)
-            destination[i] = numbers[rows[i]];
+            destination[i] = Number(consecutive ? i : rows![i]);
     }
 
-    internal void Initialize(IReadOnlyList<CsvRecord> records, string testId)
+    internal void Initialize(IReadOnlyList<CsvRecord> records, string testId, bool preferSingle = false)
     {
         _records = records; _testId = testId;
-        _numbers = new double[records.Count];
-        Array.Fill(_numbers, double.NaN);
+        if (preferSingle)
+        {
+            _numbers = Array.Empty<double>();
+            _singleNumbers = new float[records.Count];
+            Array.Fill(_singleNumbers, float.NaN);
+        }
+        else
+        {
+            _singleNumbers = null;
+            _numbers = new double[records.Count];
+            Array.Fill(_numbers, double.NaN);
+        }
         _validRows = null; _count = 0;
+        _compact = _completed = false;
     }
-    internal void SetRow(int row, double number) { _numbers[row] = number; _count++; }
+    internal void SetRow(int row, double number)
+    {
+        if (_completed) throw new InvalidOperationException("The column is already complete.");
+        if (!double.IsFinite(number)) throw new ArgumentOutOfRangeException(nameof(number));
+        bool wasMissing = double.IsNaN(Number(row));
+        if (_singleNumbers is { } singles)
+        {
+            float value = (float)number;
+            // STDF R4 values are exact. Mixed imports or other higher precision
+            // values promote the whole column rather than rounding a limit crossing.
+            if ((double)value == number) singles[row] = value;
+            else
+            {
+                _numbers = new double[singles.Length];
+                for (int i = 0; i < singles.Length; i++) _numbers[i] = singles[i];
+                _singleNumbers = null;
+                _numbers[row] = number;
+            }
+        }
+        else _numbers[row] = number;
+        if (wasMissing) _count++;
+    }
     internal void Complete()
     {
-        if (_count == _numbers.Length) return;
+        if (_completed) return;
+        _completed = true;
+        int sourceCount = _records.Count;
+        if (_count == sourceCount) return;
         _validRows = new int[_count];
+        // Strictly below 60%: keep doubles when needed, but discard empty slots.
+        _compact = (long)_count * 5 < (long)sourceCount * 3;
+        var compactDoubles = _compact && _singleNumbers == null ? new double[_count] : null;
+        var compactSingles = _compact && _singleNumbers != null ? new float[_count] : null;
         int next = 0;
-        for (int row = 0; row < _numbers.Length; row++)
-            if (double.IsFinite(_numbers[row])) _validRows[next++] = row;
+        for (int row = 0; row < sourceCount; row++)
+        {
+            double number = Number(row);
+            if (!double.IsFinite(number)) continue;
+            _validRows[next] = row;
+            if (compactDoubles != null) compactDoubles[next] = number;
+            if (compactSingles != null) compactSingles[next] = (float)number;
+            next++;
+        }
+        if (compactDoubles != null) _numbers = compactDoubles;
+        if (compactSingles != null) _singleNumbers = compactSingles;
     }
     private int Row(int index)
     {
@@ -63,7 +124,7 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
     }
     public TestValue this[int index]
     {
-        get { int row = Row(index); return new TestValue(_records[row], _numbers[row], _testId); }
+        get { int row = Row(index); return new TestValue(_records[row], Number(_compact ? index : row), _testId); }
         set { Row(index); MakeEditable(); _numbers[index] = value.Value; ((List<CsvRecord>)_records)[index] = value.Record; }
     }
 
@@ -71,11 +132,12 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
     // uses Initialize/SetRow and never stores a record reference for each test cell.
     private void MakeEditable()
     {
-        if (_testId == null && _validRows == null && _records is List<CsvRecord>) return;
+        if (_testId == null && _validRows == null && _singleNumbers == null && _records is List<CsvRecord>) return;
         var numbers = new double[_count];
         var records = new List<CsvRecord>(_count);
-        for (int i = 0; i < _count; i++) { int row = Row(i); numbers[i] = _numbers[row]; records.Add(_records[row]); }
-        _numbers = numbers; _records = records; _validRows = null; _testId = null;
+        for (int i = 0; i < _count; i++) { int row = Row(i); numbers[i] = Number(_compact ? i : row); records.Add(_records[row]); }
+        _numbers = numbers; _singleNumbers = null; _records = records; _validRows = null; _testId = null;
+        _compact = _completed = false;
     }
     public void Add(TestValue value)
     {
@@ -86,7 +148,7 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
     }
     public void AddRange(IEnumerable<TestValue> values) { foreach (var value in values) Add(value); }
     public void Clear()
-    { _numbers = Array.Empty<double>(); _records = Array.Empty<CsvRecord>(); _validRows = null; _testId = null; _count = 0; }
+    { _numbers = Array.Empty<double>(); _singleNumbers = null; _records = Array.Empty<CsvRecord>(); _validRows = null; _testId = null; _count = 0; _compact = _completed = false; }
     public int IndexOf(TestValue value)
     { for (int i = 0; i < Count; i++) if (this[i].Equals(value)) return i; return -1; }
     public bool Contains(TestValue value) => IndexOf(value) >= 0;

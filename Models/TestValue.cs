@@ -1,6 +1,6 @@
 namespace SemiconductorCsvAnalyzer.Models;
 
-// A transient view of one column cell; datasets store doubles, not TestValue instances.
+// A transient double-precision view; datasets store numeric columns, not TestValue instances.
 public struct TestValue
 {
     private CsvRecord? _record;

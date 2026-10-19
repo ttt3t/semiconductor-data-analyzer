@@ -162,7 +162,8 @@ public static class CsvFormatDetector
 
     private static List<string> Sample(string path, string encoding, bool quoted, CancellationToken token)
     {
-        using var file = File.OpenRead(path);
+        using var file = SourceFileReader.Open(path);
+        var stamp = new SourceFileStamp(file);
         using var reader = new StreamReader(file, CsvText.EncodingFor(encoding), true, 65536);
         var rows = new List<string>(); int characters = 0;
         foreach (string row in CsvText.ReadRecords(reader, quoted, token, MaxCharacters))
@@ -172,12 +173,13 @@ public static class CsvFormatDetector
             rows.Add(row); characters += row.Length;
             if (rows.Count >= MaxRows) break;
         }
+        stamp.Validate(file);
         return rows;
     }
 
     private static string DetectEncoding(string path, List<string> warnings)
     {
-        using var file = File.OpenRead(path);
+        using var file = SourceFileReader.Open(path);
         byte[] bytes = new byte[Math.Min(file.Length, 65536)]; int count = file.Read(bytes);
         if (count >= 4 && bytes[0] == 0xff && bytes[1] == 0xfe && bytes[2] == 0 && bytes[3] == 0) return "utf-32";
         if (count >= 4 && bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0xfe && bytes[3] == 0xff) return "utf-32BE";

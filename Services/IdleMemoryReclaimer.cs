@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime;
 using System.Windows.Input;
 using System.Windows.Threading;
 
@@ -14,6 +15,8 @@ internal sealed class IdleMemoryReclaimer : IDisposable
     private static long _lastCollection;
     private static long _lastAllocated = GC.GetTotalAllocatedBytes();
     private static readonly object CollectionGate = new();
+    private static bool _startupHandled;
+    private bool _startupPending;
     private bool _pending, _running, _disposed;
     internal int CollectionCount { get; private set; }
 
@@ -37,6 +40,13 @@ internal sealed class IdleMemoryReclaimer : IDisposable
         _timer.Start();
     }
 
+    internal void RequestStartup()
+    {
+        if (_disposed) return;
+        _startupPending = true;
+        Request();
+    }
+
     private void OnInput(object sender, PreProcessInputEventArgs e)
     {
         if (e.StagingItem.Input is MouseEventArgs or KeyboardEventArgs or TextCompositionEventArgs)
@@ -55,6 +65,8 @@ internal sealed class IdleMemoryReclaimer : IDisposable
         if (Stopwatch.GetElapsedTime(_lastActivity).TotalSeconds < 5) return;
 
         StopWaiting();
+        bool startup = _startupPending;
+        _startupPending = false;
         _running = true;
         try
         {
@@ -62,12 +74,30 @@ internal sealed class IdleMemoryReclaimer : IDisposable
             {
                 lock (CollectionGate)
                 {
-                    if (_disposed || _lastCollection != 0 && Stopwatch.GetElapsedTime(_lastCollection).TotalSeconds < 60) return false;
+                    if (_disposed) return false;
+                    bool compactStartup = false;
+                    if (startup && !_startupHandled)
+                    {
+                        _startupHandled = true;
+                        // One small-heap collection after the first window settles.
+                        // Never copy a large loaded dataset just to lower an idle number.
+                        compactStartup = GC.GetTotalMemory(false) <= 32L * 1024 * 1024;
+                    }
+                    if (!compactStartup && _lastCollection != 0 && Stopwatch.GetElapsedTime(_lastCollection).TotalSeconds < 60) return false;
                     long allocated = GC.GetTotalAllocatedBytes();
-                    if (allocated - _lastAllocated < 128L * 1024 * 1024) return false;
-                    // Let the runtime decide whether a background collection is worthwhile.
-                    // Never compact twice or wait for finalizers on every UI operation.
-                    GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, blocking: false, compacting: false);
+                    if (!compactStartup && allocated - _lastAllocated < 128L * 1024 * 1024) return false;
+                    if (compactStartup)
+                    {
+                        GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+                        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+                    }
+                    else
+                    {
+                        // Keep lifecycle reclamation asynchronous and rate limited.
+                        GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, blocking: false, compacting: false);
+                    }
+                    // Do not trim the process working set: live pages would fault
+                    // back in during scrolling, without freeing the live dataset.
                     _lastAllocated = allocated; _lastCollection = Stopwatch.GetTimestamp(); return true;
                 }
             });

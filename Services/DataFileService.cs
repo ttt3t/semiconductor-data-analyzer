@@ -12,7 +12,7 @@ public static class DataFileService
     {
         string name = path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase) ? path[..^3] : path;
         if (name.EndsWith(".std", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".stdf", StringComparison.OrdinalIgnoreCase)) return true;
-        using var file = File.OpenRead(path);
+        using var file = SourceFileReader.Open(path);
         Span<byte> header = stackalloc byte[4];
         return file.Read(header) == 4 && header[2] == 0 && header[3] == 10 &&
             (header[0] == 2 && header[1] == 0 || header[0] == 0 && header[1] == 2);

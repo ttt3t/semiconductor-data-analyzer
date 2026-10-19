@@ -142,7 +142,7 @@ public static class XlsxReportService
         Dictionary<string, int> rowsById, (double Lower, double Upper)? bounds)
     {
         var item = DatasetService.CloneItem(source);
-        item.Values.Initialize(records, item.Id);
+        item.Values.Initialize(records, item.Id, item.IsStdfMeasurement);
         foreach (var sample in source.Values)
         {
             AnalysisOperation.CheckCancellation();

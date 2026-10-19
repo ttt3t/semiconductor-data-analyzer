@@ -1,0 +1,258 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.IO.Compression;
+using System.Reflection;
+using System.Runtime;
+using System.Text;
+using System.Windows;
+using System.Windows.Threading;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static string folder = "";
+    static string assemblyPath = "";
+    static string P(string name) => Path.Combine(folder, name);
+    const BindingFlags Hidden = BindingFlags.Instance | BindingFlags.NonPublic;
+    static void Check(bool value, string text) { if (!value) throw new Exception(text); checks++; Console.WriteLine("PASS " + text); }
+    static object? Field(object value, string name) => value.GetType().GetField(name, Hidden)!.GetValue(value);
+    static void Set(object value, string name, object data) => value.GetType().GetField(name, Hidden)!.SetValue(value, data);
+    static object? Call(object value, string method, params object?[] args) => value.GetType().GetMethod(method, Hidden | BindingFlags.Public)!.Invoke(value, args);
+    static T Delegate<T>(object value, string method) where T : Delegate => value.GetType().GetMethod(method, Hidden)!.CreateDelegate<T>(value);
+    static List<CsvRecord> Rows(int count) => Enumerable.Range(0, count).Select(i => new CsvRecord
+        { Id = "r" + i, SerialNumber = i.ToString(), WaferId = "W", Site = (i % 2 + 1).ToString(), X = i, Y = 0, HBin = "1", SBin = "1" }).ToList();
+    static TestValueColumn Column(List<CsvRecord> rows, bool single, params (int Row, double Value)[] cells)
+    {
+        var column = new TestValueColumn();
+        Delegate<Action<IReadOnlyList<CsvRecord>, string, bool>>(column, "Initialize")(rows, "i", single);
+        var set = Delegate<Action<int, double>>(column, "SetRow"); foreach (var cell in cells) set(cell.Row, cell.Value);
+        Call(column, "Complete"); return column;
+    }
+    static long NumberBytes(TestValueColumn c) => ((double[])Field(c, "_numbers")!).LongLength * 8 +
+        (((float[]?)Field(c, "_singleNumbers"))?.LongLength ?? 0) * 4;
+    static long IndexBytes(TestValueColumn c) => (((int[]?)Field(c, "_validRows"))?.LongLength ?? 0) * 4;
+    static bool Same(StatisticsResult a, StatisticsResult b) => typeof(StatisticsResult).GetProperties().All(p => Equals(p.GetValue(a), p.GetValue(b)));
+
+    static void Columns()
+    {
+        var rows = Rows(10); var column = Column(rows, false, (1, 1.25), (7, 3.5), (9, 2.75));
+        Check(column.Count == 3 && ((double[])Field(column, "_numbers")!).Length == 3 && ((int[])Field(column, "_validRows")!).SequenceEqual(new[] { 1, 7, 9 }), "sparse double storage keeps only values and original row indexes");
+        var source = Delegate<Func<int, double>>(column, "GetSourceRowValue");
+        Check(Enumerable.Range(0, 10).All(i => new[] { 1, 7, 9 }.Contains(i) ? double.IsFinite(source(i)) : double.IsNaN(source(i))), "nonconsecutive missing source rows remain NaN for Run and simulation");
+        Check(column.Select(v => v.RecordId).SequenceEqual(new[] { "r1", "r7", "r9" }) && column.Select(v => v.Value).SequenceEqual(new[] { 1.25, 3.5, 2.75 }), "enumeration aligns compact values with shared chip identities");
+        Call(column, "Complete"); Check(column.Count == 3 && source(7) == 3.5, "completion is idempotent");
+        var site = IndexedTestValues.ForSite(column, "2");
+        Check(site.Count == 3 && StatisticsService.Calculate(site, 1, 3).AboveUsl == 1 && StatisticsService.CalculateMedian(column) == 2.75, "indexed statistics and median read compact doubles correctly");
+        var sixty = Column(rows, false, Enumerable.Range(0, 6).Select(i => (i, (double)i)).ToArray());
+        Check(((double[])Field(sixty, "_numbers")!).Length == 10 && !(bool)Field(sixty, "_compact")!, "exactly sixty percent retains dense storage");
+        var fiftyNine = Column(Rows(100), false, Enumerable.Range(0, 59).Select(i => (i, (double)i)).ToArray());
+        Check(((double[])Field(fiftyNine, "_numbers")!).Length == 59 && (bool)Field(fiftyNine, "_compact")!, "below sixty percent automatically compresses");
+        var empty = Column(rows, false);
+        Check(empty.Count == 0 && NumberBytes(empty) == 0 && IndexBytes(empty) == 0 && double.IsNaN(Delegate<Func<int, double>>(empty, "GetSourceRowValue")(9)), "empty columns release all numeric slots");
+        var sparseSingle = Column(rows, true, (1, .002f), (7, 1.25f), (9, 3.5f));
+        Check(((float[])Field(sparseSingle, "_singleNumbers")!).Length == 3 && NumberBytes(sparseSingle) == 12 && Delegate<Func<int, double>>(sparseSingle, "GetSourceRowValue")(7) == 1.25, "STDF sparse floats use four bytes and preserve source lookup");
+        var floats = new[] { -1.75f, 0f, 1.2f, .001f, 123456.5f, float.Epsilon, -0f };
+        var denseRows = Rows(floats.Length); var cells = floats.Select((v, i) => (i, (double)v)).ToArray();
+        var single = Column(denseRows, true, cells); var doubles = Column(denseRows, false, cells);
+        Check(NumberBytes(single) == 4L * floats.Length && NumberBytes(doubles) == 8L * floats.Length, "lossless float columns halve numeric payload");
+        Check(Same(StatisticsService.Calculate(single, 0, 1), StatisticsService.Calculate(doubles, 0, 1)), "float storage uses identical double-precision statistics and limit decisions");
+        var stats = StatisticsService.Calculate(single, 0, 1);
+        Check(StatisticsService.CalculateRobust(single, stats, true, 6) == StatisticsService.CalculateRobust(doubles, stats, true, 6) && StatisticsService.CalculateMedian(single) == StatisticsService.CalculateMedian(doubles), "robust statistics and median keep the same precision");
+        foreach (double precise in new[] { Math.BitIncrement(1.0), double.Epsilon, 1e100, .001 })
+        {
+            var promoted = Column(rows, true, (0, 1.25), (3, precise));
+            Check(Field(promoted, "_singleNumbers") == null && promoted[0].Value == 1.25 && promoted[1].Value == precise, "nonrepresentable value promotes instead of rounding: " + precise.ToString("R"));
+        }
+        var duplicate = new TestValueColumn(); Delegate<Action<IReadOnlyList<CsvRecord>, string, bool>>(duplicate, "Initialize")(rows, "i", true);
+        var set = Delegate<Action<int, double>>(duplicate, "SetRow"); set(3, 1); set(3, 2); Call(duplicate, "Complete");
+        Check(duplicate.Count == 1 && duplicate[0].Value == 2, "rewriting a row does not corrupt the valid count");
+        foreach (var editable in new[] { column, sparseSingle, single })
+        {
+            var expected = editable.Select(v => v.Value).ToList();
+            editable[0] = new TestValue(rows[0], .1); expected[0] = .1;
+            editable.Insert(1, new TestValue(rows[2], .2)); expected.Insert(1, .2);
+            editable.Add(new TestValue(rows[4], .3)); expected.Add(.3);
+            editable.RemoveAt(2); expected.RemoveAt(2);
+            Check(editable.Select(v => v.Value).SequenceEqual(expected) && Field(editable, "_singleNumbers") == null, "editing promotes and preserves sparse or float collection contents");
+            editable.Clear(); Check(editable.Count == 0 && NumberBytes(editable) == 0 && Field(editable, "_validRows") == null, "Clear releases numeric arrays and indexes");
+        }
+    }
+
+    static AnalyzerConfig Config() => new()
+    {
+        TestItemRow = 1, LowLimitRow = 2, HighLimitRow = 3, UnitRow = 4, TestNumberRow = 5,
+        DataStartRow = 6, TestItemStartColumn = 8, SerialNumberColumn = 1, XColumn = 2, YColumn = 3,
+        SiteColumn = 4, SBinColumn = 5, HBinColumn = 6, WaferColumn = 7
+    };
+    const string Csv = "SN,X,Y,Site,SBIN,HBIN,Wafer,Voltage,Current\nLSL,,,,,,,0,0\nUSL,,,,,,,1,2\nUnit,,,,,,,V,A\nTest Num,,,,,,,101,102\nS1,0,0,1,1,1,W1,1.0000000000000002,1\nS2,1,0,2,2,2,W1,0.5,1.5\n";
+    static void Integration()
+    {
+        string path = P("precision.csv"); File.WriteAllText(path, Csv);
+        var config = Config(); var parsed = CsvParser.Parse(path, config); using var lease = new DatasetLease(parsed.Records);
+        Check(parsed.Items[0].Values[0].Value == Math.BitIncrement(1.0) && StatisticsService.Calculate(parsed.Items[0].Values, 0, 1).AboveUsl == 1, "CSV double immediately above USL remains a failure");
+        Check(Field(parsed.Items[0].Values, "_singleNumbers") == null && parsed.Records[0].Measurements[parsed.Items[0].Id] == "1.0000000000000002", "CSV backend precision and disk-backed original text stay intact");
+        var a = new TestItemData { Id = "a", Name = "A", DisplayName = "A", TestNumber = "1", LowLimit = 0, HighLimit = 2 };
+        var b = new TestItemData { Id = "b", Name = "B", DisplayName = "B", TestNumber = "2", IsStdfMeasurement = true };
+        var rows = Rows(24); rows[7].X = rows[1].X;
+        foreach (var r in rows) r.Measurements = new Dictionary<string, string>();
+        rows[1].Measurements["a"] = "1.25"; rows[7].Measurements["a"] = "3.5"; rows[15].Measurements["a"] = "1.75";
+        rows[0].Measurements["b"] = "0.5"; rows[7].Measurements["b"] = "1.25"; rows[19].Measurements["b"] = "1.5";
+        rows[2].Measurements["a"] = "bad"; rows[3].Measurements["a"] = "";
+        var sparse = DatasetService.Build(new() { a, b }, rows); using var sparseLease = new DatasetLease(sparse.Records);
+        Check(a.Values.Count == 3 && a.Errors.Count == 2 && NumberBytes(a.Values) == 24 && NumberBytes(b.Values) == 12, "dataset builder compresses CSV and STDF columns while retaining invalid cells");
+        Check(a.Values[1].RawText == "3.5" && a.Values[1].RecordId == rows[7].Id, "Value raw text follows original row after compression");
+        var first = DatasetService.SelectRetests(sparse, RetestMode.First); var last = DatasetService.SelectRetests(sparse, RetestMode.Last);
+        Check(first.Items[0].Values.Select(v => v.Value).SequenceEqual(new[] { 1.25, 1.75 }) && last.Items[0].Values.Select(v => v.Value).SequenceEqual(new[] { 3.5, 1.75 }), "first and last partial retests preserve sparse source alignment");
+        Check(DatasetService.SelectRetests(sparse, RetestMode.OnlyRetests).Items[0].Values.Single().Value == 3.5, "only-retest mode selects correct compact cell");
+        var snapshot = SimulationSnapshot.Build(sparse, config, RetestMode.Last, default);
+        int chip = Array.FindIndex(snapshot.Chips, c => c.X == 1);
+        Check(snapshot.Value(chip, 0) == 3.5 && snapshot.Value(chip, 1) == 1.25, "joint simulation reads sparse values from physical source rows");
+        Check(snapshot.States[0][Array.FindIndex(snapshot.Chips, c => c.X == 2)] == MeasurementState.Invalid &&
+            double.IsNaN(snapshot.Value(Array.FindIndex(snapshot.Chips, c => c.X == 4), 0)), "simulation distinguishes invalid and nonconsecutive unmeasured cells");
+        var filtered = SampleFilterService.Apply(sparse, new[] { new SampleRange("a", 1, 2) }, RetestMode.All);
+        Check(filtered.Records.Select(r => r.Id).SequenceEqual(new[] { rows[1].Id, rows[15].Id }) && MapDataService.PfPages(sparse, a, null).Sum(p => p.Dies.Count) == 4, "sample filters and PF maps keep compact-column populations");
+        string exported = P("sparse-integrated.csv"); IntegratedCsvService.Save(exported, sparse); var loaded = IntegratedCsvService.Load(exported); using var loadedLease = new DatasetLease(loaded.Records);
+        Check(loaded.Items[0].Values.Select(v => v.Value).SequenceEqual(a.Values.Select(v => v.Value)) && loaded.Items[0].Errors.Count == 2, "integrated export round trip retains sparse values and invalid text");
+        string stdf = Stdf(); var stdfData = StdfParser.Parse(stdf, config); using var stdfLease = new DatasetLease(stdfData.Records);
+        Check(stdfData.Items.All(i => Field(i.Values, "_singleNumbers") is float[]) && stdfData.Items[0].Values[0].Value == (double)1.3f, "real STDF R4 import selects exact float storage");
+    }
+
+    static string Stdf()
+    {
+        string path = P("shared.stdf"); using var output = File.Create(path); using var writer = new BinaryWriter(output);
+        void C(BinaryWriter w, string text) { byte[] bytes = Encoding.ASCII.GetBytes(text); w.Write((byte)bytes.Length); w.Write(bytes); }
+        void R(byte type, byte sub, Action<BinaryWriter> fill) { using var buffer = new MemoryStream(); using (var w = new BinaryWriter(buffer, Encoding.ASCII, true)) fill(w); writer.Write((ushort)buffer.Length); writer.Write(type); writer.Write(sub); writer.Write(buffer.ToArray()); }
+        R(0, 10, w => { w.Write((byte)2); w.Write((byte)4); });
+        R(1, 10, w => { w.Write((uint)0); w.Write((uint)0); w.Write((byte)1); w.Write((byte)'P'); w.Write((byte)' '); w.Write((byte)' '); w.Write((ushort)0); w.Write((byte)' '); foreach (string v in new[] { "LOT", "PRODUCT", "NODE", "TESTER", "JOB", "REV" }) C(w, v); });
+        R(2, 10, w => { w.Write((byte)1); w.Write((byte)1); w.Write((uint)0); C(w, "W1"); });
+        R(5, 10, w => { w.Write((byte)1); w.Write((byte)1); });
+        R(15, 10, w => { w.Write((uint)101); w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((byte)0); w.Write(1.3f); C(w, "Voltage"); C(w, ""); });
+        R(5, 20, w => { w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((ushort)1); w.Write((ushort)1); w.Write((ushort)1); w.Write((short)2); w.Write((short)3); w.Write((uint)0); C(w, "S1"); });
+        R(2, 20, w => { w.Write((byte)1); w.Write((byte)1); for (int i = 0; i < 6; i++) w.Write((uint)0); C(w, "W1"); });
+        R(1, 20, w => { w.Write((uint)0); w.Write((byte)' '); }); return path;
+    }
+
+    static void Files()
+    {
+        string csv = P("shared.csv"); File.WriteAllText(csv, Csv); byte[] before = File.ReadAllBytes(csv); DateTime modified = File.GetLastWriteTimeUtc(csv);
+        var config = Config();
+        using (var writer = new FileStream(csv, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite))
+        {
+            Check(!DataFileService.IsStdf(csv) && !IntegratedCsvService.IsIntegrated(csv), "format sniffers read while an editor holds write access");
+            Check(CsvFormatDetector.Detect(csv, config).Config.TestItemStartColumn == 8 && CsvFormatDetector.Preview(csv, config).Count > 0, "CSV detection and preview support shared editor handles");
+            var data = DataFileService.Parse(csv, config); using var lease = new DatasetLease(data.Records);
+            Check(data.Records.Count == 2, "ordinary CSV imports with an existing read-write handle");
+            IntegratedCsvService.Save(P("shared-integrated.csv"), data);
+        }
+        Check(File.ReadAllBytes(csv).SequenceEqual(before) && File.GetLastWriteTimeUtc(csv) == modified, "shared reads never write source bytes or modification time");
+        string integrated = P("shared-integrated.csv");
+        using (var writer = new FileStream(integrated, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite))
+        {
+            var data = DataFileService.Parse(integrated, config); using var lease = new DatasetLease(data.Records);
+            Check(IntegratedCsvService.IsIntegrated(integrated) && data.Records.Count == 2, "integrated CSV and its marker use shared reading");
+        }
+        string stdf = Stdf(); string gzip = stdf + ".gz";
+        using (var output = File.Create(gzip)) using (var zip = new GZipStream(output, CompressionLevel.Fastest)) using (var input = File.OpenRead(stdf)) input.CopyTo(zip);
+        foreach (string path in new[] { stdf, gzip })
+        {
+            using var writer = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+            var data = DataFileService.Parse(path, config); using var lease = new DatasetLease(data.Records);
+            Check(data.Records.Count == 1 && StdfMetadataService.Read(path).LotId == "LOT", "STDF two-pass parser and lot information share editor access: " + Path.GetExtension(path));
+        }
+        bool rejected = false;
+        using (var exclusive = new FileStream(csv, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            try { CsvParser.Parse(csv, config); } catch (IOException ex) { rejected = ex.Message.Contains("独占锁"); }
+        Check(rejected, "a real exclusive lock reports an actionable error rather than claiming it can be bypassed");
+        rejected = false;
+        try { CsvParser.Parse(csv, config, _ => File.AppendAllText(csv, "S3,2,0,1,1,1,W1,.5,1\n")); } catch (IOException ex) { rejected = ex.Message.Contains("发生变化"); }
+        Check(rejected, "CSV changed between passes fails rather than mixing file versions");
+        rejected = false;
+        try { StdfParser.Parse(stdf, config, text => { if (text.Contains("芯片与测量")) { using var append = new FileStream(stdf, FileMode.Append, FileAccess.Write, FileShare.ReadWrite); append.WriteByte(0); } }); }
+        catch (IOException ex) { rejected = ex.Message.Contains("发生变化"); }
+        Check(rejected, "STDF changed between definition and measurement passes is rejected");
+        var helper = typeof(DataFileService).Assembly.GetType("SemiconductorCsvAnalyzer.Services.SourceFileReader")!;
+        using var shared = (FileStream)helper.GetMethod("Open", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, new object[] { integrated })!;
+        Check(shared.CanRead && !shared.CanWrite, "shared source handles are strictly read-only");
+        string renamed = P("renamed.csv"); File.Move(integrated, renamed, overwrite: true);
+        Check(File.Exists(renamed) && shared.ReadByte() >= 0, "source handle permits rename/delete sharing while open");
+    }
+
+    static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame); }
+    static void Wait(object reclaimer)
+    {
+        var timer = Stopwatch.StartNew();
+        while ((bool)Field(reclaimer, "_running")!) { if (timer.ElapsedMilliseconds > 10000) throw new TimeoutException(); Pump(); Thread.Sleep(2); }
+    }
+    static void Reclaimer()
+    {
+        var type = typeof(DataFileService).Assembly.GetType("SemiconductorCsvAnalyzer.Services.IdleMemoryReclaimer")!;
+        object Create(Func<bool> predicate) => Activator.CreateInstance(type, Dispatcher.CurrentDispatcher, predicate)!;
+        int Count(object r) => (int)type.GetProperty("CollectionCount", Hidden)!.GetValue(r)!;
+        void Tick(object r) { Set(r, "_lastActivity", Stopwatch.GetTimestamp() - Stopwatch.Frequency * 6); Call(r, "OnTick", null, EventArgs.Empty); Wait(r); }
+        bool ready = false; var r = Create(() => ready);
+        Call(r, "RequestStartup"); Tick(r);
+        Check(Count(r) == 0 && (bool)Field(r, "_pending")!, "startup collection waits for calculation/input idle");
+        ready = true; Tick(r);
+        Check(Count(r) == 1 && !(bool)Field(r, "_pending")!, "small startup heap is reclaimed once after idle");
+        var second = Create(() => true); Call(second, "RequestStartup"); Tick(second);
+        Check(Count(second) == 0, "opening a second window does not compact the process again");
+        Call(r, "Request"); Tick(r); Check(Count(r) == 1, "ordinary requests obey collection cooldown");
+        Call(r, "Request"); ((IDisposable)r).Dispose();
+        Check(!(bool)Field(r, "_pending")!, "disposal stops timers and input subscriptions");
+        ((IDisposable)second).Dispose();
+        var big = GC.AllocateUninitializedArray<byte>(40 * 1024 * 1024);
+        type.GetField("_startupHandled", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, false);
+        type.GetField("_lastAllocated", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, GC.GetTotalAllocatedBytes());
+        type.GetField("_lastCollection", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, 0L);
+        var loaded = Create(() => true); Call(loaded, "RequestStartup"); Tick(loaded);
+        Check(Count(loaded) == 0, "startup compaction skips a large loaded heap");
+        GC.KeepAlive(big); ((IDisposable)loaded).Dispose();
+        string runtime = Path.ChangeExtension(assemblyPath, ".runtimeconfig.json");
+        Check(File.ReadAllText(runtime).Contains("\"System.GC.Server\": false"), "workstation GC is explicit in the application runtime configuration");
+    }
+
+    static void Memory()
+    {
+        var rows = Rows(8000); var timer = Stopwatch.StartNew();
+        TestValueColumn[] Build(bool single, int stride)
+        {
+            var columns = new TestValueColumn[1000];
+            for (int c = 0; c < columns.Length; c++)
+            {
+                var col = new TestValueColumn(); Delegate<Action<IReadOnlyList<CsvRecord>, string, bool>>(col, "Initialize")(rows, "i", single);
+                var set = Delegate<Action<int, double>>(col, "SetRow");
+                for (int r = 0; r < rows.Count; r += stride) set(r, (float)(r * .001 + c));
+                Call(col, "Complete"); columns[c] = col;
+            }
+            return columns;
+        }
+        var denseDouble = Build(false, 1); var denseSingle = Build(true, 1); var sparseDouble = Build(false, 10); var sparseSingle = Build(true, 10);
+        long d = denseDouble.Sum(NumberBytes), f = denseSingle.Sum(NumberBytes);
+        long sd = sparseDouble.Sum(c => NumberBytes(c) + IndexBytes(c)), sf = sparseSingle.Sum(c => NumberBytes(c) + IndexBytes(c));
+        Check(d == 64000000 && f == 32000000 && sd == 9600000 && sf == 6400000, "8-million-cell payload: double 64MB; float 32MB; 10%-valid sparse double 9.6MB / float 6.4MB including indexes");
+        Console.WriteLine($"MEASURE numeric/index bytes dense-double={d}, dense-float={f}, sparse-double={sd}, sparse-float={sf}, build-ms={timer.ElapsedMilliseconds}");
+        var reference = new WeakReference(sparseDouble[0]); sparseDouble[0] = null!;
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+        Check(!reference.IsAlive, "compact columns have no external roots preventing collection");
+        GC.KeepAlive(denseDouble); GC.KeepAlive(denseSingle); GC.KeepAlive(sparseDouble); GC.KeepAlive(sparseSingle);
+    }
+
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            assemblyPath = Path.GetFullPath(args[1]);
+            var app = new App(); app.InitializeComponent(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var operation = new AnalysisOperation();
+            Reclaimer(); Columns(); Integration(); Files(); Memory();
+            Console.WriteLine($"ALL {checks} MEMORY/SHARING CHECKS PASSED"); app.Shutdown(); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

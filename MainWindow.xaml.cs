@@ -91,6 +91,7 @@ public partial class MainWindow : Window
         ApplyUiPreferences();
         _uiPreferences.Changed += OnUiPreferencesChanged;
         _memoryReclaimer = new IdleMemoryReclaimer(Dispatcher, () => CanReclaimMemory);
+        Loaded += (_, _) => _memoryReclaimer.RequestStartup();
         Closing += (_, e) =>
         {
             if (!_isBusy) return;

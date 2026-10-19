@@ -33,6 +33,7 @@ public partial class ProductManagementWindow : Window
         _yieldFilters = new(DgYields, filterHeader); _fileFilters = new(DgFiles, filterHeader); _categoryFilters = new(DgCategories, filterHeader);
         _memoryReclaimer = new IdleMemoryReclaimer(Dispatcher, () => !_closed && !_busy && _gate.CurrentCount == 1 &&
             Application.Current.Windows.OfType<MainWindow>().All(w => w.CanReclaimMemory));
+        Loaded += (_, _) => _memoryReclaimer.RequestStartup();
         try { _store = store ?? new ProductCatalogStore(); RefreshProducts(); }
         catch (Exception ex) { BtnAddProduct.IsEnabled = false; TxtNotice.Text = "产品目录未能读取：" + ex.Message + "。仍可使用独立分析器。"; }
         var layout = new WindowLayoutPersistence(this, "ProductManagement");
