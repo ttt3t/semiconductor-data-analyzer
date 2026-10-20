@@ -15,6 +15,10 @@ public static class StdfParser
 
     public static CsvParseResult Parse(string path, AnalyzerConfig config, Action<string>? progress = null,
         CancellationToken cancellationToken = default, StdfImportMode mode = StdfImportMode.Standard)
+        => ParseCore(path, config, progress, cancellationToken, mode, false);
+
+    internal static CsvParseResult ParseCore(string path, AnalyzerConfig config, Action<string>? progress,
+        CancellationToken cancellationToken, StdfImportMode mode, bool yieldOnly)
     {
         if (!cancellationToken.CanBeCanceled) cancellationToken = AnalysisOperation.Token;
         if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
@@ -31,13 +35,14 @@ public static class StdfParser
         cancellationToken.ThrowIfCancellationRequested();
         progress?.Invoke("正在读取 STDF 芯片与测量值…");
         stamp.Validate(file);
-        var store = new RawMeasurementStore();
+        var projection = yieldOnly ? new YieldReadProjection(catalog.Items, config) : null;
+        var store = yieldOnly ? null : new RawMeasurementStore();
         try
         {
-            var pass = new Pass(catalog, config, name, store, cancellationToken);
+            var pass = new Pass(catalog, config, name, store, cancellationToken, projection);
             pass.Read(file);
             stamp.Validate(file);
-            store.Seal();
+            store?.Seal();
             if (pass.Records.Count == 0) throw new InvalidDataException("STDF 不包含完成的芯片记录（PRR）。");
             var orderedRecords = new List<CsvRecord>(pass.Records.Count);
             bool inOrder = true;
@@ -52,7 +57,7 @@ public static class StdfParser
                 pass.Records.Sort((a, b) => a.Order.CompareTo(b.Order));
                 for (int i = 0; i < pass.Records.Count; i++) orderedRecords.Add(pass.Records[i].Record);
             }
-            var result = DatasetService.Build(catalog.Items, orderedRecords);
+            var result = projection != null ? projection.Complete(orderedRecords) : DatasetService.Build(catalog.Items, orderedRecords);
             MeasurementDisplay.Configure(result.Items);
             result.StdfMetadata = catalog.Metadata.Complete();
             result.SourceDescription = "STDF V4" + (mode == StdfImportMode.Advantest93K ? "（93k：TSR 测试名称）" : "") +
@@ -61,7 +66,7 @@ public static class StdfParser
             progress?.Invoke($"解析完成，共 {result.Items.Count} 个测试项，{result.Records.Count} 条测试记录");
             return result;
         }
-        catch { store.Dispose(); throw; }
+        catch { store?.Dispose(); throw; }
     }
 
     private readonly record struct TestKey(byte Kind, uint Number, byte Head = 0, byte Site = 0)
@@ -272,6 +277,7 @@ public static class StdfParser
         private readonly AnalyzerConfig _config;
         private readonly string _fileName;
         private readonly RawMeasurementStore? _store;
+        private readonly YieldReadProjection? _projection;
         private readonly CancellationToken _token;
         private readonly MeasurementSchema? _schema;
         private readonly Dictionary<TestKey, Defaults> _defaults = new();
@@ -283,12 +289,14 @@ public static class StdfParser
         private long _order;
         private int _waferIndex;
         private bool _mir, _mrr;
-        private bool Discovering => _store == null;
+        private bool Discovering => _store == null && _projection == null;
         public readonly List<(long Order, CsvRecord Record)> Records = new();
 
-        public Pass(Catalog catalog, AnalyzerConfig config, string fileName, RawMeasurementStore? store, CancellationToken token)
+        public Pass(Catalog catalog, AnalyzerConfig config, string fileName, RawMeasurementStore? store, CancellationToken token,
+            YieldReadProjection? projection = null)
         {
             _catalog = catalog; _config = config; _fileName = fileName; _store = store; _token = token;
+            _projection = projection;
             if (store != null) _schema = new MeasurementSchema(catalog.Items.Select(i => i.Id));
         }
 
@@ -437,16 +445,17 @@ public static class StdfParser
                 foreach (var item in _catalog.Families[key].Variants.Values)
                     if (part.States[item.ColumnIndex] == RawMeasurementStore.StateAbsent)
                         part.States[item.ColumnIndex] = RawMeasurementStore.StateNotApplicable;
-            var measurements = _store!.AppendStdf(_schema!, part.States, part.Numbers, part.InvalidTexts, NotApplicableValue);
-            Records.Add((part.Order, new CsvRecord
+            var record = new CsvRecord
             {
                 WaferId = part.Wafer.Name, SerialNumber = sn, Site = _catalog.Heads.Count > 1 ? $"{head}:{site}" : site.ToString(CultureInfo.InvariantCulture),
                 X = x is null or short.MinValue ? null : x, Y = y is null or short.MinValue ? null : y,
                 HBin = hbin.ToString(CultureInfo.InvariantCulture), SBin = sbin is null or ushort.MaxValue ? "" : sbin.Value.ToString(CultureInfo.InvariantCulture),
                 Product = part.Product, Program = part.Program, Lot = part.Lot,
-                StdfTestTime = part.Wafer.StartTime ?? _catalog.Metadata.LotStart ?? part.Wafer.FinishTime ?? _catalog.Metadata.LotFinish,
-                Measurements = measurements
-            }));
+                StdfTestTime = part.Wafer.StartTime ?? _catalog.Metadata.LotStart ?? part.Wafer.FinishTime ?? _catalog.Metadata.LotFinish
+            };
+            if (_projection != null) _projection.CaptureStdf(record, part.States, part.Numbers, part.InvalidTexts);
+            else record.Measurements = _store!.AppendStdf(_schema!, part.States, part.Numbers, part.InvalidTexts, NotApplicableValue);
+            Records.Add((part.Order, record));
             ReleasePart(part);
         }
 

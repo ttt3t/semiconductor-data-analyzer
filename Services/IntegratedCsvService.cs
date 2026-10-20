@@ -237,6 +237,9 @@ public static class IntegratedCsvService
     }
 
     public static CsvParseResult Load(string path)
+        => LoadCore(path, null);
+
+    internal static CsvParseResult LoadCore(string path, AnalyzerConfig? yieldConfig)
     {
         using var file = SourceFileReader.Open(path);
         var stamp = new SourceFileStamp(file);
@@ -282,7 +285,8 @@ public static class IntegratedCsvService
         var records = new List<CsvRecord>();
         var schema = new MeasurementSchema(items.Select(i => i.Id));
         var ids = new HashSet<string>(StringComparer.Ordinal);
-        var rawStore = new RawMeasurementStore();
+        var projection = yieldConfig != null ? new YieldReadProjection(items, yieldConfig) : null;
+        var rawStore = projection != null ? null : new RawMeasurementStore();
         var measurements = new string?[items.Count];
         try
         {
@@ -307,14 +311,15 @@ public static class IntegratedCsvService
                     else if (row[identityCount + i].Length != 0) throw new InvalidDataException("未测试项包含测量值，整合 CSV 数据不一致。");
                     else measurements[i] = null;
                 }
-                record.Measurements = rawStore.Append(schema, measurements);
+                if (projection != null) projection.Capture(record, measurements);
+                else record.Measurements = rawStore!.Append(schema, measurements);
                 records.Add(record);
             }
             stamp.Validate(file);
-            rawStore.Seal();
-            return DatasetService.Build(items, records);
+            rawStore?.Seal();
+            return projection != null ? projection.Complete(records) : DatasetService.Build(items, records);
         }
-        catch { rawStore.Dispose(); throw; }
+        catch { rawStore?.Dispose(); throw; }
     }
 
     private static string Number(double? value) => value?.ToString("R", CultureInfo.InvariantCulture) ?? "";

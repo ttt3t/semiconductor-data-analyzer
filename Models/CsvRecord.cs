@@ -26,4 +26,7 @@ public sealed class CsvRecord
     public string SBin { get; set; } = "";
     public string HBin { get; set; } = "";
     public MeasurementCollection Measurements { get; set; } = new();
+    // A yield-only read retains UUID fields, but still distinguishes an empty row
+    // from a row with measurements in columns outside that projection.
+    internal bool HasNonblankMeasurements { get; set; }
 }

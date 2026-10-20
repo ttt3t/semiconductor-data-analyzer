@@ -1,4 +1,5 @@
 using System.Collections;
+using SemiconductorCsvAnalyzer.Services;
 
 namespace SemiconductorCsvAnalyzer.Models;
 
@@ -12,25 +13,35 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
     private bool _compact, _completed;
     private string? _testId;
     private int _count;
+    private TestValueColumn? _source;
+    private int[]? _sourceRows;
+    private bool _sharedStorage;
     public int Count => _count;
     public bool IsReadOnly => false;
     internal double GetSourceRowValue(int row)
     {
         if ((uint)row >= (uint)_records.Count) throw new ArgumentOutOfRangeException(nameof(row));
+        if (_source != null && _validRows != null && Array.BinarySearch(_validRows, row) < 0)
+            return double.NaN;
+        return SourceNumber(row);
+    }
+    private double SourceNumber(int row)
+    {
+        if (_source != null) return _source.SourceNumber(_sourceRows![row]);
         int offset = _compact ? Array.BinarySearch(_validRows!, row) : row;
         return offset < 0 ? double.NaN : Number(offset);
     }
     internal double GetValueAt(int index)
     {
         int row = Row(index);
-        return Number(_compact ? index : row);
+        return _source != null ? _source.SourceNumber(_sourceRows![row]) : Number(_compact ? index : row);
     }
     internal CsvRecord GetRecordAt(int index) => _records[Row(index)];
     private double Number(int offset) => _singleNumbers is { } singles ? singles[offset] : _numbers[offset];
 
     internal bool TryGetContiguousValues(out ReadOnlySpan<double> values)
     {
-        if (_singleNumbers == null && (_validRows == null || _compact))
+        if (_source == null && _singleNumbers == null && (_validRows == null || _compact))
         {
             values = _numbers.AsSpan(0, _count);
             return true;
@@ -47,6 +58,11 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
             values.CopyTo(destination);
             return;
         }
+        if (_source != null)
+        {
+            for (int i = 0; i < _count; i++) destination[i] = GetValueAt(i);
+            return;
+        }
         var rows = _validRows;
         bool consecutive = rows == null || _compact;
         for (int i = 0; i < _count; i++)
@@ -55,6 +71,7 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
 
     internal void Initialize(IReadOnlyList<CsvRecord> records, string testId, bool preferSingle = false)
     {
+        _source = null; _sourceRows = null; _sharedStorage = false;
         _records = records; _testId = testId;
         if (preferSingle)
         {
@@ -70,6 +87,34 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
         }
         _validRows = null; _count = 0;
         _compact = _completed = false;
+    }
+
+    internal void InitializeView(TestValueColumn source, IReadOnlyList<CsvRecord> records, int[] sourceRows, string testId)
+    {
+        Clear();
+        // Capture storage, not a mutable column object. Either side detaches on edits.
+        source._sharedStorage = true;
+        _source = (TestValueColumn)source.MemberwiseClone();
+        _sourceRows = sourceRows;
+        _records = records;
+        _testId = testId;
+        _completed = true;
+        List<int>? valid = null;
+        for (int row = 0; row < records.Count; row++)
+        {
+            if ((row & 1023) == 0) AnalysisOperation.CheckCancellation();
+            if (records[row].Measurements.ContainsKey(testId) && double.IsFinite(_source.GetSourceRowValue(sourceRows[row])))
+            {
+                _count++;
+                valid?.Add(row);
+            }
+            else if (valid == null)
+            {
+                valid = new List<int>(row);
+                for (int previous = 0; previous < row; previous++) valid.Add(previous);
+            }
+        }
+        _validRows = valid?.ToArray();
     }
     internal void SetRow(int row, double number)
     {
@@ -124,7 +169,7 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
     }
     public TestValue this[int index]
     {
-        get { int row = Row(index); return new TestValue(_records[row], Number(_compact ? index : row), _testId); }
+        get { int row = Row(index); return new TestValue(_records[row], GetValueAt(index), _testId); }
         set { Row(index); MakeEditable(); _numbers[index] = value.Value; ((List<CsvRecord>)_records)[index] = value.Record; }
     }
 
@@ -132,11 +177,12 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
     // uses Initialize/SetRow and never stores a record reference for each test cell.
     private void MakeEditable()
     {
-        if (_testId == null && _validRows == null && _singleNumbers == null && _records is List<CsvRecord>) return;
+        if (!_sharedStorage && _source == null && _testId == null && _validRows == null && _singleNumbers == null && _records is List<CsvRecord>) return;
         var numbers = new double[_count];
         var records = new List<CsvRecord>(_count);
-        for (int i = 0; i < _count; i++) { int row = Row(i); numbers[i] = Number(_compact ? i : row); records.Add(_records[row]); }
+        for (int i = 0; i < _count; i++) { int row = Row(i); numbers[i] = GetValueAt(i); records.Add(_records[row]); }
         _numbers = numbers; _singleNumbers = null; _records = records; _validRows = null; _testId = null;
+        _source = null; _sourceRows = null; _sharedStorage = false;
         _compact = _completed = false;
     }
     public void Add(TestValue value)
@@ -148,7 +194,7 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
     }
     public void AddRange(IEnumerable<TestValue> values) { foreach (var value in values) Add(value); }
     public void Clear()
-    { _numbers = Array.Empty<double>(); _singleNumbers = null; _records = Array.Empty<CsvRecord>(); _validRows = null; _testId = null; _count = 0; _compact = _completed = false; }
+    { _numbers = Array.Empty<double>(); _singleNumbers = null; _records = Array.Empty<CsvRecord>(); _validRows = null; _testId = null; _count = 0; _compact = _completed = false; _source = null; _sourceRows = null; _sharedStorage = false; }
     public int IndexOf(TestValue value)
     { for (int i = 0; i < Count; i++) if (this[i].Equals(value)) return i; return -1; }
     public bool Contains(TestValue value) => IndexOf(value) >= 0;

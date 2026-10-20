@@ -51,7 +51,7 @@ public static class SampleFilterService
             records = data.Records.Where(r => included.Contains(DatasetService.ChipKey(r))).ToList();
         }
         AnalysisOperation.CheckCancellation();
-        var result = DatasetService.Build(data.Items.Select(DatasetService.CloneItem).ToList(), records);
+        var result = DatasetService.CreateView(data, records);
         result.SourceDescription = data.SourceDescription;
         return result;
     }

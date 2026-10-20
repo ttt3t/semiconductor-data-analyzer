@@ -48,15 +48,19 @@ public sealed class MeasurementCollection : IReadOnlyDictionary<string, string>
     }
     internal RawMeasurementStore.RawRow ReadRow(ref byte[]? reusableBuffer) =>
         _store!.Read(_offset, _length, _schema!.Keys.Length, ref reusableBuffer);
-    internal MeasurementCollection SelectKeys(HashSet<string> keys)
+    internal MeasurementCollection SelectKeys(Func<string, bool> include)
     {
-        if (_store == null) return new(keys.Where(ContainsKey).ToDictionary(key => key, key => this[key]));
+        if (_store == null)
+        {
+            var selected = _editable!.Where(p => include(p.Key)).ToDictionary(p => p.Key, p => p.Value);
+            return selected.Count == Count ? this : new(selected);
+        }
         var presence = new byte[(_schema!.Keys.Length + 7) / 8];
         int count = 0;
-        foreach (string key in keys)
-            if (_schema.Indices.TryGetValue(key, out int i) && Present(i))
+        for (int i = 0; i < _schema.Keys.Length; i++)
+            if (Present(i) && include(_schema.Keys[i]))
             { presence[i >> 3] |= (byte)(1 << (i & 7)); count++; }
-        return OnDisk(_schema, _store, _offset, _length, presence, count);
+        return count == Count ? this : OnDisk(_schema, _store, _offset, _length, presence, count);
     }
     internal MeasurementCollection Remap(MeasurementSchema schema)
     {

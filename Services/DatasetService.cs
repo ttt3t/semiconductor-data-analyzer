@@ -11,7 +11,7 @@ public sealed record CsvImportSource(string Path, ImportOptions? Options = null,
     StdfImportMode StdfMode = StdfImportMode.Standard, string ConfigText = "", string? WaferOverride = null,
     string? LotOverride = null, bool ShowLotInWafer = false);
 
-public static class DatasetService
+public static partial class DatasetService
 {
     public static CsvParseResult SelectRetests(CsvParseResult data, RetestMode mode)
     {
@@ -19,7 +19,7 @@ public static class DatasetService
         if (mode == RetestMode.All) return data;
         var records = SelectRetestRecords(data.Records, mode);
         if (ReferenceEquals(records, data.Records)) return data;
-        var result = Build(data.Items.Select(CloneItem).ToList(), records);
+        var result = CreateView(data, records);
         result.SourceDescription = data.SourceDescription;
         result.SerialNumberNotice = data.SerialNumberNotice;
         result.ReassignedSerialNumberCount = data.ReassignedSerialNumberCount;
@@ -42,79 +42,54 @@ public static class DatasetService
         if (mode == RetestMode.All) return source;
         if (mode != RetestMode.First && mode != RetestMode.Last && mode != RetestMode.OnlyRetests)
             throw new ArgumentOutOfRangeException(nameof(mode));
-        var groups = new Dictionary<(string Wafer, int? X, int? Y, string Fallback), List<CsvRecord>>();
-        foreach (var record in source)
+        var groups = new Dictionary<(string Wafer, int? X, int? Y, string Fallback), List<int>>();
+        for (int row = 0; row < source.Count; row++)
         {
             AnalysisOperation.CheckCancellation();
-            var key = ChipKey(record);
+            var key = ChipKey(source[row]);
             if (!groups.TryGetValue(key, out var group)) groups[key] = group = new();
-            group.Add(record);
+            group.Add(row);
         }
         if (groups.Count == source.Count)
             return mode == RetestMode.OnlyRetests ? new List<CsvRecord>() : source;
-        // Select per measurement: a partial retest must not remove other tests on the same chip.
-        // Work on one chip at a time instead of indexing every cell in the whole file.
-        var retained = new Dictionary<CsvRecord, HashSet<string>>();
-        var unique = new HashSet<CsvRecord>();
+        // Resolve one chip at a time. Only compact presence masks survive the group;
+        // never retain a string HashSet for every selected record.
+        var selected = new MeasurementCollection?[source.Count];
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var group in groups.Values)
         {
             AnalysisOperation.CheckCancellation();
             if (group.Count == 1)
             {
-                if (mode != RetestMode.OnlyRetests) unique.Add(group[0]);
+                if (mode != RetestMode.OnlyRetests) selected[group[0]] = source[group[0]].Measurements;
                 continue;
             }
-            if (mode == RetestMode.OnlyRetests)
-            {
-                // The first occurrence is determined per test, including invalid values.
-                // A test first measured during a partial retest is still its first test.
-                var seen = new HashSet<string>(StringComparer.Ordinal);
-                foreach (var record in group)
-                {
-                    AnalysisOperation.CheckCancellation();
-                    foreach (string test in record.Measurements.Keys)
-                    {
-                        if (!seen.Add(test))
-                        {
-                            if (!retained.TryGetValue(record, out var measurements))
-                                retained[record] = measurements = new HashSet<string>(StringComparer.Ordinal);
-                            measurements.Add(test);
-                        }
-                    }
-                }
-                continue;
-            }
-            var chosen = new Dictionary<string, CsvRecord>(StringComparer.Ordinal);
-            foreach (var record in group)
+            seen.Clear();
+            for (int i = 0; i < group.Count; i++)
             {
                 AnalysisOperation.CheckCancellation();
-                foreach (string test in record.Measurements.Keys)
+                int row = group[mode == RetestMode.Last ? group.Count - 1 - i : i];
+                var measurements = source[row].Measurements.SelectKeys(key =>
                 {
-                    if (mode == RetestMode.Last) chosen[test] = record;
-                    else chosen.TryAdd(test, record);
-                }
-            }
-            foreach (var entry in chosen)
-            {
-                if (!retained.TryGetValue(entry.Value, out var measurements))
-                    retained[entry.Value] = measurements = new HashSet<string>(StringComparer.Ordinal);
-                measurements.Add(entry.Key);
+                    bool first = seen.Add(key);
+                    return mode == RetestMode.OnlyRetests ? !first : first;
+                });
+                if (measurements.Count > 0) selected[row] = measurements;
             }
         }
         var records = new List<CsvRecord>();
-        foreach (var record in source)
-            if (unique.Contains(record)) records.Add(record);
-            else if (retained.TryGetValue(record, out var measurements))
-                records.Add(new CsvRecord
-                {
-                    Id = record.Id, WaferId = record.WaferId, SerialNumber = record.SerialNumber,
-                    OriginalSerialNumber = record.OriginalSerialNumber,
-                    IsFtIdentity = record.IsFtIdentity, RetestUuid = record.RetestUuid, UuidTestNumbers = record.UuidTestNumbers,
-                    X = record.X, Y = record.Y, Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
-                    Product = record.Product, Program = record.Program, Lot = record.Lot,
-                    StdfTestTime = record.StdfTestTime,
-                    Measurements = record.Measurements.SelectKeys(measurements)
-                });
+        for (int row = 0; row < source.Count; row++)
+        {
+            if ((row & 1023) == 0) AnalysisOperation.CheckCancellation();
+            if (selected[row] is not { } measurements) continue;
+            var record = source[row];
+            if (!ReferenceEquals(measurements, record.Measurements))
+            {
+                record = CloneRecord(record);
+                record.Measurements = measurements;
+            }
+            records.Add(record);
+        }
         return records;
     }
 

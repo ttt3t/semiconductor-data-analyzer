@@ -64,6 +64,16 @@ dotnet build SemiconductorCsvAnalyzer.csproj -c Release
 dotnet run --project SemiconductorCsvAnalyzer.csproj -c Release
 ```
 
+核心数据回归检查可在安装 .NET 8 SDK 的 Linux 或 Bash 环境运行：
+
+```bash
+bash Tests/run-core-memory.sh
+```
+
+该检查覆盖部分复测、共享列筛选、精度与错误值、原文租约、CSV / 整合 CSV / 大小端与压缩 STDF 的产品统计读取，以及跨温度良率和失败回滚。输出位于忽略的 `bin/CoreMemoryProbe`；它不替代 Windows 上的 WPF 界面回归。
+
+筛选和复测结果共享基础数值列及行映射，编辑列时才复制；产品管理的良率重算仅保留身份、Bin、时间和必要的 UUID 原文，不创建完整数值列或测量原文快照。文件完整性校验及部分复测口径仍沿用原解析流程。
+
 发布为 Windows x64 自包含单文件程序：
 
 ```powershell

@@ -27,7 +27,7 @@ public static class SerialNumberService
             record.SerialNumber = (i + 1).ToString(CultureInfo.InvariantCulture);
         }
         // Rebuild only lightweight identity rows, not the numeric columns or disk-backed raw snapshot.
-        data.Devices = DatasetService.BuildDevices(data.Records);
+        if (!data.IsYieldProjection) data.Devices = DatasetService.BuildDevices(data.Records);
         var reasons = new List<string>();
         if (serialColumnMissing) reasons.Add("未配置 SerialNumber 列");
         if (empty > 0) reasons.Add($"{empty} 条 SerialNumber 为空");

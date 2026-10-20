@@ -20,16 +20,28 @@ public static class DataFileService
 
     public static CsvParseResult Parse(string path, AnalyzerConfig config, Action<string>? progress = null,
         CancellationToken cancellationToken = default, StdfImportMode stdfMode = StdfImportMode.Standard)
+        => ParseCore(path, config, progress, cancellationToken, stdfMode, false);
+
+    internal static CsvParseResult ReadForYield(string path, AnalyzerConfig config, CancellationToken cancellationToken,
+        StdfImportMode stdfMode = StdfImportMode.Standard)
+    {
+        if (!cancellationToken.CanBeCanceled) cancellationToken = AnalysisOperation.Token;
+        using var operation = new AnalysisOperation(cancellationToken);
+        return ParseCore(path, config, null, cancellationToken, stdfMode, true);
+    }
+
+    private static CsvParseResult ParseCore(string path, AnalyzerConfig config, Action<string>? progress,
+        CancellationToken cancellationToken, StdfImportMode stdfMode, bool yieldOnly)
     {
         if (!cancellationToken.CanBeCanceled) cancellationToken = AnalysisOperation.Token;
         cancellationToken.ThrowIfCancellationRequested();
         bool stdf = IsStdf(path);
         bool integrated = !stdf && IntegratedCsvService.IsIntegrated(path);
-        var result = stdf ? StdfParser.Parse(path, config, progress, cancellationToken, stdfMode)
-            : CsvParser.Parse(path, config, progress, cancellationToken);
+        var result = stdf ? StdfParser.ParseCore(path, config, progress, cancellationToken, stdfMode, yieldOnly)
+            : CsvParser.ParseCore(path, config, progress, cancellationToken, yieldOnly);
         if (SerialNumberService.Normalize(result, !stdf && !integrated && config.SerialNumberColumn <= 0))
             result.SerialNumberNotice = $"文件“{Path.GetFileName(path)}”：{result.SerialNumberNotice}";
-        return RetestIdentityService.Prepare(result, config);
+        return yieldOnly ? YieldReadProjection.PrepareIdentity(result, config) : RetestIdentityService.Prepare(result, config);
     }
 }
 

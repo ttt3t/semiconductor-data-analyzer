@@ -259,9 +259,13 @@ public static class ProductYieldService
         state.Length = length; state.LastWriteUtc = modified;
         var config = FileConfig(product, file);
         if (stage.Kind == "FT" && config.UuidTestNumbers.Count == 0) throw new InvalidDataException("FT 自动计算需要在产品流程中指定 UUID Test Num；指定汇总良率可不提供 UUID。");
-        var data = DataFileService.Parse(file.FilePath, config, cancellationToken: token, stdfMode: file.StdfMode);
+        var data = DataFileService.ReadForYield(file.FilePath, config, token, file.StdfMode);
         token.ThrowIfCancellationRequested();
-        if (file.WaferOverride.Length > 0 && stage.Kind == "CP" && data.Devices.Select(d => d.WaferId).Distinct().Skip(1).Any())
+        bool Blank(CsvRecord record) => !record.X.HasValue && !record.Y.HasValue &&
+            string.IsNullOrWhiteSpace(record.ChipSerialNumber) && string.IsNullOrWhiteSpace(record.Site) &&
+            string.IsNullOrWhiteSpace(record.HBin) && string.IsNullOrWhiteSpace(record.SBin) && !record.HasNonblankMeasurements;
+        if (file.WaferOverride.Length > 0 && stage.Kind == "CP" &&
+            data.Records.Where(r => !Blank(r)).Select(r => r.WaferId).Distinct().Skip(1).Any())
             throw new InvalidDataException("含多个晶圆的文件不能整体指定为一个晶圆，请清空晶圆覆盖值并配置 Wafer 列。");
         var classifier = new HBinClassifier(config);
         // Prepare a file transaction first: failed/changed files must not contribute a partial population.
@@ -270,9 +274,7 @@ public static class ProductYieldService
         {
             if ((r & 1023) == 0) token.ThrowIfCancellationRequested();
             var record = data.Records[r];
-            if (!record.X.HasValue && !record.Y.HasValue && string.IsNullOrWhiteSpace(record.ChipSerialNumber) &&
-                string.IsNullOrWhiteSpace(record.Site) && string.IsNullOrWhiteSpace(record.HBin) && string.IsNullOrWhiteSpace(record.SBin) &&
-                record.Measurements.All(m => string.IsNullOrWhiteSpace(m.Value))) continue;
+            if (Blank(record)) continue;
             bool known = stage.Kind == "CP" ? record.X.HasValue && record.Y.HasValue : !string.IsNullOrEmpty(record.RetestUuid);
             string identity = !known ? $"UNKNOWN:{file.Id}:{r}" : stage.Kind == "CP" ? $"XY:{record.X},{record.Y}" : "UUID:" + record.RetestUuid!;
             string wafer = stage.Kind == "FT" ? "" : file.WaferOverride.Length > 0 ? file.WaferOverride : record.WaferId;

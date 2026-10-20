@@ -1,0 +1,308 @@
+using System.Buffers.Binary;
+using System.Globalization;
+using System.IO.Compression;
+using System.Reflection;
+using System.Text;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static string folder = "";
+    static string P(string name) => Path.Combine(folder, name);
+    static void Check(bool value, string message)
+    { if (!value) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
+    static void Reject<T>(Action action, string message) where T : Exception
+    { try { action(); } catch (T) { Check(true, message); return; } throw new Exception(message); }
+    static long OwnNumbers(TestValueColumn c) => new[] { "_numbers", "_singleNumbers" }.Sum(name =>
+        typeof(TestValueColumn).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(c) is Array a ? Buffer.ByteLength(a) : 0L);
+    static AnalyzerConfig Config() => new()
+    {
+        TestItemRow = 1, LowLimitRow = 2, HighLimitRow = 3, UnitRow = 4, TestNumberRow = 5,
+        SBinRow = 0, HBinRow = 0, DataStartRow = 6, TestItemStartColumn = 8,
+        SerialNumberColumn = 1, XColumn = 2, YColumn = 3, SiteColumn = 4, SBinColumn = 5, HBinColumn = 6, WaferColumn = 7
+    };
+    static string WriteCsv(string name, string rows, Encoding? encoding = null)
+    {
+        string path = P(name);
+        File.WriteAllText(path, "SN,X,Y,Site,SBIN,HBIN,Wafer,UUID,Value\nLSL,,,,,,,0,0\nUSL,,,,,,,100000,2\nUnit,,,,,,,V,A\nTest Num,,,,,,,101,102\n" + rows, encoding ?? new UTF8Encoding(false));
+        return path;
+    }
+    static CsvRecord Record(string id, int x, params (string Key, string Value)[] cells) => new()
+    {
+        Id = id, SerialNumber = id, X = x, Y = 0, Site = "1", WaferId = "W", HBin = "1",
+        Measurements = cells.ToDictionary(p => p.Key, p => p.Value)
+    };
+    static CsvParseResult Fixture()
+    {
+        var items = new[] { "a", "b", "c" }.Select(id => new TestItemData { Id = id, Name = id, TestNumber = id, LowLimit = 0, HighLimit = 2 }).ToList();
+        return DatasetService.Build(items, new()
+        {
+            Record("r0", 0, ("a", "1.0000000000000002"), ("b", "bad")),
+            Record("r1", 0, ("a", "2"), ("c", "")),
+            Record("r2", 0, ("a", "3"), ("b", "4")),
+            Record("r3", 1, ("a", "5"), ("b", StdfParser.NotApplicableValue)),
+            Record("r4", 2)
+        });
+    }
+    static string Cells(IEnumerable<CsvRecord> records) => string.Join(";", records.Select(r =>
+        r.Id + ":" + string.Join(',', r.Measurements.Keys.Order(StringComparer.Ordinal))));
+    static void SameView(CsvParseResult view, string name)
+    {
+        var rebuilt = DatasetService.Build(view.Items.Select(DatasetService.CloneItem).ToList(), view.Records);
+        Check(view.Items.Zip(rebuilt.Items).All(p => p.First.Values.Select(v => (v.RecordId, v.Value, v.RawText))
+            .SequenceEqual(p.Second.Values.Select(v => (v.RecordId, v.Value, v.RawText))) &&
+            p.First.Errors.Select(r => r.Id).SequenceEqual(p.Second.Errors.Select(r => r.Id))), name + " values/errors/raw text match materialized data");
+        Check(view.Items.All(i => OwnNumbers(i.Values) == 0), name + " has no copied numeric arrays");
+        Check(view.Items.Zip(rebuilt.Items).All(p => Enumerable.Range(0, view.Records.Count).All(row =>
+            p.First.Values.GetSourceRowValue(row).Equals(p.Second.Values.GetSourceRowValue(row)))), name + " source row lookup includes absent/invalid cells");
+        foreach (var pair in view.Items.Zip(rebuilt.Items))
+        {
+            var a = StatisticsService.CalculateSummaryMetrics(pair.First.Values, 0, 2, true, 6);
+            var b = StatisticsService.CalculateSummaryMetrics(pair.Second.Values, 0, 2, true, 6);
+            Check(typeof(StatisticsResult).GetProperties().All(p => Equals(p.GetValue(a.Stats), p.GetValue(b.Stats))) &&
+                a.Median == b.Median && a.Robust == b.Robust, name + " exact statistics " + pair.First.Id);
+        }
+        var snapshot = SimulationSnapshot.Build(view, Config(), RetestMode.Last, default);
+        var expected = SimulationSnapshot.Build(rebuilt, Config(), RetestMode.Last, default);
+        Check(snapshot.Count == expected.Count && snapshot.States.Zip(expected.States).All(p => p.First.SequenceEqual(p.Second)) &&
+            Enumerable.Range(0, snapshot.Count).All(chip => Enumerable.Range(0, view.Items.Count).All(item =>
+                snapshot.Value(chip, item).Equals(expected.Value(chip, item)))), name + " simulation mapping");
+    }
+    static void Views()
+    {
+        using var operation = new AnalysisOperation();
+        var source = Fixture();
+        var expected = new Dictionary<RetestMode, string>
+        {
+            [RetestMode.First] = "r0:a,b;r1:c;r3:a,b;r4:",
+            [RetestMode.Last] = "r1:c;r2:a,b;r3:a,b;r4:",
+            [RetestMode.OnlyRetests] = "r1:a;r2:a,b"
+        };
+        foreach (var mode in expected.Keys)
+        {
+            var selected = DatasetService.SelectRetests(source, mode);
+            Check(Cells(selected.Records) == expected[mode], mode + " selects each test independently including invalid values");
+            SameView(selected, mode.ToString());
+            var path = P(mode + "-integrated.csv");
+            IntegratedCsvService.Save(path, selected);
+            var loaded = IntegratedCsvService.Load(path);
+            Check(loaded.Records.Select(r => r.Measurements.Values.ToArray()).Zip(selected.Records)
+                .All(p => p.First.SequenceEqual(p.Second.Measurements.Values)), mode + " integrated export preserves selected raw cells");
+        }
+        var filtered = SampleFilterService.Apply(source, new[] { new SampleRange("a", 1, 3) }, RetestMode.All);
+        Check(filtered.Records.Count == 3, "range filter selects original rows");
+        SameView(filtered, "filter");
+        SameView(DatasetService.SelectRetests(filtered, RetestMode.Last), "nested retest");
+        foreach (var mode in new[] { RetestMode.First, RetestMode.Last, RetestMode.OnlyRetests })
+            SameView(SampleFilterService.Apply(source, new[] { new SampleRange("a", 1, 4) }, mode), "filter in " + mode);
+        var empty = SampleFilterService.Apply(source, new[] { new SampleRange("a", 100, null) }, RetestMode.All);
+        Check(empty.Records.Count == 0 && empty.Items.All(i => i.Values.Count == 0 && i.Errors.Count == 0), "empty view is valid");
+        var view = DatasetService.SelectRetests(source, RetestMode.First);
+        double original = view.Items[0].Values[0].Value;
+        source.Items[0].Values[0] = new(source.Records[0], 99);
+        Check(view.Items[0].Values[0].Value == original, "source edit detaches from existing view");
+        view.Items[0].Values[0] = new(view.Records[0], 88);
+        Check(source.Items[0].Values[0].Value == 99, "view edit detaches from source");
+        source.Items[0].Values.Clear();
+        Check(view.Items[0].Values.Count > 0 && view.Items[0].Values[0].Value == 88, "source clear does not invalidate detached view");
+        var floats = DatasetService.Build(new() { new() { Id = "f", Name = "f", IsStdfMeasurement = true } },
+            new() { Record("s0", 0, ("f", "1.25")), Record("s1", 0, ("f", "2.5")), Record("s2", 2), Record("s3", 3), Record("s4", 4) });
+        SameView(DatasetService.SelectRetests(floats, RetestMode.Last), "sparse float");
+        using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+        using var canceled = new AnalysisOperation(cancellation.Token);
+        Reject<OperationCanceledException>(() => DatasetService.SelectRetests(source, RetestMode.Last), "view construction honors cancellation");
+    }
+    static void SelectionMatrix()
+    {
+        using var ownership = new AnalysisOperation();
+        var random = new Random(7241);
+        foreach (bool ft in new[] { false, true })
+        {
+            var items = Enumerable.Range(0, 7).Select(i => new TestItemData { Id = "t" + i, Name = "t" + i }).ToList();
+            var records = Enumerable.Range(0, 60).Select(row =>
+            {
+                var record = Record("m" + row, row % 13);
+                record.IsFtIdentity = ft;
+                record.RetestUuid = row % 9 == 0 ? "" : "uuid" + row % 13;
+                record.Lot = "L" + row % 2;
+                foreach (var item in items)
+                    if (random.Next(3) != 0) record.Measurements.Add(item.Id, random.Next(4) == 0 ? "bad" : row.ToString(CultureInfo.InvariantCulture));
+                return record;
+            }).ToList();
+            var data = DatasetService.Build(items, records);
+            foreach (var mode in new[] { RetestMode.First, RetestMode.Last, RetestMode.OnlyRetests })
+            {
+                // Independent per-cell oracle: gather the execution history of each
+                // measurement, then select its first/last/all-subsequent occurrences.
+                var expected = new Dictionary<string, HashSet<string>>();
+                foreach (var chip in records.GroupBy(r => ft
+                    ? (r.RetestUuid == "" ? "ROW:" + r.Id : r.Lot + ":" + r.RetestUuid) : "XY:" + r.X))
+                {
+                    var history = chip.ToArray();
+                    if (history.Length == 1 && mode != RetestMode.OnlyRetests)
+                        expected[history[0].Id] = history[0].Measurements.Keys.ToHashSet();
+                    foreach (var item in items)
+                    {
+                        var executions = history.Where(r => r.Measurements.ContainsKey(item.Id)).ToArray();
+                        var chosen = mode == RetestMode.First ? executions.Take(1) : mode == RetestMode.Last ? executions.TakeLast(1) : executions.Skip(1);
+                        foreach (var record in chosen)
+                        {
+                            if (!expected.TryGetValue(record.Id, out var keys)) expected[record.Id] = keys = new();
+                            keys.Add(item.Id);
+                        }
+                    }
+                }
+                var selected = DatasetService.SelectRetests(data, mode);
+                Check(selected.Records.Select(r => r.Id).SequenceEqual(records.Where(r => expected.ContainsKey(r.Id)).Select(r => r.Id)) &&
+                    selected.Records.All(r => expected[r.Id].SetEquals(r.Measurements.Keys)), $"mixed partial histories {ft}/{mode}");
+                SameView(selected, $"mixed {ft}/{mode}");
+            }
+        }
+        var source = Fixture();
+        var sourceLease = new DatasetLease(source.Records);
+        var view = DatasetService.SelectRetests(source, RetestMode.Last);
+        using var viewLease = new DatasetLease(view.Records);
+        sourceLease.Dispose();
+        Check(view.Items[0].Values[0].RawText == "3", "view lease keeps raw snapshot alive after source lease release");
+    }
+    static CsvParseResult SameProjection(string path, AnalyzerConfig config, string label, StdfImportMode mode = StdfImportMode.Standard)
+    {
+        using var operation = new AnalysisOperation();
+        var full = DataFileService.Parse(path, config, stdfMode: mode);
+        var projected = DataFileService.ReadForYield(path, config, default, mode);
+        Check(projected.IsYieldProjection && projected.Items.All(i => i.Values.Count == 0 && OwnNumbers(i.Values) == 0) &&
+            projected.Records.All(r => !r.Measurements.IsOnDisk), label + " allocates no full numeric columns or raw store");
+        object Identity(CsvRecord r) => (r.SerialNumber, r.OriginalSerialNumber, r.WaferId, r.X, r.Y, r.Site, r.HBin, r.SBin,
+            r.Product, r.Program, r.Lot, r.StdfTestTime, r.IsFtIdentity, r.RetestUuid, r.UuidTestNumbers);
+        Check(full.Records.Count == projected.Records.Count && full.Records.Zip(projected.Records).All(p =>
+            Equals(Identity(p.First), Identity(p.Second)) && p.Second.HasNonblankMeasurements == p.First.Measurements.Any(v => !string.IsNullOrWhiteSpace(v.Value))),
+            label + " preserves identities, bins, times, UUID and blank-row semantics");
+        var numbers = config.TestMode == TestAnalysisMode.FT ? config.UuidTestNumbers.ToHashSet() : new HashSet<string>();
+        Check(projected.Records.All(r => r.Measurements.Keys.All(key => numbers.Contains(projected.Items.Single(i => i.Id == key).TestNumber))),
+            label + " retains only configured UUID measurements");
+        return projected;
+    }
+    static void Projections()
+    {
+        var config = Config();
+        string rows = "DUP,0,0,1,1,1,W1,00123,1.5\nDUP,0,0,1,2,2,W1,00123,2.5\n,1,0,2,1,1,W1,0x00AF,\"bad\ntext\"\n,,,,,,,,\n,,,,,,,,3\n";
+        var path = WriteCsv("projection.csv", rows);
+        SameProjection(path, config, "CSV CP");
+        config.TestMode = TestAnalysisMode.FT; config.UuidTestNumbers = new() { "101" };
+        var ft = SameProjection(path, config, "CSV FT");
+        Check(ft.Records[0].RetestUuid == "00123" && ft.Records[2].RetestUuid == "0x00AF", "UUID keeps leading zeroes and hex text");
+        SameProjection(WriteCsv("unicode.csv", rows, Encoding.Unicode), config, "UTF16 FT");
+        var repeated = WriteCsv("repeated.csv", rows);
+        File.AppendAllText(repeated, File.ReadAllText(repeated));
+        SameProjection(repeated, config, "repeated headers and multiline cells");
+        using (var operation = new AnalysisOperation())
+        {
+            var data = DataFileService.Parse(path, config);
+            var integrated = P("projection-integrated.csv");
+            IntegratedCsvService.Save(integrated, data);
+            SameProjection(integrated, config, "integrated FT");
+            // A partial retest may carry its derived UUID but none of the source UUID cells.
+            data.Records[0].Measurements = data.Records[0].Measurements.SelectKeys(key => key != data.Items[0].Id);
+            IntegratedCsvService.Save(integrated, data);
+            var partial = SameProjection(integrated, config, "integrated partial UUID");
+            Check(partial.Records[0].RetestUuid == "00123", "derived UUID survives partial integrated export");
+        }
+        var invalid = WriteCsv("ambiguous.csv", rows);
+        File.WriteAllText(invalid, File.ReadAllText(invalid).Replace("101,102", "101,101"));
+        Reject<InvalidDataException>(() => DataFileService.ReadForYield(invalid, config, default), "ambiguous UUID definitions still rejected");
+        config.UuidTestNumbers = new() { "999" };
+        var missing = SameProjection(path, config, "missing UUID test");
+        Check(missing.Records.All(r => r.RetestUuid == ""), "missing UUID cannot invent identity");
+        foreach (bool big in new[] { false, true })
+        {
+            var stdf = StdfFixture(big);
+            var cp = Config(); SameProjection(stdf, cp, "STDF CP " + big);
+            var sf = Config(); sf.TestMode = TestAnalysisMode.FT; sf.UuidTestNumbers = new() { "900" };
+            SameProjection(stdf, sf, "STDF FT " + big);
+            SameProjection(stdf, sf, "STDF 93k " + big, StdfImportMode.Advantest93K);
+            using (var input = File.OpenRead(stdf))
+            using (var output = File.Create(stdf + ".gz"))
+            using (var gzip = new GZipStream(output, CompressionLevel.Fastest)) input.CopyTo(gzip);
+            SameProjection(stdf + ".gz", sf, "compressed STDF " + big);
+            var broken = P("truncated.stdf"); File.WriteAllBytes(broken, File.ReadAllBytes(stdf)[..^5]);
+            Reject<InvalidDataException>(() => DataFileService.ReadForYield(broken, cp, default), "truncated STDF rejected " + big);
+        }
+        using var cts = new CancellationTokenSource(); cts.Cancel();
+        Reject<OperationCanceledException>(() => DataFileService.ReadForYield(path, config, cts.Token), "yield read honors cancellation");
+    }
+    static string StdfFixture(bool big)
+    {
+        var path = P(big ? "big.stdf" : "little.stdf");
+        using var output = File.Create(path); using var writer = new BinaryWriter(output);
+        void U2(BinaryWriter w, ushort n) { Span<byte> b = stackalloc byte[2]; if (big) BinaryPrimitives.WriteUInt16BigEndian(b, n); else BinaryPrimitives.WriteUInt16LittleEndian(b, n); w.Write(b); }
+        void U4(BinaryWriter w, uint n) { Span<byte> b = stackalloc byte[4]; if (big) BinaryPrimitives.WriteUInt32BigEndian(b, n); else BinaryPrimitives.WriteUInt32LittleEndian(b, n); w.Write(b); }
+        void C(BinaryWriter w, string text) { var b = Encoding.ASCII.GetBytes(text); w.Write((byte)b.Length); w.Write(b); }
+        void R(byte type, byte sub, Action<BinaryWriter> fill)
+        { using var buffer = new MemoryStream(); using (var w = new BinaryWriter(buffer, Encoding.ASCII, true)) fill(w); U2(writer, (ushort)buffer.Length); writer.Write(type); writer.Write(sub); writer.Write(buffer.ToArray()); }
+        R(0, 10, w => { w.Write((byte)(big ? 1 : 2)); w.Write((byte)4); });
+        R(1, 10, w => { U4(w, 0); U4(w, 10); w.Write((byte)1); w.Write((byte)'P'); w.Write((byte)' '); w.Write((byte)' '); U2(w, 0); w.Write((byte)' '); foreach (var s in new[] { "LOT", "PRODUCT", "NODE", "TESTER", "JOB", "REV" }) C(w, s); });
+        for (int wafer = 0; wafer < 2; wafer++)
+        {
+            R(2, 10, w => { w.Write((byte)1); w.Write((byte)1); U4(w, (uint)(20 + wafer * 10)); C(w, "W" + wafer); });
+            R(5, 10, w => { w.Write((byte)1); w.Write((byte)1); });
+            R(15, 10, w => { U4(w, 900); w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((byte)0); U4(w, BitConverter.SingleToUInt32Bits(1.25f + wafer)); C(w, "UUID"); C(w, ""); });
+            R(15, 15, w => { U4(w, 901); w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((byte)0); U2(w, 0); U2(w, 2); U4(w, BitConverter.SingleToUInt32Bits(2)); U4(w, BitConverter.SingleToUInt32Bits(3)); });
+            R(15, 20, w => { U4(w, 902); w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); });
+            R(5, 20, w => { w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); U2(w, 4); U2(w, (ushort)(wafer + 1)); U2(w, 1); U2(w, 2); U2(w, 3); U4(w, 0); C(w, "S" + wafer); });
+            R(2, 20, w => { w.Write((byte)1); w.Write((byte)1); for (int i = 0; i < 6; i++) U4(w, 30); C(w, "W" + wafer); });
+        }
+        R(1, 20, w => { U4(w, 40); w.Write((byte)' '); });
+        return path;
+    }
+    static void ProductYield()
+    {
+        var config = Config();
+        var cold = new ProductTestStage { Id = "cold", Name = "cold", Kind = "CP", Required = true };
+        var hot = new ProductTestStage { Id = "hot", Name = "hot", Kind = "CP", Required = true };
+        var a = WriteCsv("cold.csv", "A,0,0,1,1,1,W,001,1\nB,1,0,1,1,1,W,002,1\nA2,0,0,1,2,2,W,001,3\n");
+        var b = WriteCsv("hot.csv", "A,0,0,1,1,1,W,001,1\n");
+        var product = new ManagedProduct { Name = "test", ConfigText = ConfigLoader.Serialize(config), Flow = new() { cold, hot },
+            Files = new() { new() { StageId = cold.Id, FilePath = a, Lot = "L" }, new() { StageId = hot.Id, FilePath = b, Lot = "L" } } };
+        foreach (var mode in new[] { RetestMode.First, RetestMode.Last })
+        {
+            product.RetestMode = mode;
+            var result = ProductYieldService.Calculate(product);
+            var combined = result.Yields.Single(r => r.IsCombined);
+            Check(result.Files.All(f => f.Error == "") && combined.Total == 2 && combined.Good == (mode == RetestMode.First ? 1 : 0) && combined.MissingTemperature == 1,
+                "CP product yield keeps per-chip multi-temperature and " + mode + " semantics");
+        }
+        cold.Kind = hot.Kind = "FT"; product.UuidTestNumbers = "101";
+        var ft = ProductYieldService.Calculate(product);
+        Check(ft.Files.All(f => f.Error == "") && ft.Yields.Single(r => r.IsCombined).Total == 2, "FT product yield matches UUID across stages");
+        cold.Kind = hot.Kind = "CP";
+        product.Files.Add(new() { StageId = cold.Id, FilePath = P("missing.csv"), Lot = "L" });
+        var failed = ProductYieldService.Calculate(product);
+        Check(failed.Files.Last().Error.Length > 0 && failed.Yields.Single(r => r.IsCombined).Total == 2, "failed file contributes no partial population");
+        using (var operation = new AnalysisOperation())
+        {
+            var transaction = WriteCsv("transaction.csv", "NEW,10,0,1,1,1,W,003,1\n");
+            var broken = P("transaction-integrated.csv");
+            IntegratedCsvService.Save(broken, DataFileService.Parse(transaction, config));
+            File.AppendAllText(broken, "BROKEN\n");
+            product.Files.Add(new() { StageId = cold.Id, FilePath = broken, Lot = "L" });
+            var incomplete = ProductYieldService.Calculate(product);
+            Check(incomplete.Files.Last().Error.Length > 0 && incomplete.Yields.Single(r => r.IsCombined).Total == 2,
+                "malformed file after valid rows rolls back the entire file");
+        }
+        product.Files = new() { new() { StageId = cold.Id, FilePath = StdfFixture(false), Lot = "L", WaferOverride = "W" } };
+        var multi = ProductYieldService.Calculate(product);
+        Check(multi.Files.Single().Error.Contains("多个晶圆") && multi.Yields.Count == 0, "wafer override still rejects multi-wafer files");
+    }
+    static int Main(string[] args)
+    {
+        try
+        {
+            folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            Views(); SelectionMatrix(); Projections(); ProductYield();
+            Console.WriteLine($"ALL {checks} CORE MEMORY CHECKS PASSED"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

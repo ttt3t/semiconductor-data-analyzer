@@ -7,6 +7,7 @@ namespace SemiconductorCsvAnalyzer.Services;
 
 public sealed partial class CsvParseResult
 {
+    internal bool IsYieldProjection { get; set; }
     public string SourceDescription { get; set; } = "";
     public StdfFileMetadata? StdfMetadata { get; set; }
     public List<TestItemData> Items { get; set; } = new();
@@ -36,12 +37,16 @@ public static class CsvParser
         => Parse(csvPath, config, progress, default);
 
     public static CsvParseResult Parse(string csvPath, AnalyzerConfig config, Action<string>? progress, CancellationToken cancellationToken)
+        => ParseCore(csvPath, config, progress, cancellationToken, false);
+
+    internal static CsvParseResult ParseCore(string csvPath, AnalyzerConfig config, Action<string>? progress,
+        CancellationToken cancellationToken, bool yieldOnly)
     {
         if (!cancellationToken.CanBeCanceled) cancellationToken = AnalysisOperation.Token;
         cancellationToken.ThrowIfCancellationRequested();
         if (IntegratedCsvService.IsIntegrated(csvPath))
         {
-            return IntegratedCsvService.Load(csvPath);
+            return IntegratedCsvService.LoadCore(csvPath, yieldOnly ? config : null);
         }
         Encoding encoding;
         try { encoding = CsvText.EncodingFor(config.EncodingName); }
@@ -156,7 +161,8 @@ public static class CsvParser
         var schema = new MeasurementSchema(items.Select(i => i.Id));
         string waferId = Path.GetFileNameWithoutExtension(csvPath);
         string unannotatedWaferId = $"{waferId} (未标注 wafer)";
-        var rawStore = new RawMeasurementStore();
+        var projection = yieldOnly ? new YieldReadProjection(items, config) : null;
+        var rawStore = yieldOnly ? null : new RawMeasurementStore();
         try
         {
             progress?.Invoke("正在读取数据行...");
@@ -246,20 +252,21 @@ public static class CsvParser
                     Program = Context(config.ProgramColumn, config.Program),
                     Lot = Context(config.LotColumn, config.Lot),
                     SBin = sbin,
-                    HBin = hbin,
-                    Measurements = rawStore.Append(schema, rawMeasurements)
+                    HBin = hbin
                 };
+                if (projection != null) projection.Capture(record, rawMeasurements);
+                else record.Measurements = rawStore!.Append(schema, rawMeasurements);
                 records.Add(record);
             }
 
             stamp.Validate(input);
-            rawStore.Seal();
-            var parsed = DatasetService.Build(items, records);
+            rawStore?.Seal();
+            var parsed = projection != null ? projection.Complete(records) : DatasetService.Build(items, records);
             if (skippedHeaders > 0) parsed.SourceDescription = $"已跳过 {skippedHeaders} 行重复表头";
             progress?.Invoke($"解析完成，共 {items.Count} 个测试项，{parsed.Devices.Count} 颗唯一芯片");
             return parsed;
         }
-        catch { rawStore.Dispose(); throw; }
+        catch { rawStore?.Dispose(); throw; }
     }
 
     private static string[] GetRow(Dictionary<int, string[]> rows, int index)
