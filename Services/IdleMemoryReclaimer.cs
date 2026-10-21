@@ -1,12 +1,11 @@
 using System.Diagnostics;
-using System.Runtime;
 using System.Windows.Input;
 using System.Windows.Threading;
 
 namespace SemiconductorCsvAnalyzer.Services;
 
-// Large column arrays and WPF drawing resources are released at lifecycle boundaries.
-// Debounce requests and wait for input/calculation to stop before shrinking the heap.
+// Wait for input/calculation to settle before evicting rebuildable page caches.
+// The GC controls managed collection; idle handling never forces GC or working-set trimming.
 internal sealed class IdleMemoryReclaimer : IDisposable
 {
     private readonly DispatcherTimer _timer;
@@ -90,16 +89,7 @@ internal sealed class IdleMemoryReclaimer : IDisposable
                     if (!compactStartup && _lastCollection != 0 && Stopwatch.GetElapsedTime(_lastCollection).TotalSeconds < 60) return null;
                     long allocated = GC.GetTotalAllocatedBytes();
                     if (!compactStartup && allocated - _lastAllocated < 128L * 1024 * 1024) return false;
-                    if (compactStartup)
-                    {
-                        GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-                        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-                    }
-                    else
-                    {
-                        // Keep lifecycle reclamation asynchronous and rate limited.
-                        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: false, compacting: false);
-                    }
+                    DiskStorage.Trim();
                     // Do not trim the process working set: live pages would fault
                     // back in during scrolling, without freeing the live dataset.
                     _lastAllocated = allocated; _lastCollection = Stopwatch.GetTimestamp(); return true;

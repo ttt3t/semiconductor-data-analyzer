@@ -4,26 +4,27 @@ using SemiconductorCsvAnalyzer.Models;
 namespace SemiconductorCsvAnalyzer.Services;
 
 /// <summary>Only row indexes and byte states are added; numeric columns remain shared and immutable.</summary>
-public sealed class SimulationSnapshot
+public sealed partial class SimulationSnapshot
 {
     public required CsvParseResult Data { get; init; }
-    public required CsvRecord[] Chips { get; init; }
-    public required int[][] SourceRows { get; init; }
-    public required MeasurementState[][] States { get; init; }
-    public required OriginalDisposition[] Original { get; init; }
-    public required string[] Products { get; init; }
-    public required string[] Programs { get; init; }
-    public required string[] Lots { get; init; }
-    public required bool[] ContextConflict { get; init; }
+    public required IReadOnlyList<CsvRecord> Chips { get; init; }
+    public required IReadOnlyList<int>[] SourceRows { get; init; }
+    public required IReadOnlyList<MeasurementState>[] States { get; init; }
+    public required IReadOnlyList<OriginalDisposition> Original { get; init; }
+    public required IReadOnlyList<string> Products { get; init; }
+    public required IReadOnlyList<string> Programs { get; init; }
+    public required IReadOnlyList<string> Lots { get; init; }
+    public required IReadOnlyList<bool> ContextConflict { get; init; }
     public required AnalyzerConfig Config { get; init; }
-    public int Count => Chips.Length;
+    public int Count => Chips.Count;
     public double Value(int chip, int item) => SourceRows[item][chip] < 0 ? double.NaN : Data.Items[item].Values.GetSourceRowValue(SourceRows[item][chip]);
 
     public static SimulationSnapshot Build(CsvParseResult data, AnalyzerConfig config, RetestMode mode, CancellationToken token)
     {
         if (mode is not (RetestMode.First or RetestMode.Last)) throw new ArgumentException("芯片联合判定请选择首测或末测；不能重复计算同一芯片。");
+        if (data.Records.IsOnDisk) return BuildDisk(data, config, mode, token);
         var groups = new Dictionary<(string, int?, int?, string), int>(data.Records.Count);
-        var chips = new List<CsvRecord>(data.Records.Count);
+        var chips = new RecordList(data.Records.Count);
         var rowChips = new int[data.Records.Count];
         Array.Fill(rowChips, -1);
         byte[]? rowBuffer = null;

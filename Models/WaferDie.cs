@@ -17,7 +17,12 @@ public sealed class WaferDie
     public string Site { get; set; } = "";
     public string Category { get; set; } = "";
     public double? Value { get; set; }
-    public Brush Color { get; set; } = Brushes.Gray;
+    [System.Text.Json.Serialization.JsonIgnore] public Brush Color { get; set; } = Brushes.Gray;
+    public string ColorArgb
+    {
+        get => Color.ToString();
+        set { var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(value)); brush.Freeze(); Color = brush; }
+    }
 
     public WaferDie WithColor(Brush color)
     {

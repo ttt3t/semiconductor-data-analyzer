@@ -24,33 +24,46 @@ public static class SampleFilterService
                 ? value >= rule.Minimum!.Value || value <= rule.Maximum!.Value
                 : (!rule.Minimum.HasValue || value >= rule.Minimum.Value) && (!rule.Maximum.HasValue || value <= rule.Maximum.Value));
         bool Matches(IEnumerable<bool> flags) => match == SampleMatchMode.Union ? flags.Any(x => x) : flags.All(x => x);
-        List<CsvRecord> records;
+        RecordList records;
         if (mode == RetestMode.All)
         {
-            var ids = new HashSet<string>(StringComparer.Ordinal);
+            using var ids = new DiskKeySet();
             foreach (var record in selected)
             {
                 AnalysisOperation.CheckCancellation();
                 if (Matches(rules.Select(rule => InRange(record, rule)))) ids.Add(record.Id);
             }
-            records = data.Records.Where(r => ids.Contains(r.Id)).ToList();
+            records = data.Records.Where(r => ids.Contains(r.Id)).ToRecordList();
         }
         else
         {
             // Partial retests can carry different items in different records of one physical chip.
-            var matches = new Dictionary<(string Wafer, int? X, int? Y, string Fallback), bool[]>();
-            foreach (var record in selected)
+            using var included = new DiskKeySet();
+            using var ordered = selected.IsOnDisk ? selected.Store!.GroupRows() : null;
+            if (ordered != null)
             {
-                AnalysisOperation.CheckCancellation();
-                var key = DatasetService.ChipKey(record);
-                if (!matches.TryGetValue(key, out var flags)) matches[key] = flags = new bool[rules.Count];
-                for (int i = 0; i < rules.Count; i++)
-                    if (record.Measurements.ContainsKey(rules[i].ItemId)) flags[i] = InRange(record, rules[i]);
+                for (int i = 0; i < ordered.Count;)
+                {
+                    int count = ordered[i].Count; var flags = new bool[rules.Count]; string key = "";
+                    for (int j = 0; j < count; j++)
+                    {
+                        AnalysisOperation.CheckCancellation(); var record = selected[ordered[i++].Slot]; key = RecordList.RecordStore.Key(DatasetService.ChipKey(record));
+                        for (int k = 0; k < rules.Count; k++) if (record.Measurements.ContainsKey(rules[k].ItemId)) flags[k] = InRange(record, rules[k]);
+                    }
+                    if (Matches(flags)) included.Add(key);
+                }
             }
-            var included = matches.Where(p => Matches(p.Value)).Select(p => p.Key).ToHashSet();
-            records = data.Records.Where(r => included.Contains(DatasetService.ChipKey(r))).ToList();
+            else foreach (var group in selected.GroupBy(DatasetService.ChipKey))
+            {
+                var flags = new bool[rules.Count];
+                foreach (var record in group)
+                    for (int i = 0; i < rules.Count; i++) if (record.Measurements.ContainsKey(rules[i].ItemId)) flags[i] = InRange(record, rules[i]);
+                if (Matches(flags)) included.Add(RecordList.RecordStore.Key(group.Key));
+            }
+            records = data.Records.Where(r => included.Contains(RecordList.RecordStore.Key(DatasetService.ChipKey(r)))).ToRecordList();
         }
         AnalysisOperation.CheckCancellation();
+        records.ScopeKey = data.Records.ScopeKey + ":filter:" + mode + ":" + match + ":" + System.Text.Json.JsonSerializer.Serialize(rules);
         var result = DatasetService.CreateView(data, records);
         result.SourceDescription = data.SourceDescription;
         return result;

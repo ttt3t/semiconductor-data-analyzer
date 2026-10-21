@@ -39,12 +39,12 @@ public static class IntegratedCsvService
         return records.Count;
     }
 
-    internal static List<CsvRecord> SelectRecords(CsvParseResult data, IReadOnlyCollection<string> wafers, RetestMode mode)
+    internal static RecordList SelectRecords(CsvParseResult data, IReadOnlyCollection<string> wafers, RetestMode mode)
     {
         var selected = wafers.ToHashSet(StringComparer.Ordinal);
         if (selected.Count == 0 || selected.Except(data.Wafers).Any())
             throw new InvalidDataException("请至少选择一个有效晶圆。");
-        return DatasetService.SelectRetestRecords(data.Records.Where(r => selected.Contains(r.WaferId)).ToList(), mode);
+        return DatasetService.SelectRetestRecords(data.Records.Where(r => selected.Contains(r.WaferId)).ToRecordList(), mode);
     }
 
     internal static (double Lower, double Upper)[] CalculateOutlierBounds(IReadOnlyList<TestItemData> items,
@@ -282,9 +282,9 @@ public static class IntegratedCsvService
         }).ToList();
         int? Coordinate(string text) => text.Length == 0 ? null : int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value)
             ? value : throw new InvalidDataException("整合 CSV 的坐标无效。");
-        var records = new List<CsvRecord>();
+        var records = new RecordList(0, disk: yieldConfig == null);
         var schema = new MeasurementSchema(items.Select(i => i.Id));
-        var ids = new HashSet<string>(StringComparer.Ordinal);
+        using var ids = new DiskKeySet();
         var projection = yieldConfig != null ? new YieldReadProjection(items, yieldConfig) : null;
         var rawStore = projection != null ? null : new RawMeasurementStore();
         var measurements = new string?[items.Count];

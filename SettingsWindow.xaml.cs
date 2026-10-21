@@ -276,6 +276,7 @@ public partial class SettingsWindow : Window
 
     private void ShowPreferences(UiPreferences preferences)
     {
+        CmbDataMemory.SelectedIndex = preferences.DataMemoryMiB == 512 ? 1 : 0;
         ChkCompactTable.IsChecked = preferences.CompactTable;
         ChkShowColumnFilters.IsChecked = preferences.ShowColumnFilters;
         ChkAlternateRows.IsChecked = preferences.AlternateRows;
@@ -290,6 +291,7 @@ public partial class SettingsWindow : Window
         {
             _uiPreferences.Save(new UiPreferences
             {
+                DataMemoryMiB = CmbDataMemory.SelectedIndex == 1 ? 512 : 256,
                 CompactTable = ChkCompactTable.IsChecked == true,
                 ShowColumnFilters = ChkShowColumnFilters.IsChecked == true,
                 AlternateRows = ChkAlternateRows.IsChecked == true,

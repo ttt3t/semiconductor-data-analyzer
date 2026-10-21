@@ -1,0 +1,84 @@
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+using ClosedXML.Excel;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Controls;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks; static string folder = "";
+    static void Check(bool value, string text) { if (!value) throw new Exception(text); checks++; Console.WriteLine("PASS " + text); }
+    static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame); }
+    static object? Field(object obj, string name) => obj.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(obj);
+    static void Set(object obj, string name, object value) => obj.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(obj, value);
+    static void Until(Func<bool> ready) { var clock = Stopwatch.StartNew(); while (!ready()) { if (clock.Elapsed.TotalSeconds > 120) throw new TimeoutException(); Pump(); Thread.Sleep(5); } Pump(); }
+    static void Wait(Task task) { Until(() => task.IsCompleted); task.GetAwaiter().GetResult(); }
+    static Task Worker(string name, params object[] args) => (Task)typeof(CsvParser).Assembly.GetType("SemiconductorCsvAnalyzer.Services.ExportWorker")!.GetMethod(name)!.Invoke(null, args)!;
+    static uint[] Pixels(ScatterPlotControl control)
+    {
+        Until(() => !(bool)Field(control, "_rasterPending")! && Field(control, "_pointBitmap") != null);
+        var bitmap = (WriteableBitmap)Field(control, "_pointBitmap")!; var data = new uint[bitmap.PixelWidth * bitmap.PixelHeight]; bitmap.CopyPixels(data, bitmap.PixelWidth * 4, 0); return data;
+    }
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            var app = new App(); app.InitializeComponent(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            using var operation = new AnalysisOperation();
+            var item = new TestItemData { Id = "T", Name = "T", DisplayName = "T", LowLimit = 0, HighLimit = 2 };
+            var rows = new RecordList(0, disk: true);
+            for (int i = 0; i < 6000; i++) rows.Add(new() { Id = "R" + i, SerialNumber = (i + 1).ToString(), X = i % 3000, Y = 0,
+                Site = i % 2 == 0 ? "1" : "2", WaferId = "W", HBin = i < 3000 ? "2" : "1", SBin = "1", Measurements = new Dictionary<string, string> { ["T"] = (i % 19 * .2).ToString("R", System.Globalization.CultureInfo.InvariantCulture) } });
+            var data = DatasetService.Build(new() { item }, rows); using var lease = new DatasetLease(data.Records);
+            var source = ScatterSeries.BuildSorted(item.Values, 0, 2, ScatterOrder.Site, trackChips: true);
+            var original = (ScatterSeries)typeof(object).GetMethod("MemberwiseClone", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(source, null)!;
+            var memoryPoints = new PagedVector<ScatterPoint>(); Set(memoryPoints, "_small", source.Points.ToList()); Set(memoryPoints, "_count", source.Points.Count);
+            typeof(ScatterSeries).GetProperty("Points")!.SetValue(original, memoryPoints);
+            var smallPlot = new ScatterPlotControl { Width = 900, Height = 450 }; smallPlot.SetSeries(original, 0, 2, "V");
+            var window = new Window { Content = smallPlot, SizeToContent = SizeToContent.WidthAndHeight }; window.Show(); Pump();
+            var before = Pixels(smallPlot); window.Content = null;
+            var diskPlot = new ScatterPlotControl { Width = 900, Height = 450 }; diskPlot.SetSeries(source, 0, 2, "V"); window.Content = diskPlot; window.UpdateLayout(); Pump();
+            Check(before.SequenceEqual(Pixels(diskPlot)), "background paged scatter pixels equal original renderer for every pixel");
+            var mark = typeof(ScatterPlotControl).GetMethod("SelectPagedMarks", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            mark.Invoke(diskPlot, new object[] { source, 1.0, 200.0, -1.0, 4.0 });
+            Until(() => diskPlot.ChipMarkCount > 0 && Field(diskPlot, "_pagedMarks") != null); Pixels(diskPlot);
+            Check(diskPlot.ChipMarkCount > 0, "large right-selection completes with paged green mask");
+            diskPlot.ClearChipMarks(); Check(diskPlot.ChipMarkCount == 0, "clear cancels old marking work"); window.Close();
+            var summaries = new SummaryRows(5000);
+            for (int i = 0; i < summaries.Count; i++) summaries[i] = new() { Data = new() { Id = "I" + i, Name = "Item" + i }, Site = "1", Count = i, Mean = i, IsWaferCombined = true };
+            var view = new PagedSummaryView(summaries); view.Filter = o => ((TestItemSummary)o).Count % 3 == 0; view.SortDescriptions.Add(new(nameof(TestItemSummary.Count), ListSortDirection.Descending)); view.Refresh();
+            Check(view.Count == 1667 && ((TestItemSummary)view.GetItemAt(0)).Count == 4998, "paged WPF statistics view filters and sorts without full object shadow list");
+            var grid = new DataGrid { ItemsSource = view, Height = 400, Width = 600, EnableRowVirtualization = true }; var tableWindow = new Window { Content = grid }; tableWindow.Show(); Pump();
+            grid.SelectedIndex = 1200; grid.ScrollIntoView(grid.SelectedItem); Pump(); Check(grid.SelectedItem != null && view.IndexOf(grid.SelectedItem) == 1200, "paged statistics preserve selection when scrolling"); tableWindow.Close(); view.ReleaseIndex();
+            var pages = MapDataService.PfPages(data, item, null); Check(pages.Sum(p => p.Dies.Count) == 3000 && pages[0].Dies[0].Color.IsFrozen, "disk PF maps preserve latest coordinates and frozen colors");
+            foreach (var page in pages) (page.Dies as IDisposable)?.Dispose();
+            string fail = Path.Combine(folder, "worker-fail.xlsx"); Wait(Worker("SaveFailAsync", fail, data, new AnalyzerConfig(), new[] { "W" }, RetestMode.All, null!));
+            using (var book = new XLWorkbook(fail)) Check(book.Worksheets.Count == 2 && book.Worksheets.Worksheet(2).LastRowUsed()!.RowNumber() == 6007, "independent Fail worker shares cache and exports both sheets");
+            string report = Path.Combine(folder, "worker-report.xlsx"); Wait(Worker("SaveReportAsync", report, data, new AnalyzerConfig(), new XlsxReportOptions(new[] { "W" }, RetestMode.Last, null, 0, true, Array.Empty<string>()), "disk regression"));
+            using (var book = new XLWorkbook(report)) Check(book.Worksheets.Count == 4, "independent report worker exports four sheets and exits");
+            if (args.Length > 1)
+            {
+                var snapshotType = typeof(CsvParser).Assembly.GetType("SemiconductorCsvAnalyzer.Services.DiskDatasetSnapshot")!;
+                using var snapshot = (IDisposable)snapshotType.GetMethod("Capture", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, new object[] { data })!;
+                string output = Path.Combine(folder, "single-exe.xlsx"), result = Path.Combine(folder, "single-exe-result.json"), manifest = Path.Combine(folder, "single-exe-job.json");
+                File.WriteAllText(manifest, JsonSerializer.Serialize(new { Version = 1, Kind = "fail", Output = output, Result = result, Dataset = (object)snapshot, Config = new AnalyzerConfig(), Wafers = new[] { "W" }, Mode = RetestMode.All, DataMemoryMiB = 256 }));
+                var start = new ProcessStartInfo { FileName = Path.GetFullPath(args[1]), UseShellExecute = false }; start.ArgumentList.Add("--storage-worker"); start.ArgumentList.Add(manifest);
+                using var child = Process.Start(start)!; Until(() => child.HasExited);
+                Check(child.ExitCode == 0 && File.Exists(output) && File.Exists(result), "published single EXE runs SQLite-backed export worker with bundled native dependency");
+            }
+            Console.WriteLine($"ALL {checks} DISK WINDOWS CHECKS PASSED"); app.Shutdown(); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

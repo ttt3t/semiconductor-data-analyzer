@@ -1,0 +1,39 @@
+using System.Diagnostics;
+using System.Text.Json;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+string root = Path.GetFullPath(args[0]); Directory.CreateDirectory(root);
+int rowCount = args.Length > 1 ? int.Parse(args[1]) : 100000;
+int itemCount = args.Length > 2 ? int.Parse(args[2]) : 200;
+string csv = Path.Combine(root, $"dense-{rowCount}-{itemCount}.csv");
+if (!File.Exists(csv))
+{
+    using var writer = new StreamWriter(csv);
+    writer.WriteLine("SN,X,Y,Site,SBIN,HBIN,Wafer," + string.Join(',', Enumerable.Range(1, itemCount).Select(i => "Item" + i)));
+    foreach (var header in new[] { "LSL", "USL", "Unit", "Test Num" })
+        writer.WriteLine(header + ",,,,,,," + string.Join(',', Enumerable.Range(1, itemCount).Select(i => header switch { "LSL" => "0", "USL" => "2", "Unit" => "V", _ => i.ToString() })));
+    string values = string.Join(',', Enumerable.Repeat("1.25", itemCount));
+    for (int i = 0; i < rowCount; i++) writer.WriteLine($"{i + 1},{i},0,{i % 4 + 1},1,1,W,{values}");
+}
+using var operation = new AnalysisOperation();
+var config = new AnalyzerConfig { TestItemRow = 1, LowLimitRow = 2, HighLimitRow = 3, UnitRow = 4, TestNumberRow = 5,
+    SBinRow = 0, HBinRow = 0, DataStartRow = 6, TestItemStartColumn = 8, SerialNumberColumn = 1, XColumn = 2, YColumn = 3,
+    SiteColumn = 4, SBinColumn = 5, HBinColumn = 6, WaferColumn = 7 };
+var watch = Stopwatch.StartNew();
+var data = CsvParser.Parse(csv, config); using var lease = new DatasetLease(data.Records);
+double loadSeconds = watch.Elapsed.TotalSeconds;
+GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+long loadedHeap = GC.GetTotalMemory(false); long loadedWorkingSet = Environment.WorkingSet;
+watch.Restart();
+var summaries = SummaryService.Build(data.Items, new[] { "1", "2", "3", "4" }, true, config);
+if (summaries.Any(s => s.Count != rowCount || Math.Abs(s.Mean - 1.25) > 1e-12)) throw new Exception("Benchmark statistics mismatch");
+double summarySeconds = watch.Elapsed.TotalSeconds;
+watch.Restart();
+var warm = SummaryService.Build(data.Items, new[] { "1", "2", "3", "4" }, true, config);
+double warmSummarySeconds = watch.Elapsed.TotalSeconds;
+string cacheFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SemiconductorCsvAnalyzer", "Cache", "v1");
+long cacheDiskBytes = Directory.Exists(cacheFolder) ? Directory.EnumerateFiles(cacheFolder, Environment.ProcessId + "-*").Sum(path => new FileInfo(path).Length) : 0;
+GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+Console.WriteLine(JsonSerializer.Serialize(new { rowCount, itemCount, loadSeconds, summarySeconds, loadedHeap, loadedWorkingSet,
+    warmSummarySeconds, cacheDiskBytes, finalHeap = GC.GetTotalMemory(false), peakWorkingSet = Process.GetCurrentProcess().PeakWorkingSet64, firstMean = summaries[0].Mean }));

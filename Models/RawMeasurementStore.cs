@@ -21,6 +21,7 @@ internal sealed class RawMeasurementStore : IDisposable
     private const int DoubleCharSpan = sizeof(double) / sizeof(char);
 
     private readonly FileStream _file;
+    internal string StoragePath => _file.Name;
     private readonly object _gate = new();
     private RawRow? _cached;
     private bool _sealed;
@@ -38,6 +39,11 @@ internal sealed class RawMeasurementStore : IDisposable
         _operationOwned = AnalysisOperation.Track(this);
     }
 
+    internal RawMeasurementStore(string path)
+    {
+        _file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 65536, FileOptions.RandomAccess);
+        _sealed = true;
+    }
     public MeasurementCollection Append(MeasurementSchema schema, IReadOnlyList<string?> values)
     {
         if (_sealed) throw new InvalidOperationException("原文快照已完成写入。");

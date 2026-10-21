@@ -1,3 +1,5 @@
+using SemiconductorCsvAnalyzer.Services;
+
 namespace SemiconductorCsvAnalyzer.Models;
 
 public sealed class TestItemData
@@ -20,6 +22,6 @@ public sealed class TestItemData
     public double? DisplayHighLimit => HighLimit * DisplayFactor;
     public double? LowLimit { get; set; }
     public double? HighLimit { get; set; }
-    public TestValueColumn Values { get; } = new();
-    public List<CsvRecord> Errors { get; } = new();
+    [System.Text.Json.Serialization.JsonIgnore] public TestValueColumn Values { get; } = new();
+    [System.Text.Json.Serialization.JsonIgnore] public RecordList Errors { get; } = new();
 }

@@ -20,7 +20,8 @@ public sealed class ProductCatalogStore
     {
         try
         {
-            var catalog = JsonSerializer.Deserialize<ProductCatalog>(File.ReadAllText(path))
+            using var stream = File.OpenRead(path);
+            var catalog = JsonSerializer.Deserialize<ProductCatalog>(stream)
                 ?? throw new InvalidDataException("产品目录为空。");
             if (catalog.Version != 1 || catalog.Products == null || string.IsNullOrEmpty(catalog.Revision))
                 throw new InvalidDataException("产品目录格式或版本不受支持。");
@@ -31,7 +32,13 @@ public sealed class ProductCatalogStore
         }
         catch (JsonException ex) { throw new InvalidDataException("产品目录损坏，请从 catalog.json.bak 恢复；不会覆盖原目录。", ex); }
     }
-    public static T Clone<T>(T value) => JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value))!;
+    public static T Clone<T>(T value)
+    {
+        // Stream the transaction copy through disk rather than retaining two complete JSON strings.
+        string path = DiskStorage.NewPath(".catalog-copy");
+        using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 65536, FileOptions.DeleteOnClose);
+        JsonSerializer.Serialize(stream, value); stream.Position = 0; return JsonSerializer.Deserialize<T>(stream)!;
+    }
     public void DeleteProduct(string productId)
     {
         var next = Clone(Catalog);
@@ -59,7 +66,7 @@ public sealed class ProductCatalogStore
         try
         {
             temporary = FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            File.WriteAllText(temporary, JsonSerializer.Serialize(next, Options));
+            using (var output = File.Create(temporary)) JsonSerializer.Serialize(output, next, Options);
             if (File.Exists(FilePath)) File.Replace(temporary, FilePath, FilePath + ".bak");
             else File.Move(temporary, FilePath);
             temporary = null; Catalog = next;

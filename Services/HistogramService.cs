@@ -24,9 +24,8 @@ public static class HistogramService
             return new List<HistogramBin>();
 
         double min = double.PositiveInfinity, max = double.NegativeInfinity;
-        for (int i = 0; i < n; i++)
+        foreach (double v in StatisticsService.Numbers(values))
         {
-            double v = values[i].Value;
             if (v < min) min = v;
             if (v > max) max = v;
         }
@@ -56,9 +55,8 @@ public static class HistogramService
             bins.Add(new HistogramBin { From = from, To = to, IsOutOfSpec = isOut });
         }
 
-        for (int i = 0; i < n; i++)
+        foreach (double v in StatisticsService.Numbers(values))
         {
-            double v = values[i].Value;
             if (!includeOutOfLimit)
             {
                 if (lsl.HasValue && v < lsl.Value) continue;
@@ -117,9 +115,8 @@ public static class HistogramService
             bins.Add(new HistogramBin { From = from, To = from + width, IsOutOfSpec = true });
         }
 
-        for (int i = 0; i < n; i++)
+        foreach (double v in StatisticsService.Numbers(values))
         {
-            double v = values[i].Value;
             if (!includeOutOfLimit)
             {
                 if (v < lsl || v > usl) continue;
@@ -201,9 +198,8 @@ public static class HistogramService
             bins.Add(new HistogramBin { From = from, To = to, IsOutOfSpec = isOut });
         }
 
-        for (int i = 0; i < n; i++)
+        foreach (double v in StatisticsService.Numbers(values))
         {
-            double v = values[i].Value;
             if (!includeOutOfLimit)
             {
                 if (lsl.HasValue && v < lsl.Value) continue;

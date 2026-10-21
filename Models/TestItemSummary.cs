@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using System.ComponentModel;
 
 namespace SemiconductorCsvAnalyzer.Models;
@@ -7,6 +8,7 @@ public sealed class TestItemSummary : INotifyPropertyChanged
     public const string CombinedSite = "ALL";
     public const string CombinedWafer = "ALL";
 
+    [JsonIgnore]
     public TestItemData Data { get; set; } = null!;
 
     public string TestNumber => Data.TestNumber;

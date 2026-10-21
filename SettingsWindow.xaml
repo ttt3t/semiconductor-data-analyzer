@@ -135,6 +135,12 @@
             <TabItem x:Name="AppearanceTab" Header="界面与习惯">
                 <ScrollViewer TextElement.Foreground="{StaticResource TextPrimary}" TextElement.FontWeight="Normal" VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="24">
+                        <TextBlock Text="数据缓存" Style="{StaticResource SectionTitle}"/>
+                        <ComboBox x:Name="CmbDataMemory" Width="300" HorizontalAlignment="Left" Margin="0,0,0,8">
+                            <ComboBoxItem Content="256 MiB（默认，适合大文件）"/>
+                            <ComboBoxItem Content="512 MiB（增加热数据缓存）"/>
+                        </ComboBox>
+                        <TextBlock Text="完整数据保存在本机磁盘；此设置控制共享数据缓存与工作缓冲，不是进程总内存上限。" TextWrapping="Wrap" Margin="0,0,0,18"/>
                         <TextBlock Text="主列表" Style="{StaticResource SectionTitle}"/>
                         <CheckBox x:Name="ChkCompactTable" Content="紧凑行高（适合同时查看更多测项）"/>
                         <CheckBox x:Name="ChkShowColumnFilters" Content="显示表头的关键字筛选输入框"/>

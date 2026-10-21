@@ -138,7 +138,7 @@ public static class XlsxReportService
         finally { if (File.Exists(temp)) File.Delete(temp); }
     }
 
-    private static TestItemData SelectItem(TestItemData source, List<CsvRecord> records,
+    private static TestItemData SelectItem(TestItemData source, RecordList records,
         Dictionary<string, int> rowsById, (double Lower, double Upper)? bounds)
     {
         var item = DatasetService.CloneItem(source);

@@ -20,8 +20,17 @@ public static class WaferStatisticsService
         if (mode is not (RetestMode.First or RetestMode.Last)) throw new ArgumentOutOfRangeException(nameof(mode));
         // Reuse BIN Table's whole-chip retest selection and category definitions.
         // Only compact counts survive this method; no measurement columns are copied.
-        var groups = records.GroupBy(r => r.WaferId, StringComparer.Ordinal).ToArray();
-        var summaries = groups.Select(g => BinStatisticsService.Build(g.ToArray(), mode, config)).ToArray();
+        var wafers = records.Select(r => r.WaferId).Distinct(StringComparer.Ordinal).ToList();
+        var summaries = wafers.Select(wafer =>
+        {
+            if (records is RecordList { Store: { } store })
+            {
+                var group = store.Query("SELECT slot FROM records WHERE wafer='" + wafer.Replace("'", "''") + "' ORDER BY slot").ToRecordList();
+                try { return BinStatisticsService.Build(group, mode, config); }
+                finally { group.Store?.Dispose(); }
+            }
+            return BinStatisticsService.Build(records.Where(r => r.WaferId == wafer).ToArray(), mode, config);
+        }).ToArray();
         var valid = summaries.Select(s => s.ChipCount - s.MissingSBin).ToArray();
         var lookup = summaries.Select(s => s.SBins.ToDictionary(r => r.Bin, r => r.Count, StringComparer.Ordinal)).ToArray();
         var categoryOrder = config.SBinCategories.Keys.Select((name, index) => (name, index))
@@ -49,7 +58,7 @@ public static class WaferStatisticsService
                 categoryLookup.Select(categories => categories.GetValueOrDefault(r.Category)).ToArray(),
                 categoryLookup.Select((categories, i) => valid[i] == 0 ? (double?)null : 100.0 * categories.GetValueOrDefault(r.Category) / valid[i]).ToArray()))
             .ToList();
-        return new(groups.Select(g => g.Key).ToList(), summaries.Select(s => s.ChipCount).ToArray(), valid, rows)
+        return new(wafers, summaries.Select(s => s.ChipCount).ToArray(), valid, rows)
         { ValidHBinCounts = hValid, HBinRows = hRows, CategoryRows = categoryRows };
     }
 }

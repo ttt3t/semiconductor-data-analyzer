@@ -11,9 +11,9 @@ public sealed partial class CsvParseResult
     public string SourceDescription { get; set; } = "";
     public StdfFileMetadata? StdfMetadata { get; set; }
     public List<TestItemData> Items { get; set; } = new();
-    public List<DeviceInfo> Devices { get; set; } = new();
-    public List<CsvRecord> Records { get; set; } = new();
-    private List<CsvRecord>? _wafersSource;
+    public IReadOnlyList<DeviceInfo> Devices { get; set; } = Array.Empty<DeviceInfo>();
+    public RecordList Records { get; set; } = new();
+    private RecordList? _wafersSource;
     private int _wafersRecordCount = -1;
     private IReadOnlyList<string>? _wafersCache;
     public IReadOnlyList<string> Wafers
@@ -157,7 +157,7 @@ public static class CsvParser
         if (items.Count == 0)
             throw new InvalidDataException("未解析到任何有效测试项");
 
-        var records = new List<CsvRecord>(Math.Max(0, rowCount - config.DataStartRow + 1));
+        var records = new RecordList(Math.Max(0, rowCount - config.DataStartRow + 1), disk: !yieldOnly);
         var schema = new MeasurementSchema(items.Select(i => i.Id));
         string waferId = Path.GetFileNameWithoutExtension(csvPath);
         string unannotatedWaferId = $"{waferId} (未标注 wafer)";

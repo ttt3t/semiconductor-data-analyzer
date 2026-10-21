@@ -39,6 +39,8 @@ public sealed class MeasurementCollection : IReadOnlyDictionary<string, string>
         long offset, int length, byte[]? presence, int count) => new()
         { _editable = null, _schema = schema, _store = store, _offset = offset, _length = length, _presence = presence, _count = count };
 
+    internal sealed record Handle(RawMeasurementStore? Store, MeasurementSchema? Schema, long Offset, int Length, byte[]? Presence, int Count, Dictionary<string, string>? Editable);
+    internal Handle CaptureHandle() => new(_store, _schema, _offset, _length, _presence, _count, _editable);
     private bool Present(int i) => _presence == null || (_presence[i >> 3] & (1 << (i & 7))) != 0;
     internal bool PresentAt(int index)
     {

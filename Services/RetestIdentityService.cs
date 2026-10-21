@@ -79,16 +79,12 @@ public static class RetestIdentityService
             record.UuidTestNumbers = reader?.Recipe ?? source.UuidTestNumbers;
             if (record.IsFtIdentity && record.RetestUuid == "") missing++;
             return record;
-        }).ToList();
+        }).ToRecordList();
         // Numeric columns and disk-backed raw measurements stay shared and immutable.
-        var result = new CsvParseResult
-        {
-            Items = data.Items, Records = records, Devices = DatasetService.BuildDevices(records),
-            SourceDescription = data.SourceDescription, SerialNumberNotice = data.SerialNumberNotice,
-            StdfMetadata = data.StdfMetadata,
-            ReassignedSerialNumberCount = data.ReassignedSerialNumberCount,
-            RetestIdentitySignature = signature, MissingUuidCount = missing
-        };
+        records.Inherit(data.Records);
+        var result = DatasetService.CreateView(data, records);
+        result.RetestIdentitySignature = signature;
+        result.MissingUuidCount = missing;
         if (missing > 0)
             result.RetestIdentityNotice = $"FT UUID：{missing:N0} / {records.Count:N0} 条记录未读全指定值，已独立保留，不使用序列号或坐标合并。" +
                 (reader!.MissingTests.Length > 0 ? "\n源数据未找到 Test Num：" + string.Join(", ", reader.MissingTests) : "");

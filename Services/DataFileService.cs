@@ -26,7 +26,6 @@ public static class DataFileService
         StdfImportMode stdfMode = StdfImportMode.Standard)
     {
         if (!cancellationToken.CanBeCanceled) cancellationToken = AnalysisOperation.Token;
-        using var operation = new AnalysisOperation(cancellationToken);
         return ParseCore(path, config, null, cancellationToken, stdfMode, true);
     }
 

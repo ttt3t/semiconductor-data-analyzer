@@ -19,10 +19,11 @@ public static class MeasurementDisplay
             // Already prefixed units and other quantities retain their original representation.
             if (unit is not ("A" or "V" or "s" or "S" or "Hz")) continue;
             double mean = 0;
-            for (int i = 0; i < item.Values.Count; i++)
+            int count = 0;
+            foreach (double number in item.Values.ReadNumbers())
             {
-                if ((i & 4095) == 0) AnalysisOperation.CheckCancellation();
-                mean += (item.Values.GetValueAt(i) - mean) / (i + 1);
+                if ((count & 4095) == 0) AnalysisOperation.CheckCancellation();
+                mean += (number - mean) / ++count;
             }
             double magnitude = Math.Abs(mean);
             int power = 0;

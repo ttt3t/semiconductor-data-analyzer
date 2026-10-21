@@ -39,17 +39,23 @@ public static partial class ProductYieldService
         return config;
     }
 
-    public static string Signature(ManagedProduct product) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-        JsonSerializer.Serialize(new { Schema = 3, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
-            product.IncludePartialPass, product.Files }))));
+    public static string Signature(ManagedProduct product)
+    {
+        using var hash = SHA256.Create();
+        using var stream = new CryptoStream(Stream.Null, hash, CryptoStreamMode.Write);
+        JsonSerializer.Serialize(stream, new { Schema = 3, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
+            product.IncludePartialPass, product.Files });
+        stream.FlushFinalBlock(); return Convert.ToHexString(hash.Hash!);
+    }
 
     public static bool IsCurrent(ManagedProduct product)
     {
         if (product.Snapshot is not { } snapshot || snapshot.DefinitionSignature != Signature(product)) return false;
+        var files = snapshot.Files.ToDictionary(f => f.FileId, StringComparer.Ordinal);
         foreach (var entry in product.Files)
         {
             if (entry.UseSpecifiedYield) continue;
-            var prior = snapshot.Files.FirstOrDefault(f => f.FileId == entry.Id);
+            var prior = files.GetValueOrDefault(entry.Id);
             try
             {
                 var file = new FileInfo(entry.FilePath);
@@ -68,7 +74,7 @@ public static partial class ProductYieldService
         using var operation = new AnalysisOperation(token);
         Validate(product);
         var result = new ManagementSnapshot { DefinitionSignature = Signature(product) };
-        var devices = new Dictionary<DeviceKey, Dictionary<string, Observation>>();
+        using var devices = new ObservationStore();
         var sources = new SourceIndex();
         for (int i = 0; i < product.Files.Count; i++)
         {
@@ -91,52 +97,51 @@ public static partial class ProductYieldService
         var config = ConfigLoader.Parse(product.ConfigText);
         var categories = config.SBinCategories.SelectMany(c => c.Value.Select(bin => (Bin: BinStatisticsService.NormalizeBin(bin), Name: c.Key)))
             .ToDictionary(c => c.Bin, c => c.Name);
-        foreach (var group in devices.GroupBy(d => (d.Key.Kind, d.Key.Lot, d.Key.Wafer)))
+        foreach (var groupKey in devices.Groups())
         {
             token.ThrowIfCancellationRequested();
-            var stages = product.Flow.Where(s => s.Kind == group.Key.Kind).ToArray();
-            var population = group.ToArray();
+            var stages = product.Flow.Where(s => s.Kind == groupKey.Kind).ToArray();
             foreach (var stage in stages)
             {
-                var selected = population.Where(d => d.Value.ContainsKey(stage.Id)).Select(d => d.Value[stage.Id]).ToArray();
-                void AddStage(Observation[] observations, string? period, List<ManagedYieldRow> yields, List<ManagedCategoryCount> counts)
+                var all = new StageAccumulator(Row(groupKey, stage.Id, stage.Label, false));
+                var months = new Dictionary<string, StageAccumulator>(StringComparer.Ordinal);
+                foreach (var observation in devices.Stage(groupKey, stage.Id))
                 {
-                    var row = Row(group.Key, stage.Id, stage.Label, false); row.Period = period ?? "";
-                    row.SourceFileIds.UnionWith(sources.Find(group.Key, stage.Id, period));
-                    row.Total = observations.Length;
-                    row.Pass = observations.Count(o => o.HBin.Length > 0 && o.Disposition == OriginalDisposition.Pass);
-                    row.PartialPass = observations.Count(o => o.HBin.Length > 0 && o.Disposition == OriginalDisposition.PartialPass);
-                    row.Good = row.Pass + (product.IncludePartialPass ? row.PartialPass : 0);
-                    row.Pending = observations.Count(o => o.HBin.Length == 0);
-                    row.Failed = row.Total - row.Good - row.Pending;
-                    row.MissingIdentity = observations.Count(o => !o.KnownIdentity);
-                    yields.Add(row);
-                    int valid = observations.Count(o => o.SBin.Length > 0);
-                    var byCategory = observations.Where(o => o.SBin.Length > 0).GroupBy(o => categories.GetValueOrDefault(BinStatisticsService.NormalizeBin(o.SBin), "未分类"))
-                        .ToDictionary(g => g.Key, g => g.Count());
-                    foreach (string name in config.SBinCategories.Keys.Concat(byCategory.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
-                        counts.Add(new() { Kind = row.Kind, Lot = row.Lot, Wafer = row.Wafer, StageId = stage.Id, Period = period ?? "",
-                            Category = name, Count = byCategory.GetValueOrDefault(name), Total = valid });
+                    token.ThrowIfCancellationRequested();
+                    all.Add(observation, product.IncludePartialPass, categories);
+                    string month = Month(observation.TestTime);
+                    if (!months.TryGetValue(month, out var period))
+                    {
+                        period = new StageAccumulator(Row(groupKey, stage.Id, stage.Label, false));
+                        period.Row.Period = month; months.Add(month, period);
+                    }
+                    period.Add(observation, product.IncludePartialPass, categories);
                 }
-                AddStage(selected, null, result.Yields, result.Categories);
-                foreach (var month in selected.GroupBy(o => Month(o.TestTime)))
-                    AddStage(month.ToArray(), month.Key, result.MonthlyYields, result.MonthlyCategories);
+                void Save(StageAccumulator aggregate, string? period, List<ManagedYieldRow> yields, List<ManagedCategoryCount> counts)
+                {
+                    var row = aggregate.Row; row.SourceFileIds.UnionWith(sources.Find(groupKey, stage.Id, period)); yields.Add(row);
+                    foreach (string name in config.SBinCategories.Keys.Concat(aggregate.Categories.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
+                        counts.Add(new() { Kind = row.Kind, Lot = row.Lot, Wafer = row.Wafer, StageId = stage.Id,
+                            Period = row.Period, Category = name, Count = aggregate.Categories.GetValueOrDefault(name), Total = aggregate.ValidBins });
+                }
+                Save(all, null, result.Yields, result.Categories);
+                foreach (var month in months) Save(month.Value, month.Key, result.MonthlyYields, result.MonthlyCategories);
             }
             var required = stages.Where(s => s.Required).Select(s => s.Id).ToArray();
-            var combined = Row(group.Key, "COMBINED:" + group.Key.Kind, group.Key.Kind + " 综合", true);
-            foreach (var stage in stages) combined.SourceFileIds.UnionWith(sources.Find(group.Key, stage.Id, null));
+            var combined = Row(groupKey, "COMBINED:" + groupKey.Kind, groupKey.Kind + " 综合", true);
+            foreach (var stage in stages) combined.SourceFileIds.UnionWith(sources.Find(groupKey, stage.Id, null));
             var monthly = new Dictionary<string, ManagedYieldRow>();
             var periodSources = new Dictionary<string, HashSet<(string Stage, string Month)>>();
-            foreach (var device in population.Where(d => required.Any(d.Value.ContainsKey)))
+            foreach (var observations in devices.Population(groupKey))
             {
-                var observations = device.Value;
+                if (!required.Any(observations.ContainsKey)) continue;
                 // Match all temperatures first, then assign the selected chip to its latest measured required step.
                 // Missing timestamps stay explicitly unassigned; registration time is never substituted.
                 var tested = required.Where(observations.ContainsKey).Select(s => observations[s]).ToArray();
                 string month = tested.All(o => o.TestTime.HasValue) ? Month(tested.Max(o => o.TestTime)) : "";
                 if (!monthly.TryGetValue(month, out var periodRow))
                 {
-                    monthly[month] = periodRow = Row(group.Key, combined.StageId, combined.StageName, true);
+                    monthly[month] = periodRow = Row(groupKey, combined.StageId, combined.StageName, true);
                     periodSources[month] = new();
                 }
                 periodRow.Period = month;
@@ -146,7 +151,7 @@ public static partial class ProductYieldService
                 {
                     var dependency = (Stage: observation.Key, Month: Month(observation.Value.TestTime));
                     if (periodSources[month].Add(dependency))
-                        periodRow.SourceFileIds.UnionWith(sources.Find(group.Key, dependency.Stage, dependency.Month));
+                        periodRow.SourceFileIds.UnionWith(sources.Find(groupKey, dependency.Stage, dependency.Month));
                 }
                 bool known = observations.Values.All(o => o.KnownIdentity);
                 bool sufficientIdentity = known || required.Length == 1; // One required step needs no cross-temperature matching.
@@ -268,7 +273,7 @@ public static partial class ProductYieldService
     private static string Month(DateTime? time) => time?.ToString("yyyy-MM", System.Globalization.CultureInfo.InvariantCulture) ?? "";
 
     private static void ReadFile(ManagedProduct product, ManagedDataFile file, ProductTestStage stage, ManagedFileResult state,
-        Dictionary<DeviceKey, Dictionary<string, Observation>> devices, SourceIndex sources, CancellationToken token)
+        ObservationStore devices, SourceIndex sources, CancellationToken token)
     {
         using var operation = new AnalysisOperation(token);
         var info = new FileInfo(file.FilePath);
@@ -287,7 +292,8 @@ public static partial class ProductYieldService
             throw new InvalidDataException("含多个晶圆的文件不能整体指定为一个晶圆，请清空晶圆覆盖值并配置 Wafer 列。");
         var classifier = new HBinClassifier(config);
         // Prepare a file transaction first: failed/changed files must not contribute a partial population.
-        var readings = new List<(DeviceKey Key, Observation Observation)>(data.Records.Count);
+        devices.BeginFile();
+        int readingCount = 0, missingIdentity = 0;
         for (int r = 0; r < data.Records.Count; r++)
         {
             if ((r & 1023) == 0) token.ThrowIfCancellationRequested();
@@ -300,19 +306,15 @@ public static partial class ProductYieldService
             string hbin = record.HBin.Trim(), sbin = record.SBin.Trim();
             DateTime? time = file.UseStdfTestTime && file.TestTime == file.DetectedStdfTestTime
                 ? record.StdfTestTime ?? data.StdfMetadata?.TimeForWafer(record.WaferId) ?? file.TestTime : file.TestTime;
-            readings.Add((new(stage.Kind, file.Lot.Trim(), wafer, identity), new(known, hbin, sbin, classifier.Classify(hbin), time)));
+            devices.Add(new(stage.Kind, file.Lot.Trim(), wafer, identity), new(known, hbin, sbin, classifier.Classify(hbin), time));
+            readingCount++; if (!known) missingIdentity++;
         }
         info.Refresh();
         if (!info.Exists || info.Length != length || info.LastWriteTimeUtc != modified) throw new IOException("文件在计算期间被修改，请重新计算。");
         token.ThrowIfCancellationRequested();
-        sources.Add(file, stage, readings);
-        foreach (var reading in readings)
-        {
-            if (!devices.TryGetValue(reading.Key, out var stages)) devices[reading.Key] = stages = new(StringComparer.Ordinal);
-            if (product.RetestMode == RetestMode.First) stages.TryAdd(stage.Id, reading.Observation);
-            else stages[stage.Id] = reading.Observation;
-        }
-        state.Length = length; state.LastWriteUtc = modified; state.Records = readings.Count;
-        state.MissingIdentity = readings.Count(r => !r.Observation.KnownIdentity);
+        sources.Add(file, stage, devices.FileReadings());
+        devices.CommitFile(stage.Id, product.RetestMode == RetestMode.First);
+        state.Length = length; state.LastWriteUtc = modified; state.Records = readingCount;
+        state.MissingIdentity = missingIdentity;
     }
 }

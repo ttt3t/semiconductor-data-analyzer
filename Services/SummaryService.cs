@@ -5,16 +5,16 @@ namespace SemiconductorCsvAnalyzer.Services;
 
 public static class SummaryService
 {
-    public static List<TestItemSummary> Build(IReadOnlyList<TestItemData> items, IReadOnlyList<string> sites,
+    public static SummaryRows Build(IReadOnlyList<TestItemData> items, IReadOnlyList<string> sites,
         bool combineSites, AnalyzerConfig config)
         => Build(items, sites, Array.Empty<string>(), combineSites, true, config);
 
-    public static List<TestItemSummary> Build(IReadOnlyList<TestItemData> items, IReadOnlyList<string> sites,
+    public static SummaryRows Build(IReadOnlyList<TestItemData> items, IReadOnlyList<string> sites,
         IReadOnlyList<string> wafers, bool combineSites, bool combineWafers, AnalyzerConfig config)
     {
         AnalysisOperation.CheckCancellation();
         int itemCount = items.Count;
-        if (itemCount == 0) return new List<TestItemSummary>();
+        if (itemCount == 0) return new SummaryRows();
         string format = $"F{config.DecimalPlaces}";
 
         if (combineSites && combineWafers)
@@ -22,42 +22,41 @@ public static class SummaryService
             if (itemCount == 1)
             {
                 var single = items[0];
-                return new List<TestItemSummary>(1)
-                {
-                    Create(single, TestItemSummary.CombinedSite, null, single.Values, single.Errors.Count, config, format)
-                };
+                var singleResult = new SummaryRows(1);
+                singleResult[0] = Create(single, TestItemSummary.CombinedSite, null, single.Values, single.Errors.Count, config, format);
+                return singleResult;
             }
-            var combinedResults = new TestItemSummary[itemCount];
-            Parallel.For(0, itemCount, new ParallelOptions { CancellationToken = AnalysisOperation.Token }, i =>
+            var combinedResults = new SummaryRows(itemCount);
+            Parallel.For(0, itemCount, new ParallelOptions { CancellationToken = AnalysisOperation.Token, MaxDegreeOfParallelism = 2 }, i =>
             {
                 var item = items[i];
                 combinedResults[i] = Create(item, TestItemSummary.CombinedSite, null, item.Values, item.Errors.Count, config, format);
             });
-            return new List<TestItemSummary>(combinedResults);
+            return combinedResults;
         }
 
         string?[] waferGroups = combineWafers ? new string?[] { null } : wafers.Select(w => (string?)w).ToArray();
         string[] siteGroups = combineSites ? new[] { TestItemSummary.CombinedSite } : sites as string[] ?? sites.ToArray();
         int groupsPerItem = waferGroups.Length * siteGroups.Length;
-        if (groupsPerItem == 0) return new List<TestItemSummary>();
+        if (groupsPerItem == 0) return new SummaryRows();
 
-        var expandedResults = new TestItemSummary[itemCount * groupsPerItem];
+        var expandedResults = new SummaryRows(checked(itemCount * groupsPerItem));
 
         void BuildItem(int itemIndex)
         {
             AnalysisOperation.CheckCancellation();
             var item = items[itemIndex];
             var values = item.Values;
-            var groups = new Dictionary<(string? Wafer, string Site), List<int>>();
+            var groups = new Dictionary<(string? Wafer, string Site), PagedVector<int>>();
             var errors = new Dictionary<(string? Wafer, string Site), int>();
-            for (int i = 0; i < values.Count; i++)
+            int i = 0;
+            foreach (var sample in values.ReadScopedNumbers())
             {
                 if ((i & 1023) == 0) AnalysisOperation.CheckCancellation();
-                var record = values.GetRecordAt(i);
-                var key = (combineWafers ? null : record.WaferId,
-                    combineSites ? TestItemSummary.CombinedSite : SiteKey(record.Site));
+                var key = (combineWafers ? null : sample.Wafer,
+                    combineSites ? TestItemSummary.CombinedSite : SiteKey(sample.Site));
                 if (!groups.TryGetValue(key, out var indices)) groups[key] = indices = new();
-                indices.Add(i);
+                indices.Add(i++);
             }
             foreach (var error in item.Errors)
             {
@@ -72,15 +71,15 @@ public static class SummaryService
                 {
                     var key = (wafer, site);
                     expandedResults[offset++] = Create(item, site, wafer, new IndexedTestValues(values,
-                        groups.TryGetValue(key, out var indices) ? indices : Array.Empty<int>()),
+                        groups.TryGetValue(key, out var indices) ? (IReadOnlyList<int>)indices : Array.Empty<int>()),
                         errors.GetValueOrDefault(key), config, format);
                 }
         }
 
         if (itemCount == 1) BuildItem(0);
-        else Parallel.For(0, itemCount, new ParallelOptions { CancellationToken = AnalysisOperation.Token }, BuildItem);
+        else Parallel.For(0, itemCount, new ParallelOptions { CancellationToken = AnalysisOperation.Token, MaxDegreeOfParallelism = 2 }, BuildItem);
 
-        return new List<TestItemSummary>(expandedResults);
+        return expandedResults;
     }
 
     private static string SiteKey(string site) => string.IsNullOrWhiteSpace(site) ? "(空)" : site;
@@ -88,11 +87,17 @@ public static class SummaryService
     private static TestItemSummary Create(TestItemData item, string site, string? wafer, IReadOnlyList<TestValue> values, int errors,
         AnalyzerConfig config, string format)
     {
+        var cache = item.Values.MetricStore;
+        string? cacheKey = cache == null ? null : System.Text.Json.JsonSerializer.Serialize(new { Version = DiskStorage.FormatVersion,
+            Scope = item.Values.MetricScope, item.Id, Site = site, Wafer = wafer, item.LowLimit, item.HighLimit, config.RemoveOutliers,
+            config.OutlierSigma, item.DisplayFactor, item.DisplayUnit, Format = format, Errors = errors });
+        if (cacheKey != null && cache!.ReadMetric(cacheKey) is string cached)
+        { var saved = System.Text.Json.JsonSerializer.Deserialize<TestItemSummary>(cached, DiskStorage.JsonOptions)!; saved.Data = item; return saved; }
         var (stats, robust, median) = StatisticsService.CalculateSummaryMetrics(
             values, item.LowLimit, item.HighLimit, config.RemoveOutliers, config.OutlierSigma);
         long.TryParse(item.TestNumber, out long testNumber);
         double factor = item.DisplayFactor;
-        return new TestItemSummary
+        var result = new TestItemSummary
         {
             Data = item, Site = site, Wafer = wafer ?? TestItemSummary.CombinedWafer,
             IsWaferCombined = wafer == null, TestNumberValue = testNumber,
@@ -106,5 +111,7 @@ public static class SummaryService
             Mean = stats.Mean * factor, Median = median * factor, Sigma = stats.StdDev * factor,
             RobustMean = robust.Mean * factor, RobustSigma = robust.Sigma * factor, Cpk = stats.Cpk, Cp = stats.Cp, InSpecPercent = stats.InSpecPercent
         };
+        if (cacheKey != null) cache!.WriteMetric(cacheKey, System.Text.Json.JsonSerializer.Serialize(result, DiskStorage.JsonOptions));
+        return result;
     }
 }

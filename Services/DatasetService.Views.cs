@@ -5,22 +5,22 @@ namespace SemiconductorCsvAnalyzer.Services;
 public static partial class DatasetService
 {
     /// <summary>Share numeric storage and one row mapping across all selected columns.</summary>
-    internal static CsvParseResult CreateView(CsvParseResult source, List<CsvRecord> records)
+    internal static CsvParseResult CreateView(CsvParseResult source, RecordList records)
     {
-        var sourceRows = new Dictionary<string, int>(source.Records.Count, StringComparer.Ordinal);
-        for (int row = 0; row < source.Records.Count; row++)
+        records.Inherit(source.Records);
+        Dictionary<string, int>? sourceRows = null;
+        if (!source.Records.IsOnDisk)
         {
-            if ((row & 1023) == 0) AnalysisOperation.CheckCancellation();
-            sourceRows.Add(source.Records[row].Id, row);
+            sourceRows = new(source.Records.Count, StringComparer.Ordinal);
+            for (int i = 0; i < source.Records.Count; i++) sourceRows.Add(source.Records[i].Id, i);
         }
-        var rows = new int[records.Count];
-        var selected = new Dictionary<string, CsvRecord>(records.Count, StringComparer.Ordinal);
-        for (int row = 0; row < records.Count; row++)
+        var rows = new PagedVector<int>();
+        foreach (var record in records)
         {
             AnalysisOperation.CheckCancellation();
-            rows[row] = sourceRows[records[row].Id];
-            selected.Add(records[row].Id, records[row]);
+            rows.Add(sourceRows == null ? source.Records.FindId(record.Id) : sourceRows[record.Id]);
         }
+        rows.Seal();
         var items = new List<TestItemData>(source.Items.Count);
         foreach (var original in source.Items)
         {
@@ -28,8 +28,8 @@ public static partial class DatasetService
             var item = CloneItem(original);
             item.Values.InitializeView(original.Values, records, rows, item.Id);
             foreach (var error in original.Errors)
-                if (selected.TryGetValue(error.Id, out var record) && record.Measurements.ContainsKey(item.Id))
-                    item.Errors.Add(record);
+                if (records.FindId(error.Id) is int row && row >= 0 && records[row].Measurements.ContainsKey(item.Id))
+                    item.Errors.Add(records[row]);
             items.Add(item);
         }
         return new CsvParseResult

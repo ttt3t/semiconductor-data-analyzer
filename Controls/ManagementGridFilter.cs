@@ -1,4 +1,5 @@
 using System.Collections;
+using SemiconductorCsvAnalyzer.Services;
 using System.ComponentModel;
 using System.Globalization;
 using Expression = System.Linq.Expressions.Expression;
@@ -43,8 +44,9 @@ public sealed class ManagementGridFilter : IDisposable
     private readonly DispatcherTimer _timer;
     private readonly Dictionary<DataGridColumn, HeaderState> _states = new();
     private readonly Dictionary<(Type, string), Func<object, object?>> _getters = new();
-    private object[] _rows = Array.Empty<object>();
-    private ListCollectionView? _view;
+    private IEnumerable _rows = Array.Empty<object>();
+    private IDisposable? _snapshot;
+    private PagedSummaryView? _view;
     private ColumnValueFilterPopup? _popup;
     private bool _disposed;
 
@@ -65,14 +67,15 @@ public sealed class ManagementGridFilter : IDisposable
         grid.PreviewMouseLeftButtonDown += HeaderMouseDown;
     }
 
-    public void SetItems(IEnumerable rows)
+    public void SetItems<T>(IEnumerable<T> rows)
     {
         if (_disposed) return;
         ClosePopup(); _timer.Stop();
         var sort = _view?.SortDescriptions.ToArray() ?? Array.Empty<SortDescription>();
         if (_view != null) _view.Filter = null;
-        _rows = rows.Cast<object>().ToArray();
-        _view = new ListCollectionView(_rows);
+        _view?.ReleaseIndex(); _snapshot?.Dispose();
+        var snapshot = new PagedObjectRows<T>(rows); _snapshot = snapshot; _rows = snapshot;
+        _view = new PagedSummaryView(snapshot);
         using (_view.DeferRefresh())
         {
             _view.Filter = Matches;
@@ -138,7 +141,7 @@ public sealed class ManagementGridFilter : IDisposable
     {
         ClosePopup();
         var popup = new ColumnValueFilterPopup(column.Header?.ToString() ?? state.Key,
-            _rows.Select(row => CellText(row, state)), state.Selected, selected =>
+            _rows.Cast<object>().Select(row => CellText(row, state)), state.Selected, selected =>
             { state.Selected = selected; state.Notify(); Schedule(); }) { PlacementTarget = target };
         popup.Closed += (_, _) => { if (ReferenceEquals(_popup, popup)) _popup = null; };
         _popup = popup; popup.IsOpen = true;
@@ -150,7 +153,7 @@ public sealed class ManagementGridFilter : IDisposable
         _disposed = true; _timer.Stop(); _timer.Tick -= Tick; ClosePopup();
         _grid.PreviewMouseRightButtonUp -= HeaderRightClick; _grid.PreviewMouseLeftButtonDown -= HeaderMouseDown;
         if (_view != null) _view.Filter = null;
-        _grid.ItemsSource = null; _view = null; _rows = Array.Empty<object>(); _getters.Clear();
+        _grid.ItemsSource = null; _view?.ReleaseIndex(); _view = null; _snapshot?.Dispose(); _snapshot = null; _rows = Array.Empty<object>(); _getters.Clear();
         foreach (var pair in _states) { pair.Value.Changed = null; SetState(pair.Key, null); }
         _states.Clear();
     }

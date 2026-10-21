@@ -9,13 +9,15 @@ public static class SerialNumberService
     {
         if (data.Records.Count == 0) return false;
         int empty = 0, duplicates = 0;
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var record in data.Records)
+        if (data.Records.Store is { } disk) (empty, duplicates) = disk.SerialIssues();
+        else
         {
-            AnalysisOperation.CheckCancellation();
-            string serial = record.SerialNumber.Trim();
-            if (serial.Length == 0) empty++;
-            else if (!seen.Add(serial)) duplicates++;
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var record in data.Records)
+            {
+                AnalysisOperation.CheckCancellation(); string serial = record.SerialNumber.Trim();
+                if (serial.Length == 0) empty++; else if (!seen.Add(serial)) duplicates++;
+            }
         }
         if (!serialColumnMissing && empty == 0 && duplicates == 0) return false;
 
@@ -26,6 +28,7 @@ public static class SerialNumberService
             record.OriginalSerialNumber ??= record.SerialNumber;
             record.SerialNumber = (i + 1).ToString(CultureInfo.InvariantCulture);
         }
+        data.Records.Flush();
         // Rebuild only lightweight identity rows, not the numeric columns or disk-backed raw snapshot.
         if (!data.IsYieldProjection) data.Devices = DatasetService.BuildDevices(data.Records);
         var reasons = new List<string>();

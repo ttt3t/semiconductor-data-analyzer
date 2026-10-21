@@ -98,10 +98,11 @@ public partial class ProductManagementWindow : Window
                 $"已覆盖 {snapshot.Files.Count} 条登记数据。";
         }
         else TxtNotice.Text = "";
+        var states = snapshot?.Files.ToDictionary(f => f.FileId, StringComparer.Ordinal);
         var files = product?.Files.Where(f => filter.Length == 0 || f.Lot.Contains(filter, StringComparison.OrdinalIgnoreCase) || f.WaferOverride.Contains(filter, StringComparison.OrdinalIgnoreCase) || f.FileName.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToArray() ?? Array.Empty<ManagedDataFile>();
         _fileFilters?.SetItems(files.Select(file =>
         {
-            var state = snapshot?.Files.FirstOrDefault(f => f.FileId == file.Id);
+            var state = states?.GetValueOrDefault(file.Id);
             string status;
             try
             {
@@ -115,7 +116,7 @@ public partial class ProductManagementWindow : Window
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { status = ex.Message; }
             return new FileRow(file, product!.Flow.FirstOrDefault(s => s.Id == file.StageId)?.Label ?? (file.StageId.StartsWith("COMBINED:") ? file.SpecifiedKind + " 综合良率" : "步骤不存在"), status, state?.Records ?? 0);
-        }).ToList());
+        }));
         RefreshTrend(); RefreshCategories();
     }
     private void RefreshTrend()
@@ -319,7 +320,7 @@ public partial class ProductManagementWindow : Window
         if (_product?.Id != id || _product.Snapshot == null || _closed) return;
         var product = ProductCatalogStore.Clone(_product); string filter = TxtFilter.Text.Trim(); var period = Period;
         var cancellation = new CancellationTokenSource(); _calculation = cancellation; long version = ++_version; SetBusy(true);
-        try { await ManagementReportService.RunStaAsync(() => ManagementReportService.SaveWorkbook(file.FileName, product, filter, cancellation.Token, period)); if (!_closed && version == _version) TxtStatus.Text = "管理报告已导出：" + file.FileName; }
+        try { await ExportWorker.SaveManagementAsync(file.FileName, product, filter, period, cancellation.Token); if (!_closed && version == _version) TxtStatus.Text = "管理报告已导出：" + file.FileName; }
         catch (OperationCanceledException) { }
         catch (Exception ex) { if (!_closed && version == _version) TxtStatus.Text = "导出失败：" + ex.Message; }
         finally { if (ReferenceEquals(_calculation, cancellation)) _calculation = null; cancellation.Dispose(); if (!_closed && version == _version) SetBusy(false); }

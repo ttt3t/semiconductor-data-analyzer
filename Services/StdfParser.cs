@@ -44,19 +44,9 @@ public static class StdfParser
             stamp.Validate(file);
             store?.Seal();
             if (pass.Records.Count == 0) throw new InvalidDataException("STDF 不包含完成的芯片记录（PRR）。");
-            var orderedRecords = new List<CsvRecord>(pass.Records.Count);
-            bool inOrder = true;
-            for (int i = 1; i < pass.Records.Count; i++)
-                if (pass.Records[i].Order < pass.Records[i - 1].Order) { inOrder = false; break; }
-            if (inOrder)
-            {
-                for (int i = 0; i < pass.Records.Count; i++) orderedRecords.Add(pass.Records[i].Record);
-            }
-            else
-            {
-                pass.Records.Sort((a, b) => a.Order.CompareTo(b.Order));
-                for (int i = 0; i < pass.Records.Count; i++) orderedRecords.Add(pass.Records[i].Record);
-            }
+            var orderedRecords = pass.Records.IsOnDisk
+                ? pass.Records.Store!.Query("SELECT slot FROM records ORDER BY ord,slot").ToRecordList()
+                : pass.Records.OrderBy(r => r.StorageOrder).ToList();
             var result = projection != null ? projection.Complete(orderedRecords) : DatasetService.Build(catalog.Items, orderedRecords);
             MeasurementDisplay.Configure(result.Items);
             result.StdfMetadata = catalog.Metadata.Complete();
@@ -290,13 +280,14 @@ public static class StdfParser
         private int _waferIndex;
         private bool _mir, _mrr;
         private bool Discovering => _store == null && _projection == null;
-        public readonly List<(long Order, CsvRecord Record)> Records = new();
+        public readonly RecordList Records;
 
         public Pass(Catalog catalog, AnalyzerConfig config, string fileName, RawMeasurementStore? store, CancellationToken token,
             YieldReadProjection? projection = null)
         {
             _catalog = catalog; _config = config; _fileName = fileName; _store = store; _token = token;
             _projection = projection;
+            Records = new RecordList(0, disk: store != null);
             if (store != null) _schema = new MeasurementSchema(catalog.Items.Select(i => i.Id));
         }
 
@@ -455,7 +446,7 @@ public static class StdfParser
             };
             if (_projection != null) _projection.CaptureStdf(record, part.States, part.Numbers, part.InvalidTexts);
             else record.Measurements = _store!.AppendStdf(_schema!, part.States, part.Numbers, part.InvalidTexts, NotApplicableValue);
-            Records.Add((part.Order, record));
+            record.StorageOrder = part.Order; Records.Add(record);
             ReleasePart(part);
         }
 

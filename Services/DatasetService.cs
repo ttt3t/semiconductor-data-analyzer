@@ -18,6 +18,7 @@ public static partial class DatasetService
         AnalysisOperation.CheckCancellation();
         if (mode == RetestMode.All) return data;
         var records = SelectRetestRecords(data.Records, mode);
+        if (!ReferenceEquals(records, data.Records)) records.ScopeKey = data.Records.ScopeKey + ":retest:" + mode;
         if (ReferenceEquals(records, data.Records)) return data;
         var result = CreateView(data, records);
         result.SourceDescription = data.SourceDescription;
@@ -37,8 +38,9 @@ public static partial class DatasetService
     }
 
     // Export needs raw record selection only, without rebuilding every numeric column.
-    public static List<CsvRecord> SelectRetestRecords(List<CsvRecord> source, RetestMode mode)
+    public static RecordList SelectRetestRecords(RecordList source, RetestMode mode)
     {
+        if (source.IsOnDisk && mode != RetestMode.All) return SelectDiskRetests(source, mode);
         if (mode == RetestMode.All) return source;
         if (mode != RetestMode.First && mode != RetestMode.Last && mode != RetestMode.OnlyRetests)
             throw new ArgumentOutOfRangeException(nameof(mode));
@@ -51,7 +53,7 @@ public static partial class DatasetService
             group.Add(row);
         }
         if (groups.Count == source.Count)
-            return mode == RetestMode.OnlyRetests ? new List<CsvRecord>() : source;
+            return mode == RetestMode.OnlyRetests ? new RecordList() : source;
         // Resolve one chip at a time. Only compact presence masks survive the group;
         // never retain a string HashSet for every selected record.
         var selected = new MeasurementCollection?[source.Count];
@@ -77,7 +79,7 @@ public static partial class DatasetService
                 if (measurements.Count > 0) selected[row] = measurements;
             }
         }
-        var records = new List<CsvRecord>();
+        var records = new RecordList();
         for (int row = 0; row < source.Count; row++)
         {
             if ((row & 1023) == 0) AnalysisOperation.CheckCancellation();
@@ -93,13 +95,33 @@ public static partial class DatasetService
         return records;
     }
 
+    private static RecordList SelectDiskRetests(RecordList source, RetestMode mode)
+    {
+        if (mode is not (RetestMode.First or RetestMode.Last or RetestMode.OnlyRetests)) throw new ArgumentOutOfRangeException(nameof(mode));
+        var selected = new RecordList(0, disk: true);
+        using var order = source.Store!.GroupRows(mode == RetestMode.Last);
+        string? previous = null; var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var group in order)
+        {
+            AnalysisOperation.CheckCancellation(); var record = source[group.Slot];
+            string chip = RecordList.RecordStore.Key(ChipKey(record));
+            if (chip != previous) { seen.Clear(); previous = chip; }
+            var measurements = group.Count == 1 && mode != RetestMode.OnlyRetests ? record.Measurements : record.Measurements.SelectKeys(key =>
+            { bool first = seen.Add(key); return mode == RetestMode.OnlyRetests ? !first : first; });
+            if (group.Count == 1 && mode == RetestMode.OnlyRetests || group.Count > 1 && measurements.Count == 0) continue;
+            var copy = CloneRecord(record); copy.Measurements = measurements; copy.StorageOrder = group.Slot; selected.Add(copy);
+        }
+        var result = selected.Store!.Query("SELECT slot FROM records ORDER BY ord,slot").ToRecordList();
+        result.Inherit(source); return result;
+    }
+
     public static bool TryValue(string text, out double value) =>
         TryValue(text.AsSpan(), out value);
 
     public static bool TryValue(ReadOnlySpan<char> text, out double value) =>
         double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value) && double.IsFinite(value);
 
-    public static CsvParseResult Build(List<TestItemData> items, List<CsvRecord> records)
+    public static CsvParseResult Build(List<TestItemData> items, RecordList records)
     {
         AnalysisOperation.CheckCancellation();
         var byId = new Dictionary<string, TestItemData>(items.Count, StringComparer.Ordinal);
@@ -127,8 +149,15 @@ public static partial class DatasetService
         }
         catch { rawStore?.Dispose(); throw; }
 
-        foreach (var item in items) { item.Values.Initialize(records, item.Id, item.IsStdfMeasurement); item.Errors.Clear(); }
-        var devices = new Dictionary<(string Wafer, int? X, int? Y, string Record), DeviceInfo>(records.Count);
+        DiskColumnStore? columns = records.IsOnDisk ? new DiskColumnStore(records.Count, items.Select(i => i.IsStdfMeasurement).ToArray()) : null;
+        if (columns != null) records.Resources.Add(columns);
+        for (int i = 0; i < items.Count; i++)
+        {
+            var item = items[i]; item.Errors.Clear();
+            if (columns == null) item.Values.Initialize(records, item.Id, item.IsStdfMeasurement);
+            else item.Values.InitializeDisk(records, item.Id, columns, i);
+        }
+        var devices = records is RecordList { IsOnDisk: true } ? null : new Dictionary<(string Wafer, int? X, int? Y, string Record), DeviceInfo>(records.Count);
         TestItemData[]? defaultItemsArray = null;
         MeasurementSchema? lastSchema = null;
         TestItemData[]? lastSchemaItems = null;
@@ -203,6 +232,8 @@ public static partial class DatasetService
                     }
                 }
 
+                record.HasNonblankMeasurements = !rawBlank;
+                if (devices == null) continue;
                 // A completely blank CSV row is an error, not a physical device.
                 bool blank = rawBlank && !record.X.HasValue && !record.Y.HasValue &&
                     string.IsNullOrWhiteSpace(record.ChipSerialNumber) &&
@@ -224,8 +255,10 @@ public static partial class DatasetService
             if (rowBuffer != null) ArrayPool<byte>.Shared.Return(rowBuffer);
         }
 
+        columns?.Complete();
         foreach (var item in items) item.Values.Complete();
-        return new CsvParseResult { Items = items, Records = records, Devices = devices.Values.ToList() };
+        foreach (var item in items) records.Resources.UnionWith(item.Errors.Resources);
+        return new CsvParseResult { Items = items, Records = records, Devices = devices == null ? new DiskDeviceList(records) : devices.Values.ToList() };
     }
 
     public static CsvParseResult LoadSources(IReadOnlyList<CsvImportSource> sources, AnalyzerConfig config)
@@ -325,7 +358,7 @@ public static partial class DatasetService
             waferMap.Add(wafer, name);
         }
         // A subsequent serial normalization must never edit records held by the active dataset.
-        var records = existing.Records.Select(CloneRecord).ToList();
+        var records = existing.Records.Select(CloneRecord).ToRecordList();
         var schemas = new Dictionary<MeasurementSchema, MeasurementSchema>();
         MeasurementCollection Remap(MeasurementCollection raw)
         {
@@ -387,7 +420,7 @@ public static partial class DatasetService
                 if (source.WaferOverride is { Length: > 0 }) record.WaferId = source.WaferOverride;
                 if (source.ShowLotInWafer) record.WaferId = record.Lot + " / " + record.WaferId;
             }
-            data.Records = data.Records.ToList(); // Invalidate any previously materialized wafer-name cache.
+            data.Records = data.Records.ToRecordList(); // Invalidate any previously materialized wafer-name cache.
             data.Devices = BuildDevices(data.Records);
         }
         return data;
@@ -404,8 +437,9 @@ public static partial class DatasetService
         Measurements = record.Measurements
     };
 
-    internal static List<DeviceInfo> BuildDevices(IReadOnlyList<CsvRecord> records)
+    internal static IReadOnlyList<DeviceInfo> BuildDevices(IReadOnlyList<CsvRecord> records)
     {
+        if (records is RecordList { IsOnDisk: true } paged) return new DiskDeviceList(paged);
         var devices = new Dictionary<(string Wafer, int? X, int? Y, string Record), DeviceInfo>(records.Count);
         byte[]? rowBuffer = null;
         try

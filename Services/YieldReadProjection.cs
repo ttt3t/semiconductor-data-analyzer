@@ -51,7 +51,7 @@ internal sealed class YieldReadProjection
         }
     }
 
-    internal CsvParseResult Complete(List<CsvRecord> records) =>
+    internal CsvParseResult Complete(RecordList records) =>
         new() { Items = _items, Records = records, IsYieldProjection = true };
 
     internal static CsvParseResult PrepareIdentity(CsvParseResult data, AnalyzerConfig config)

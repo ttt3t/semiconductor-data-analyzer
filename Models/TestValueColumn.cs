@@ -6,42 +6,82 @@ namespace SemiconductorCsvAnalyzer.Models;
 /// <summary>Column values share the record table; sparse columns retain source row indexes.</summary>
 public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
 {
+    private DiskColumnStore? _disk;
+    private int _diskItem;
     private double[] _numbers = Array.Empty<double>();
     private float[]? _singleNumbers;
     private IReadOnlyList<CsvRecord> _records = Array.Empty<CsvRecord>();
-    private int[]? _validRows;
+    private IReadOnlyList<int>? _validRows;
     private bool _compact, _completed;
     private string? _testId;
     private int _count;
     private TestValueColumn? _source;
-    private int[]? _sourceRows;
+    private IReadOnlyList<int>? _sourceRows;
     private bool _sharedStorage;
+    private bool _diskProjection;
     public int Count => _count;
     public bool IsReadOnly => false;
+    internal RecordList.RecordStore? MetricStore => _source?.MetricStore ?? (_disk != null && _records is RecordList records ? records.Store : null);
+    internal string MetricScope => _records is RecordList records ? records.ScopeKey : "";
+    internal IDisposable AcquireLease() => _records is RecordList records ? new DatasetLease(records) : new DatasetLease(_records);
+    internal sealed record Snapshot(DiskColumnStore.Snapshot Data, int Count, bool Projection,
+        PagedVector<int>.Snapshot? SourceRows, PagedVector<int>.Snapshot? ValidRows);
+    internal Snapshot Capture(Dictionary<object, PagedVector<int>.Snapshot> maps, List<IDisposable> temporary)
+    {
+        var root = this;
+        while (root._source != null) root = root._source;
+        if (root._disk == null) throw new InvalidOperationException("数据列已编辑，请重新打开后再使用独立导出。");
+        PagedVector<int>.Snapshot? rows = null;
+        if (_source != null || _diskProjection)
+        {
+            object key = _sourceRows!;
+            if (!maps.TryGetValue(key, out rows))
+            {
+                var vector = new PagedVector<int>(); temporary.Add(vector);
+                for (int i = 0; i < _records.Count; i++)
+                { if ((i & 4095) == 0) AnalysisOperation.CheckCancellation(); vector.Add(RootRow(i)); }
+                rows = vector.Capture(); maps.Add(key, rows);
+            }
+        }
+        var valid = _validRows == null ? null : _validRows is PagedVector<int> paged ? paged.Capture() : PagedVector<int>.From(_validRows).Capture();
+        return new(root._disk.Capture(root._diskItem), Count, _source != null || _diskProjection, rows, valid);
+    }
+    private int RootRow(int row) => _source != null ? _source.RootRow(_sourceRows![row]) : _diskProjection ? _sourceRows![row] : row;
+    internal void Open(Snapshot snapshot, RecordList records, string testId, DiskColumnStore store, int item)
+    {
+        Clear(); _disk = store; _diskItem = item; _records = records; _testId = testId; _count = snapshot.Count;
+        _completed = true; _diskProjection = snapshot.Projection;
+        _sourceRows = snapshot.SourceRows == null ? null : PagedVector<int>.Open(snapshot.SourceRows);
+        _validRows = snapshot.ValidRows == null ? null : PagedVector<int>.Open(snapshot.ValidRows);
+        records.Resources.Add(store);
+    }
     internal double GetSourceRowValue(int row)
     {
         if ((uint)row >= (uint)_records.Count) throw new ArgumentOutOfRangeException(nameof(row));
-        if (_source != null && _validRows != null && Array.BinarySearch(_validRows, row) < 0)
+        if ((_source != null || _diskProjection) && _validRows != null && Search(_validRows, row) < 0)
             return double.NaN;
         return SourceNumber(row);
     }
     private double SourceNumber(int row)
     {
         if (_source != null) return _source.SourceNumber(_sourceRows![row]);
-        int offset = _compact ? Array.BinarySearch(_validRows!, row) : row;
+        if (_disk != null) return _disk.SourceValue(_diskItem, _diskProjection ? _sourceRows![row] : row);
+        int offset = _compact ? Search(_validRows!, row) : row;
         return offset < 0 ? double.NaN : Number(offset);
     }
     internal double GetValueAt(int index)
     {
         int row = Row(index);
-        return _source != null ? _source.SourceNumber(_sourceRows![row]) : Number(_compact ? index : row);
+        return _source != null ? _source.SourceNumber(_sourceRows![row]) : _diskProjection ? SourceNumber(row) : _disk != null ? _disk.Value(_diskItem, index) : Number(_compact ? index : row);
     }
+    internal string SiteAt(int index) => _records is RecordList records ? records.SiteAt(Row(index)) : GetRecordAt(index).Site;
+    internal string WaferAt(int index) => _records is RecordList records ? records.WaferAt(Row(index)) : GetRecordAt(index).WaferId;
     internal CsvRecord GetRecordAt(int index) => _records[Row(index)];
-    private double Number(int offset) => _singleNumbers is { } singles ? singles[offset] : _numbers[offset];
+    private double Number(int offset) => _disk != null ? _disk.Value(_diskItem, offset) : _singleNumbers is { } singles ? singles[offset] : _numbers[offset];
 
     internal bool TryGetContiguousValues(out ReadOnlySpan<double> values)
     {
-        if (_source == null && _singleNumbers == null && (_validRows == null || _compact))
+        if (_disk == null && _source == null && _singleNumbers == null && (_validRows == null || _compact))
         {
             values = _numbers.AsSpan(0, _count);
             return true;
@@ -58,7 +98,7 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
             values.CopyTo(destination);
             return;
         }
-        if (_source != null)
+        if (_source != null || _diskProjection)
         {
             for (int i = 0; i < _count; i++) destination[i] = GetValueAt(i);
             return;
@@ -69,9 +109,34 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
             destination[i] = Number(consecutive ? i : rows![i]);
     }
 
+    internal void Own(DiskResource resource)
+    { if (_records is RecordList records) records.Resources.Add(resource); }
+    internal void InitializeDisk(IReadOnlyList<CsvRecord> records, string testId, DiskColumnStore store, int item)
+    {
+        Clear(); _records = records; _testId = testId; _disk = store; _diskItem = item;
+    }
+    internal IEnumerable<double> ReadNumbers()
+    {
+        if (_disk != null && _source == null && !_diskProjection) return _disk.Values(_diskItem);
+        return Enumerable.Range(0, Count).Select(GetValueAt);
+    }
+    internal IEnumerable<(double Value, string Site, string Wafer)> ReadScopedNumbers()
+    {
+        if (_disk != null && !_diskProjection && _records is RecordList records)
+        {
+            using var codes = records.ReadIdentityCodes().GetEnumerator(); int sourceRow = -1;
+            foreach (var entry in _disk.Entries(_diskItem))
+            {
+                while (sourceRow < entry.Row) { if (!codes.MoveNext()) throw new System.IO.InvalidDataException("身份索引与数值列不一致。"); sourceRow++; }
+                yield return (entry.Value, codes.Current.Site, codes.Current.Wafer);
+            }
+        }
+        else for (int i = 0; i < Count; i++) yield return (GetValueAt(i), SiteAt(i), WaferAt(i));
+    }
+    public bool IsDiskBacked => _disk != null || _source?.IsDiskBacked == true;
     internal void Initialize(IReadOnlyList<CsvRecord> records, string testId, bool preferSingle = false)
     {
-        _source = null; _sourceRows = null; _sharedStorage = false;
+        _source = null; _sourceRows = null; _sharedStorage = false; _disk = null;
         _records = records; _testId = testId;
         if (preferSingle)
         {
@@ -89,7 +154,7 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
         _compact = _completed = false;
     }
 
-    internal void InitializeView(TestValueColumn source, IReadOnlyList<CsvRecord> records, int[] sourceRows, string testId)
+    internal void InitializeView(TestValueColumn source, IReadOnlyList<CsvRecord> records, IReadOnlyList<int> sourceRows, string testId)
     {
         Clear();
         // Capture storage, not a mutable column object. Either side detaches on edits.
@@ -99,26 +164,25 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
         _records = records;
         _testId = testId;
         _completed = true;
-        List<int>? valid = null;
+        var valid = new PagedVector<int>();
         for (int row = 0; row < records.Count; row++)
         {
             if ((row & 1023) == 0) AnalysisOperation.CheckCancellation();
-            if (records[row].Measurements.ContainsKey(testId) && double.IsFinite(_source.GetSourceRowValue(sourceRows[row])))
-            {
-                _count++;
-                valid?.Add(row);
-            }
-            else if (valid == null)
-            {
-                valid = new List<int>(row);
-                for (int previous = 0; previous < row; previous++) valid.Add(previous);
-            }
+            if (records[row].Measurements.ContainsKey(testId) && double.IsFinite(_source.GetSourceRowValue(sourceRows[row]))) { _count++; valid.Add(row); }
         }
-        _validRows = valid?.ToArray();
+        valid.Seal();
+        if (_count == records.Count) valid.Dispose(); else _validRows = valid;
+    }
+    private static int Search(IReadOnlyList<int> rows, int value)
+    {
+        int lo = 0, hi = rows.Count;
+        while (lo < hi) { int mid = lo + (hi - lo) / 2; if (rows[mid] < value) lo = mid + 1; else hi = mid; }
+        return lo < rows.Count && rows[lo] == value ? lo : -1;
     }
     internal void SetRow(int row, double number)
     {
         if (_completed) throw new InvalidOperationException("The column is already complete.");
+        if (_disk != null) { _disk.Set(_diskItem, row, number); return; }
         if (!double.IsFinite(number)) throw new ArgumentOutOfRangeException(nameof(number));
         bool wasMissing = double.IsNaN(Number(row));
         if (_singleNumbers is { } singles)
@@ -142,9 +206,11 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
     {
         if (_completed) return;
         _completed = true;
+        if (_disk != null) { _count = _disk.Count(_diskItem); return; }
         int sourceCount = _records.Count;
         if (_count == sourceCount) return;
-        _validRows = new int[_count];
+        var validRows = new int[_count];
+        _validRows = validRows;
         // Strictly below 60%: keep doubles when needed, but discard empty slots.
         _compact = (long)_count * 5 < (long)sourceCount * 3;
         var compactDoubles = _compact && _singleNumbers == null ? new double[_count] : null;
@@ -154,7 +220,7 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
         {
             double number = Number(row);
             if (!double.IsFinite(number)) continue;
-            _validRows[next] = row;
+            validRows[next] = row;
             if (compactDoubles != null) compactDoubles[next] = number;
             if (compactSingles != null) compactSingles[next] = (float)number;
             next++;
@@ -165,7 +231,7 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
     private int Row(int index)
     {
         if ((uint)index >= (uint)_count) throw new ArgumentOutOfRangeException(nameof(index));
-        return _validRows == null ? index : _validRows[index];
+        return _disk != null && !_diskProjection ? _disk.Row(_diskItem, index) : _validRows == null ? index : _validRows[index];
     }
     public TestValue this[int index]
     {
@@ -177,13 +243,13 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
     // uses Initialize/SetRow and never stores a record reference for each test cell.
     private void MakeEditable()
     {
-        if (!_sharedStorage && _source == null && _testId == null && _validRows == null && _singleNumbers == null && _records is List<CsvRecord>) return;
+        if (!_sharedStorage && _source == null && _testId == null && _validRows == null && _singleNumbers == null && _disk == null && _records is List<CsvRecord>) return;
         var numbers = new double[_count];
         var records = new List<CsvRecord>(_count);
         for (int i = 0; i < _count; i++) { int row = Row(i); numbers[i] = GetValueAt(i); records.Add(_records[row]); }
         _numbers = numbers; _singleNumbers = null; _records = records; _validRows = null; _testId = null;
-        _source = null; _sourceRows = null; _sharedStorage = false;
-        _compact = _completed = false;
+        _source = null; _sourceRows = null; _sharedStorage = false; _disk = null;
+        _compact = _completed = _diskProjection = false;
     }
     public void Add(TestValue value)
     {
@@ -194,7 +260,7 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
     }
     public void AddRange(IEnumerable<TestValue> values) { foreach (var value in values) Add(value); }
     public void Clear()
-    { _numbers = Array.Empty<double>(); _singleNumbers = null; _records = Array.Empty<CsvRecord>(); _validRows = null; _testId = null; _count = 0; _compact = _completed = false; _source = null; _sourceRows = null; _sharedStorage = false; }
+    { _numbers = Array.Empty<double>(); _singleNumbers = null; _records = Array.Empty<CsvRecord>(); _validRows = null; _testId = null; _count = 0; _compact = _completed = _diskProjection = false; _source = null; _sourceRows = null; _sharedStorage = false; _disk = null; }
     public int IndexOf(TestValue value)
     { for (int i = 0; i < Count; i++) if (this[i].Equals(value)) return i; return -1; }
     public bool Contains(TestValue value) => IndexOf(value) >= 0;
@@ -226,8 +292,10 @@ public sealed class IndexedTestValues : IReadOnlyList<TestValue>
     public IndexedTestValues(IReadOnlyList<TestValue> source, IReadOnlyList<int> indices)
     { _source = source; _indices = indices; }
     public int Count => _indices.Count;
+    internal IDisposable? AcquireLease() => _source is TestValueColumn col ? col.AcquireLease() : _source is IndexedTestValues view ? view.AcquireLease() : null;
     public TestValue this[int index] => _source[_indices[index]];
     internal double GetValueAt(int index) => _source is TestValueColumn col ? col.GetValueAt(_indices[index]) : _source[_indices[index]].Value;
+    internal string SiteAt(int index) => _source is TestValueColumn c ? c.SiteAt(_indices[index]) : GetRecordAt(index).Site;
     internal CsvRecord GetRecordAt(int index) => _source is TestValueColumn col ? col.GetRecordAt(_indices[index]) : _source[_indices[index]].Record;
 
     internal void CopyValuesTo(Span<double> destination)
@@ -250,7 +318,7 @@ public sealed class IndexedTestValues : IReadOnlyList<TestValue>
 
     public static IndexedTestValues ForScope(IReadOnlyList<TestValue> source, string? site, string? wafer)
     {
-        var indices = new List<int>();
+        var indices = new PagedVector<int>();
         if (source is TestValueColumn col)
         {
             for (int i = 0; i < col.Count; i++)
