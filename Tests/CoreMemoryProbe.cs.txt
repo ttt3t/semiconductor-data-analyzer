@@ -370,12 +370,80 @@ static class Probe
         product.Snapshot.DefinitionSignature = "old-version";
         Check(!ProductYieldService.IsCurrent(product), "old snapshots require recomputation before file navigation");
     }
+    static void ScatterMarking()
+    {
+        Check(System.Runtime.CompilerServices.Unsafe.SizeOf<ScatterPoint>() == 24, "scatter identity index fits existing 24-byte point layout");
+        var records = new[]
+        {
+            new CsvRecord { Id = "a", Lot = "L1", WaferId = "W1", X = 1, Y = 2, Site = "2", SerialNumber = "2" },
+            new CsvRecord { Id = "b", Lot = "L1", WaferId = "W1", X = 3, Y = 2, Site = "1", SerialNumber = "1" },
+            new CsvRecord { Id = "c", Lot = "L1", WaferId = "W2", X = 1, Y = 2, Site = "1", SerialNumber = "3" },
+            new CsvRecord { Id = "d", Lot = "L2", WaferId = "W1", X = 1, Y = 2, Site = "2", SerialNumber = "4" },
+            new CsvRecord { Id = "retest", Lot = "L1", WaferId = "W1", X = 1, Y = 2, Site = "3", SerialNumber = "5" }
+        };
+        var values = records.Select((r, i) => new TestValue(r, i == 1 ? double.NaN : i + 10)).ToArray();
+        var marks = new ScatterChipMarks();
+        var first = ScatterSeries.Build(values, 0, 11, trackChips: true);
+        Check(!marks.AddRectangle(first, double.NaN, 5, 0, 20), "nonfinite selection rejected");
+        Check(!marks.AddRectangle(ScatterSeries.Build(values, null, null), 1, 5, 0, 20), "noninteractive series does not retain chip identities");
+        Check(marks.AddRectangle(first, 1, 1, 10, 10) && marks.Count == 1, "inclusive rectangle selects original physical chip");
+        Check(marks.CreateMask(first).SequenceEqual(new[] { true, false, false, true }), "retest is marked while other wafer/lot coordinates stay separate");
+        Check(!marks.AddRectangle(first, 1, 1, 10, 10) && marks.Count == 1, "repeated marking is idempotent");
+        Check(!marks.AddRectangle(first, 2, 2, -100, 100), "NaN gap retains its serial index without selecting adjacent chip");
+        Check(!marks.AddRectangle(first, 1.01, 1.99, 0, 20), "selection uses point centers and precise bounds");
+        var nextValues = records.Reverse().Select((r, i) => new TestValue(r, 100 + i)).ToArray();
+        foreach (var order in Enum.GetValues<ScatterOrder>())
+        {
+            var next = ScatterSeries.BuildSorted(nextValues, null, null, order, trackChips: true);
+            var mask = marks.CreateMask(next);
+            Check(Enumerable.Range(0, mask.Length).All(i => mask[i] == (next.RecordAtPoint(i)!.Id is "a" or "retest")),
+                "chip marking follows different test values and " + order + " ordering");
+            Check(marks.CreateMask(next.Scale(1000)).SequenceEqual(mask), "unit scaling preserves marked identities " + order);
+        }
+        var filtered = ScatterSeries.Build(new[] { new TestValue(records[4], 999) }, null, null, trackChips: true);
+        Check(marks.CreateMask(filtered).Single(), "marks survive a filtered/retest-only series");
+        Check(marks.CreateMask(ScatterSeries.Empty).Length == 0 && marks.Count == 1, "temporary empty series preserves chip marks");
+        Check(marks.AddRectangle(first, 4, 3, 100, 0) && marks.Count == 3, "reverse rectangle accumulates across wafer and lot");
+        marks.Clear();
+        Check(marks.Count == 0 && marks.CreateMask(first).Length == 0, "clear releases membership mask requirement");
+
+        var ft = new[]
+        {
+            new CsvRecord { Id = "f1", IsFtIdentity = true, Lot = "F", RetestUuid = "chip", WaferId = "A", Site = "1" },
+            new CsvRecord { Id = "f2", IsFtIdentity = true, Lot = "F", RetestUuid = "chip", WaferId = "B", Site = "2" },
+            new CsvRecord { Id = "f3", IsFtIdentity = true, Lot = "G", RetestUuid = "chip" },
+            new CsvRecord { Id = "f4", IsFtIdentity = true, Lot = "F" },
+            new CsvRecord { Id = "f5", IsFtIdentity = true, Lot = "F" },
+            new CsvRecord { Id = "sn1", Lot = "S", WaferId = "W", OriginalSerialNumber = "source", SerialNumber = "1" },
+            new CsvRecord { Id = "sn2", Lot = "S", WaferId = "W", OriginalSerialNumber = "source", SerialNumber = "99" },
+            new CsvRecord { Id = "unknown1" }, new CsvRecord { Id = "unknown2" }
+        };
+        var ftSeries = ScatterSeries.Build(ft.Select(r => new TestValue(r, 0)).ToArray(), null, null, trackChips: true);
+        marks.AddRectangle(ftSeries, 1, 1, 0, 0);
+        Check(marks.CreateMask(ftSeries).SequenceEqual(new[] { true, true, false, false, false, false, false, false, false }),
+            "FT UUID crosses site/wafer while remaining isolated by lot");
+        marks.AddRectangle(ftSeries, 4, 4, 0, 0);
+        Check(marks.CreateMask(ftSeries)[3] && !marks.CreateMask(ftSeries)[4], "missing FT UUID uses unique record identity");
+        marks.AddRectangle(ftSeries, 6, 6, 0, 0);
+        Check(marks.CreateMask(ftSeries)[6], "CP without XY retains source serial across reassigned Run serials");
+        marks.AddRectangle(ftSeries, 8, 8, 0, 0);
+        Check(marks.CreateMask(ftSeries)[7] && !marks.CreateMask(ftSeries)[8], "missing CP identity does not merge unrelated records");
+        // Exercise the optimized column/view paths, rather than only materialized TestValue arrays.
+        var data = Fixture();
+        var columnSeries = ScatterSeries.BuildSorted(data.Items[0].Values, 0, 2, ScatterOrder.Site, trackChips: true);
+        marks.Clear(); marks.AddRectangle(columnSeries, 1, 1, -100, 100);
+        var sparse = ScatterSeries.Build(data.Items[1].Values, null, null, trackChips: true);
+        Check(marks.CreateMask(sparse).Single(), "marked CP identity crosses sparse numeric columns");
+        var indexed = new IndexedTestValues(data.Items[0].Values, new[] { 2, 3 });
+        Check(marks.CreateMask(ScatterSeries.Build(indexed, null, null, trackChips: true)).SequenceEqual(new[] { true, false }),
+            "indexed view resolves original row identity");
+    }
     static int Main(string[] args)
     {
         try
         {
             folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
-            Views(); SelectionMatrix(); Projections(); ProductYield(); YieldRowSources();
+            Views(); SelectionMatrix(); Projections(); ProductYield(); YieldRowSources(); ScatterMarking();
             Console.WriteLine($"ALL {checks} CORE MEMORY CHECKS PASSED"); return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }

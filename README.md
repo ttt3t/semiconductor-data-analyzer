@@ -1,6 +1,6 @@
 # Semiconductor Data Analyzer
 
-**CSV Analyzer V2.0.4 · GYF**
+**CSV Analyzer V2.0.5 · GYF**
 
 A Windows desktop application for semiconductor CSV / STDF test-data analysis, built with .NET 8 and WPF.
 
@@ -22,6 +22,10 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 
 只启动独立分析器可使用 `SemiconductorCsvAnalyzer.exe --analyzer`。详细口径见 [使用手册](Docs/UserGuide.md)。
 
+## V2.0.5 更新
+
+散点图支持长按右键 0.4 秒后拖出半透明选框，松开累计标记芯片。绿色标记跨测试项保留，Site / 晶圆分组交替使用深绿和浅绿；右上角可一键清空。左键继续平移，短按右键或双击重置视图。沿用原有位图绘制，拖动选框只刷新叠加层。标记仅用于当前分析窗口，不改变统计或源数据，加载新数据时清空。
+
 ## V2.0.4 更新
 
 当前源码还包含一轮稳定性整理：原文快照按使用者释放，减少强制 GC；导入、重算与导出支持取消，关闭时先安全停止；默认配置迁移至当前用户目录并采用临时文件替换和 `.bak` 备份。界面说明集中到内置使用手册，手册只保留阅读和目录导航。产品数据库位置及格式保持兼容。
@@ -32,7 +36,7 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 - **BIN Map**：图例单项勾选或点击列头全选 / 取消；未勾选以灰色显示，统计不变。仅 SBIN 1 / HBIN 1 使用绿色，其他 BIN 的 50 色配色避开灰色和绿色系，报告颜色一致。
 - **热力图与 Run**：自定义蓝 / 绿 / 红色标，多晶圆统一范围；Run 可按序列号或晶圆 + X/Y 定位。
 
-当前源码版本为 V2.0.4；已发布的运行包版本以 Releases 页面为准。详细操作和统计口径见 [使用手册](Docs/UserGuide.md)。
+当前源码版本为 V2.0.5；已发布的运行包版本以 Releases 页面为准。详细操作和统计口径见 [使用手册](Docs/UserGuide.md)。
 ## 功能
 
 - **CSV / STDF 导入**：首次即可多选文件，并选择晶圆关系、测项匹配及限值来源；设置中可按按钮手动识别 CSV 格式、预览 / 编辑并另存 INI，支持多行名称、重复表头和引号内换行，旧配置兼容。读取 STDF V4 的 PTR、MPR、FTR，支持大小端及 `.std.gz` / `.stdf.gz`；93k 模式优先使用 TSR 的完整测项名称。详见 [CSV 格式说明](Docs/CSVFormats.md)。
@@ -51,7 +55,7 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 
 ## 下载运行
 
-从 [GitHub Releases](https://github.com/ttt3t/semiconductor-data-analyzer/releases/latest) 下载 Windows x64 ZIP，解压后双击其中的 EXE。程序为自包含单文件版本，无需安装 .NET 或 Excel。CSV 导入前请在“设置”加载或调整布局配置；STDF 可直接打开。
+从 [GitHub Releases](https://github.com/ttt3t/semiconductor-data-analyzer/releases/latest) 下载 Windows x64 单 EXE。本次 V2.0.5 发布为依赖框架版本，需要先安装 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0)，再双击 EXE；不需要安装 Excel。旧版本的包类型请查看对应发布说明。CSV 导入前请在“设置”加载或调整布局配置；STDF 可直接打开。
 
 ## 开发与运行
 
@@ -116,3 +120,11 @@ STDF 支持范围以手册为准；不支持的版本或部分记录会明确报
 
 第三方依赖保留各自许可证；本项目的 MIT 许可证不替代其许可证。
 
+
+V2.0.5 的依赖框架单 EXE 可用以下命令生成（Linux 交叉编译时另加 `-p:EnableWindowsTargeting=true`）：
+
+```powershell
+dotnet publish SemiconductorCsvAnalyzer.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=false -p:DebugType=None -p:DebugSymbols=false -o artifacts/win-x64-framework-dependent
+```
+
+散点标记回归检查：Windows 上先编译 Release，再运行 `pwsh Tests/run-scatter-marking.ps1`，验证跨测项标记、分组颜色、清空、缩放坐标和选框叠加层不触发点图重绘。手势状态以模拟方式检查；实际鼠标操作可按上述使用说明复核。跨平台核心检查为 `bash Tests/run-core-memory.sh`。

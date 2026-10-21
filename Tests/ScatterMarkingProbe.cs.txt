@@ -1,0 +1,161 @@
+using System.IO;
+using System.Reflection;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Controls;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static string folder = "";
+    static void Check(bool condition, string message)
+    { if (!condition) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
+    static object? Field(object target, string name) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target);
+    static void Set(object target, string name, object value) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, value);
+    static object? Call(object target, string name, params object[] args) => target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(target, args);
+    static void Pump()
+    {
+        var frame = new DispatcherFrame();
+        Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => frame.Continue = false));
+        Dispatcher.PushFrame(frame);
+    }
+    static void Wait(Task task)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        while (!task.IsCompleted) { if (watch.Elapsed.TotalSeconds > 45) throw new TimeoutException(); Pump(); Thread.Sleep(5); }
+        task.GetAwaiter().GetResult(); Pump();
+    }
+    static void DetailReady(MainWindow main)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        do { Pump(); Thread.Sleep(5); if (watch.Elapsed.TotalSeconds > 15) throw new TimeoutException("Detail calculation"); }
+        while ((bool)Field(main, "_detailPending")!);
+        main.UpdateLayout(); Pump();
+    }
+    static Point At(ScatterPlotControl plot, double x, double y) => new((double)Call(plot, "MapX", x)!, (double)Call(plot, "MapY", y)!);
+    static void Begin(ScatterPlotControl plot, Point start, Point end)
+    {
+        Set(plot, "_rightStart", start); Set(plot, "_rightPosition", end); Call(plot, "BeginBoxSelection");
+    }
+    static void Mark(ScatterPlotControl plot, double x, double y)
+    {
+        Point p = At(plot, x, y);
+        Begin(plot, new Point(p.X - 4, p.Y - 4), new Point(p.X + 4, p.Y + 4));
+        Call(plot, "CompleteRightGesture", new Point(p.X + 4, p.Y + 4)); Pump();
+    }
+    static uint PointPixel(ScatterPlotControl plot, double x, double y)
+    {
+        var bitmap = (WriteableBitmap)Field(plot, "_pointBitmap")!;
+        var pixels = new uint[bitmap.PixelWidth * bitmap.PixelHeight];
+        bitmap.CopyPixels(pixels, bitmap.PixelWidth * 4, 0);
+        var p = At(plot, x, y);
+        int ix = (int)Math.Round((p.X - (double)Field(plot, "_left")!) * bitmap.PixelWidth / (double)Field(plot, "_plotW")!);
+        int iy = (int)Math.Round((p.Y - (double)Field(plot, "_top")!) * bitmap.PixelHeight / (double)Field(plot, "_plotH")!);
+        return pixels[iy * bitmap.PixelWidth + ix];
+    }
+    static void Save(ScatterPlotControl plot, string name)
+    {
+        plot.UpdateLayout(); Pump();
+        var bitmap = new RenderTargetBitmap((int)plot.ActualWidth, (int)plot.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(plot);
+        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var file = File.Create(Path.Combine(folder, name)); encoder.Save(file);
+    }
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            var app = new App(); app.InitializeComponent(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            var values = Enumerable.Range(1, 4).Select(i => new TestValue(new CsvRecord
+                { Id = "r" + i, SerialNumber = i.ToString(), Lot = "L", WaferId = i <= 2 ? "W1" : "W2", Site = i <= 2 ? "1" : "2", X = i, Y = 0 }, i)).ToArray();
+            var plot = new ScatterPlotControl { Width = 900, Height = 450 };
+            var series = ScatterSeries.BuildSorted(values, 0, 2.5, ScatterOrder.Site, trackChips: true);
+            plot.SetSeries(series, 0, 2.5, "V");
+            var window = new Window { Content = plot, SizeToContent = SizeToContent.WidthAndHeight }; window.Show(); Pump();
+            Save(plot, "before.png");
+            Check(!plot.UseBitmapCache && VisualTreeHelper.GetChildrenCount(plot) == 1, "original raster renderer and single overlay retained");
+            Check(((DispatcherTimer)Field(plot, "_selectionTimer")!).Interval.TotalMilliseconds == 400, "right-button hold threshold is 400 ms");
+            Check(PointPixel(plot, 1, 1) == 0xff1f5fa5 && PointPixel(plot, 3, 3) == 0xffdc3c3c, "normal grouped points stay blue and unmarked failures red");
+            var a = At(plot, .8, .8); var b = At(plot, 3.2, 3.2);
+            long renders = (long)Field(plot, "_renderCount")!;
+            var raster = Field(plot, "_pixelBuffer");
+            Begin(plot, a, b); Pump();
+            for (int i = 0; i < 30; i++)
+            {
+                Set(plot, "_rightPosition", new Point(b.X + i, b.Y));
+                ((FrameworkElement)Field(plot, "_overlayLayer")!).InvalidateVisual(); Pump();
+            }
+            Save(plot, "selection.png");
+            Check((long)Field(plot, "_renderCount")! == renders && ReferenceEquals(raster, Field(plot, "_pixelBuffer")), "30 rectangle updates do not rerender scatter or replace pixel buffer");
+            Check(plot.ChipMarkCount == 0, "drag rectangle does not commit marks before right-button release");
+            Call(plot, "CancelRightGesture"); Pump(); Check(plot.ChipMarkCount == 0 && !(bool)Field(plot, "_selecting")!, "cancel discards selection");
+            int changes = 0; plot.ChipMarksChanged += (_, _) => changes++;
+            Mark(plot, 1, 1); Mark(plot, 3, 3);
+            Check(plot.ChipMarkCount == 2 && changes == 2, "separate right-drag gestures accumulate chip marks");
+            Check(PointPixel(plot, 1, 1) == 0xff167d3e && PointPixel(plot, 3, 3) == 0xff74d190, "site groups use dark/light green including marked failure");
+            Save(plot, "marked-site.png");
+            plot.SetSeries(ScatterSeries.BuildSorted(values, 0, 2.5, ScatterOrder.Wafer, trackChips: true), 0, 2.5, "V"); Pump();
+            Check(PointPixel(plot, 1, 1) == 0xff167d3e && PointPixel(plot, 3, 3) == 0xff74d190, "wafer grouping preserves green alternation");
+            plot.SetSeries(ScatterSeries.Empty, null, null, "");
+            // A second test uses the same physical identities with different measurements and order.
+            var next = values.Select(v => { v.Value *= 10; return v; }).Reverse().ToArray();
+            plot.SetSeries(ScatterSeries.BuildSorted(next, 0, 25, ScatterOrder.SerialNumber, trackChips: true), 0, 25, "mV"); Pump();
+            Check(plot.ChipMarkCount == 2 && PointPixel(plot, 1, 10) == 0xff167d3e && PointPixel(plot, 3, 30) == 0xff167d3e, "marks follow chips to another test item and SN sorting");
+            plot.IsYAxisLocked = true; Call(plot, "ZoomAt", At(plot, 2, 20), 120); Pump();
+            Mark(plot, 2, 20); Check(plot.ChipMarkCount == 3, "rectangle uses current zoom and locked-Y coordinates");
+            plot.ClearChipMarks(); Pump();
+            Check(plot.ChipMarkCount == 0 && ((bool[])Field(plot, "_markedPoints")!).Length == 0 && PointPixel(plot, 3, 30) == 0xffdc3c3c, "clear restores red/blue colors and releases mask");
+            // A short right click resets zoom; a short drag does not unexpectedly reset it.
+            Call(plot, "ZoomAt", At(plot, 2, 20), 120); double scale = (double)Field(plot, "_scaleX")!;
+            Set(plot, "_rightStart", new Point(200, 100)); Call(plot, "CompleteRightGesture", new Point(220, 120));
+            Check((double)Field(plot, "_scaleX")! == scale, "short right drag does not reset zoom");
+            Set(plot, "_rightStart", new Point(200, 100)); Call(plot, "CompleteRightGesture", new Point(200, 100));
+            Check((double)Field(plot, "_scaleX")! == 1, "short right click still resets zoom");
+            var left = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonDownEvent };
+            plot.RaiseEvent(left);
+            Check(Field(plot, "_dragStart") != null && Field(plot, "_rightStart") == null && !((DispatcherTimer)Field(plot, "_selectionTimer")!).IsEnabled, "left button starts existing pan without starting marking");
+            plot.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonUpEvent });
+            Check(Field(plot, "_dragStart") == null, "left release ends existing pan");
+            Begin(plot, a, b); plot.SetSeries(series, 0, 2.5, "V");
+            Check(!(bool)Field(plot, "_selecting")! && Field(plot, "_rightStart") == null, "changing series cancels an unfinished rectangle");
+            window.Close();
+
+            // Verify the actual analyzer button and dataset lifecycle, including async detail updates.
+            var config = new AnalyzerConfig { TestItemRow = 1, LowLimitRow = 2, HighLimitRow = 3, UnitRow = 4, TestNumberRow = 5,
+                DataStartRow = 6, TestItemStartColumn = 6, SerialNumberColumn = 1, XColumn = 2, YColumn = 3, SiteColumn = 4, WaferColumn = 5,
+                SBinRow = 0, HBinRow = 0, SBinColumn = 0, HBinColumn = 0 };
+            string csv = Path.Combine(folder, "marks.csv");
+            File.WriteAllText(csv, "SN,X,Y,Site,Wafer,A,B\nLSL,,,,,0,0\nUSL,,,,,10,100\nUnit,,,,,V,A\nTest Num,,,,,101,102\n1,1,0,1,W1,1,10\n2,2,0,2,W2,2,20\n3,3,0,1,W1,3,30\n");
+            string local = Path.Combine(folder, "user"); Directory.CreateDirectory(local);
+            typeof(AppSettings).GetField("_userDirectory", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, local);
+            var main = new MainWindow(new LayoutSettings(Path.Combine(folder, "layout.json")), new RecentFilesService(Path.Combine(folder, "recent.json")), new UiPreferencesService(Path.Combine(folder, "ui.json")));
+            main.Show(); Wait(main.OpenManagedFilesAsync(new[] { new CsvImportSource(csv) }, config, RetestMode.All)); DetailReady(main);
+            Set(main, "_combineSites", true); Set(main, "_combineWafers", true);
+            Wait((Task)Call(main, "RefreshTestItemList")!); DetailReady(main);
+            var actualPlot = (ScatterPlotControl)main.FindName("ScatterPlot"); var clear = (Button)main.FindName("BtnClearScatterMarks");
+            var actualSeries = (ScatterSeries)Field(actualPlot, "_series")!; var point = actualSeries.Points[0]; Mark(actualPlot, point.Index, point.Value);
+            Check(clear.IsEnabled && clear.Content.ToString()!.Contains("1"), "upper-right clear button displays marked chip count");
+            var before = Field(main, "_data"); Wait((Task)Call(main, "RefreshTestItemList")!); DetailReady(main);
+            Check(ReferenceEquals(before, Field(main, "_data")) && actualPlot.ChipMarkCount == 1, "same-data refresh preserves marks");
+            var list = (DataGrid)main.FindName("DgTestItems"); list.SelectedIndex = list.Items.Count - 1; DetailReady(main);
+            Check(actualPlot.ChipMarkCount == 1 && ((bool[])Field(actualPlot, "_markedPoints")!).Any(marked => marked), "actual test-item selection retains chip marking");
+            clear.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump();
+            Check(actualPlot.ChipMarkCount == 0 && !clear.IsEnabled, "actual clear button clears every test item");
+            actualSeries = (ScatterSeries)Field(actualPlot, "_series")!; point = actualSeries.Points[0]; Mark(actualPlot, point.Index, point.Value);
+            Wait(main.OpenManagedFilesAsync(new[] { new CsvImportSource(csv) }, config, RetestMode.All)); DetailReady(main);
+            Check(actualPlot.ChipMarkCount == 0 && !clear.IsEnabled, "loading a new dataset clears marks");
+            main.Close(); app.Shutdown();
+            Console.WriteLine($"ALL {checks} SCATTER MARKING CHECKS PASSED"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

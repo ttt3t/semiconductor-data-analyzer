@@ -98,6 +98,10 @@ public class ScatterPlotControl : CachedPlotControl
     private static readonly Color PointColor = Color.FromRgb(30, 120, 200);
     private static readonly Color GroupDarkColor = Color.FromRgb(31, 95, 165);
     private static readonly Color GroupLightColor = Color.FromRgb(128, 185, 231);
+    private static readonly Color MarkDarkColor = Color.FromRgb(22, 125, 62);
+    private static readonly Color MarkLightColor = Color.FromRgb(116, 209, 144);
+    private static readonly Brush SelectionFill = Freeze(new SolidColorBrush(Color.FromArgb(48, 22, 125, 62)));
+    private static readonly Pen SelectionPen = Freeze(new Pen(Freeze(new SolidColorBrush(MarkDarkColor)), 1));
     private static readonly Color OutColor = Color.FromRgb(220, 60, 60);
 
     private static readonly Brush GridBrush = Freeze(new SolidColorBrush(Color.FromRgb(210, 210, 210)));
@@ -111,7 +115,7 @@ public class ScatterPlotControl : CachedPlotControl
     private static readonly Pen LabelBorder = Freeze(new Pen(Freeze(new SolidColorBrush(Color.FromRgb(180, 180, 180))), 0.8));
     private static readonly Typeface UiTypeface = new("Segoe UI");
     private const double PointRadius = 1.35;
-    private const string InteractionHelp = "滚轮缩放 · 左键拖拽 · 双击/右键重置";
+    private const string InteractionHelp = "滚轮缩放 · 左键平移 · 长按右键 0.4 秒框选 · 双击/短按右键重置";
     private double Dpi => VisualTreeHelper.GetDpi(this).PixelsPerDip;
     public string Unit { get; private set; } = "";
     public string HorizontalAxisTitle => _series.Order switch
@@ -125,6 +129,25 @@ public class ScatterPlotControl : CachedPlotControl
 
     private readonly OverlayLayer _overlayLayer;
     private readonly DispatcherTimer _hoverTimer;
+    private readonly DispatcherTimer _selectionTimer;
+    private readonly ScatterChipMarks _chipMarks = new();
+    private bool[] _markedPoints = Array.Empty<bool>();
+    private Point? _rightStart;
+    private Point _rightPosition;
+    private bool _selecting;
+    public int ChipMarkCount => _chipMarks.Count;
+    public event EventHandler? ChipMarksChanged;
+
+    public void ClearChipMarks()
+    {
+        CancelRightGesture();
+        _chipMarks.Clear();
+        _markedPoints = Array.Empty<bool>();
+        _markedCoords.Clear();
+        _markedCoords.Capacity = 256;
+        InvalidatePlot();
+        ChipMarksChanged?.Invoke(this, EventArgs.Empty);
+    }
     private int _batch;
     private long _renderCount;
 
@@ -148,6 +171,7 @@ public class ScatterPlotControl : CachedPlotControl
     private uint[] _pixelBuffer = Array.Empty<uint>();
     private byte[] _occupancy = Array.Empty<byte>();
     private readonly List<(int X, int Y)> _failCoords = new(256);
+    private readonly List<(int X, int Y, bool Light)> _markedCoords = new(256);
     private double _stampDpi;
     private int _stampRadius;
     private byte[] _stampAlpha = Array.Empty<byte>();
@@ -155,6 +179,8 @@ public class ScatterPlotControl : CachedPlotControl
     private uint[] _stampDark = Array.Empty<uint>();
     private uint[] _stampLight = Array.Empty<uint>();
     private uint[] _stampOut = Array.Empty<uint>();
+    private uint[] _stampMarkDark = Array.Empty<uint>();
+    private uint[] _stampMarkLight = Array.Empty<uint>();
     private const int MaxRasterPixels = 4_000_000;
 
     public ScatterPlotControl()
@@ -179,8 +205,22 @@ public class ScatterPlotControl : CachedPlotControl
             _hoverTimer.Stop();
             _overlayLayer.InvalidateVisual();
         };
+        _selectionTimer = new DispatcherTimer(DispatcherPriority.Input, Dispatcher)
+            { Interval = TimeSpan.FromMilliseconds(400) };
+        _selectionTimer.Tick += (_, _) =>
+        {
+            _selectionTimer.Stop();
+            if (IsMouseCaptured && Mouse.RightButton == MouseButtonState.Pressed) BeginBoxSelection();
+            else CancelRightGesture();
+        };
+        LostMouseCapture += (_, _) => { _dragStart = null; CancelRightGesture(); };
+        PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Escape && _rightStart.HasValue) { CancelRightGesture(); e.Handled = true; }
+        };
         Unloaded += (_, _) =>
         {
+            CancelRightGesture();
             _hoverTimer.Stop();
             _hover = null;
             ReleaseRasterBuffers();
@@ -193,6 +233,7 @@ public class ScatterPlotControl : CachedPlotControl
         MouseMove += OnMouseMove;
         MouseLeave += OnMouseLeave;
         MouseRightButtonDown += OnMouseRightButtonDown;
+        MouseRightButtonUp += OnMouseRightButtonUp;
     }
 
     private void ReleaseRasterBuffers()
@@ -201,6 +242,8 @@ public class ScatterPlotControl : CachedPlotControl
         _pointBitmapDpi = 0;
         _pixelBuffer = Array.Empty<uint>();
         _occupancy = Array.Empty<byte>();
+        _markedCoords.Clear();
+        if (_markedCoords.Capacity > 256) _markedCoords.Capacity = 256;
         _failCoords.Clear();
         if (_failCoords.Capacity > 256) _failCoords.Capacity = 256;
     }
@@ -269,6 +312,7 @@ public class ScatterPlotControl : CachedPlotControl
         _overlayLayer.Arrange(new Rect(0, 0, finalSize.Width, finalSize.Height));
         if (sizeChanged)
         {
+            CancelRightGesture();
             InvalidateVisual();
             _overlayLayer.InvalidateVisual();
         }
@@ -285,6 +329,7 @@ public class ScatterPlotControl : CachedPlotControl
 
     private void OnMouseWheel(object sender, MouseWheelEventArgs e)
     {
+        CancelRightGesture();
         Point mouse = e.GetPosition(this);
         if (_pointCount == 0 || !IsInPlot(mouse)) return;
         ZoomAt(mouse, e.Delta);
@@ -312,6 +357,7 @@ public class ScatterPlotControl : CachedPlotControl
 
     private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        CancelRightGesture();
         if (e.ClickCount >= 2)
         {
             ResetZoom();
@@ -328,14 +374,75 @@ public class ScatterPlotControl : CachedPlotControl
 
     private void OnMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
-        ResetZoom();
+        CancelRightGesture();
+        _dragStart = null;
+        var start = e.GetPosition(this);
+        if (!IsInPlot(start)) return;
+        Focus();
+        _rightStart = _rightPosition = start;
+        if (CaptureMouse()) _selectionTimer.Start();
+        else CancelRightGesture();
+        e.Handled = true;
+    }
+
+    private void BeginBoxSelection()
+    {
+        if (!_rightStart.HasValue || !_hasPlot) return;
+        _selecting = true;
+        _hover = null;
+        _overlayLayer.InvalidateVisual();
+    }
+
+    private Rect SelectionRectangle()
+    {
+        Point Clamp(Point p) => new(Math.Clamp(p.X, _left, _left + _plotW), Math.Clamp(p.Y, _top, _top + _plotH));
+        return _rightStart is Point start ? new Rect(Clamp(start), Clamp(_rightPosition)) : Rect.Empty;
+    }
+
+    private void CancelRightGesture()
+    {
+        _selectionTimer.Stop();
+        bool release = _rightStart.HasValue;
+        _rightStart = null;
+        _selecting = false;
+        if (release && IsMouseCaptured) ReleaseMouseCapture();
+        _overlayLayer.InvalidateVisual();
+    }
+
+    private void CompleteRightGesture(Point end)
+    {
+        if (_rightStart is not Point start) return;
+        _rightPosition = end;
+        var rectangle = SelectionRectangle();
+        bool select = _selecting;
+        CancelRightGesture();
+        if (select)
+        {
+            if (rectangle.Width < 2 || rectangle.Height < 2) return;
+            if (TryScreenToData(rectangle.TopLeft, out double x1, out double y1) &&
+                TryScreenToData(rectangle.BottomRight, out double x2, out double y2) &&
+                _chipMarks.AddRectangle(_series, x1, x2, y1, y2))
+            {
+                _markedPoints = _chipMarks.CreateMask(_series);
+                InvalidatePlot();
+                ChipMarksChanged?.Invoke(this, EventArgs.Empty);
+            }
+        }
+        else if (Math.Abs(end.X - start.X) <= SystemParameters.MinimumHorizontalDragDistance &&
+                 Math.Abs(end.Y - start.Y) <= SystemParameters.MinimumVerticalDragDistance) ResetZoom();
+    }
+
+    private void OnMouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_rightStart.HasValue) return;
+        CompleteRightGesture(e.GetPosition(this));
         e.Handled = true;
     }
 
     private void OnMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         _dragStart = null;
-        if (IsMouseCaptured)
+        if (!_rightStart.HasValue && IsMouseCaptured)
             ReleaseMouseCapture();
         _overlayLayer.InvalidateVisual();
     }
@@ -351,7 +458,14 @@ public class ScatterPlotControl : CachedPlotControl
     private void OnMouseMove(object sender, MouseEventArgs e)
     {
         Point current = e.GetPosition(this);
-        if (_dragStart.HasValue && e.LeftButton == MouseButtonState.Pressed)
+        if (_rightStart.HasValue)
+        {
+            if (e.RightButton != MouseButtonState.Pressed) { CancelRightGesture(); return; }
+            _rightPosition = current;
+            if (_selecting && !_hoverTimer.IsEnabled) _hoverTimer.Start();
+            e.Handled = true;
+        }
+        else if (_dragStart.HasValue && e.LeftButton == MouseButtonState.Pressed)
         {
             _hover = current;
             _offsetX += current.X - _dragStart.Value.X;
@@ -411,12 +525,17 @@ public class ScatterPlotControl : CachedPlotControl
     {
         var values = Values;
         ApplySeries(values == null ? ScatterSeries.Empty : ScatterSeries.Build(
-            values as IReadOnlyList<TestValue> ?? values.ToArray(), Lsl, Usl));
+            values as IReadOnlyList<TestValue> ?? values.ToArray(), Lsl, Usl, trackChips: true));
     }
 
     private void ApplySeries(ScatterSeries series)
     {
+        CancelRightGesture();
         _series = series;
+        _markedPoints = _chipMarks.CreateMask(series);
+        _markedCoords.Clear();
+        if (_markedCoords.Capacity > Math.Max(256L, (long)series.Points.Length * 4))
+            _markedCoords.Capacity = Math.Max(256, series.Points.Length);
         _groupLabels = Array.Empty<FormattedText>();
         _pointCount = series.SampleCount;
         _failCoords.Clear();
@@ -539,6 +658,8 @@ public class ScatterPlotControl : CachedPlotControl
         _stampDark = new uint[len];
         _stampLight = new uint[len];
         _stampOut = new uint[len];
+        _stampMarkDark = new uint[len];
+        _stampMarkLight = new uint[len];
 
         static uint Premultiply(Color c, byte a)
         {
@@ -562,6 +683,8 @@ public class ScatterPlotControl : CachedPlotControl
                 _stampDark[idx] = Premultiply(GroupDarkColor, alpha);
                 _stampLight[idx] = Premultiply(GroupLightColor, alpha);
                 _stampOut[idx] = Premultiply(OutColor, alpha);
+                _stampMarkDark[idx] = Premultiply(MarkDarkColor, alpha);
+                _stampMarkLight[idx] = Premultiply(MarkLightColor, alpha);
             }
         }
     }
@@ -598,6 +721,7 @@ public class ScatterPlotControl : CachedPlotControl
         Array.Clear(_pixelBuffer, 0, pixelCount);
         Array.Clear(_occupancy, 0, pixelCount);
         _failCoords.Clear();
+        _markedCoords.Clear();
         EnsureStamp(bitmapScale < 1 ? Math.Min(bmpW / _plotW, bmpH / _plotH) : renderDpi);
 
         double pxPerDipX = bmpW / _plotW;
@@ -648,9 +772,20 @@ public class ScatterPlotControl : CachedPlotControl
             bool centerInside = (uint)ix < (uint)bmpW && (uint)iy < (uint)bmpH;
             int centerIdx = centerInside ? iy * bmpW + ix : -1;
 
+            if (_markedPoints.Length > 0 && _markedPoints[i])
+            {
+                bool light = grouped && groupIndex % 2 != 0;
+                if (!centerInside || _occupancy[centerIdx] < 4)
+                {
+                    if (centerInside) _occupancy[centerIdx] = light ? (byte)5 : (byte)4;
+                    _markedCoords.Add((ix, iy, light));
+                }
+                continue;
+            }
+
             if (point.OutOfSpec)
             {
-                if (!centerInside || _occupancy[centerIdx] != 3)
+                if (!centerInside || _occupancy[centerIdx] < 3)
                 {
                     if (centerInside) _occupancy[centerIdx] = 3;
                     _failCoords.Add((ix, iy));
@@ -672,6 +807,10 @@ public class ScatterPlotControl : CachedPlotControl
             var (ix, iy) = _failCoords[i];
             StampCircle(bmpW, bmpH, ix, iy, r, _stampOut);
         }
+
+        // Marking is a display override, including failed points; specifications/statistics stay intact.
+        foreach (var (ix, iy, light) in _markedCoords)
+            StampCircle(bmpW, bmpH, ix, iy, r, light ? _stampMarkLight : _stampMarkDark);
 
         _pointBitmap.WritePixels(new Int32Rect(0, 0, bmpW, bmpH), _pixelBuffer, bmpW * sizeof(uint), 0);
         dc.DrawImage(_pointBitmap, plotRect);
@@ -799,7 +938,13 @@ public class ScatterPlotControl : CachedPlotControl
         protected override void OnRender(DrawingContext dc)
         {
             var o = _owner;
-            if (o.IsResizePreview || o._hover is not Point hp || !o.IsInPlot(hp))
+            if (o.IsResizePreview) return;
+            if (o._selecting)
+            {
+                dc.DrawRectangle(SelectionFill, SelectionPen, o.SelectionRectangle());
+                return;
+            }
+            if (o._hover is not Point hp || !o.IsInPlot(hp))
                 return;
 
             dc.PushClip(new RectangleGeometry(new Rect(o._left, o._top, o._plotW, o._plotH)));

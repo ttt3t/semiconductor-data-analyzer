@@ -133,6 +133,7 @@ public partial class MainWindow : Window
             _detailCancellation?.Cancel();
             _memoryReclaimer.Dispose();
             ClearDetail();
+            ScatterPlot.ClearChipMarks();
             DgTestItems.ItemsSource = null;
             if (_summaryView != null) _summaryView.Filter = null;
             _summaryView = null;
@@ -270,7 +271,7 @@ public partial class MainWindow : Window
     private void UpdateWindowTitle()
     {
         string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
-        Title = $"CSV Analyzer · V2.0.4 | 当前数据：{_currentDataName} | 配置：{configName}";
+        Title = $"CSV Analyzer · V2.0.5 | 当前数据：{_currentDataName} | 配置：{configName}";
     }
 
     private void UpdateConfigInfo()
@@ -608,6 +609,7 @@ public partial class MainWindow : Window
         string? keepWafer = _combineWafers ? null : _currentWafer;
         ClearDetail();
         bool changedData = !ReferenceEquals(_data, data);
+        if (changedData) ScatterPlot.ClearChipMarks();
         _data = data;
         _sampleRanges = prepared.Ranges;
         _scopeData = prepared.Scope;

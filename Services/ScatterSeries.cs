@@ -2,7 +2,11 @@ using SemiconductorCsvAnalyzer.Models;
 
 namespace SemiconductorCsvAnalyzer.Services;
 
-public readonly record struct ScatterPoint(int Index, double Value, bool OutOfSpec);
+public readonly record struct ScatterPoint(int Index, double Value, bool OutOfSpec)
+{
+    // Fits the existing struct padding on x64; no per-point identity objects.
+    public int SourceIndex { get; init; }
+}
 public readonly record struct ScatterGroup(string Name, int StartIndex, int EndIndex);
 
 /// <summary>Every finite measurement. No sampled or aggregated levels.</summary>
@@ -15,19 +19,32 @@ public sealed class ScatterSeries
     public double Maximum { get; private init; }
     public ScatterOrder Order { get; private init; } = ScatterOrder.SerialNumber;
     public ScatterGroup[] Groups { get; private init; } = Array.Empty<ScatterGroup>();
+    private IReadOnlyList<TestValue>? _identityValues;
+    internal bool HasChipIdentities => _identityValues != null;
+    internal CsvRecord? RecordAtPoint(int index)
+    {
+        int row = Points[index].SourceIndex;
+        return _identityValues switch
+        {
+            TestValueColumn column => column.GetRecordAt(row),
+            IndexedTestValues selected => selected.GetRecordAt(row),
+            null => null,
+            _ => _identityValues[row].Record
+        };
+    }
 
     public ScatterSeries Scale(double factor) => factor == 1 ? this : new ScatterSeries
     {
         Points = Points.Select(p => p with { Value = p.Value * factor }).ToArray(),
         SampleCount = SampleCount, Minimum = Minimum * factor, Maximum = Maximum * factor,
-        Order = Order, Groups = Groups
+        Order = Order, Groups = Groups, _identityValues = _identityValues
     };
 
     private readonly record struct SortKey(int SourceIndex, int Wafer, double SiteNumber, string Site,
         double SerialNumber, string Serial);
 
     public static ScatterSeries BuildSorted(IReadOnlyList<TestValue> values, double? lsl, double? usl,
-        ScatterOrder order, CancellationToken token = default, IReadOnlyList<string>? waferOrder = null)
+        ScatterOrder order, CancellationToken token = default, IReadOnlyList<string>? waferOrder = null, bool trackChips = false)
     {
         token.ThrowIfCancellationRequested();
         var keys = new SortKey[values.Count];
@@ -68,7 +85,7 @@ public sealed class ScatterSeries
         token.ThrowIfCancellationRequested();
         var indices = new int[keys.Length];
         for (int i = 0; i < keys.Length; i++) indices[i] = keys[i].SourceIndex;
-        var series = Build(new IndexedTestValues(values, indices), lsl, usl, token);
+        var series = BuildCore(values, lsl, usl, token, indices, trackChips);
         if (order == ScatterOrder.SerialNumber) return series;
         if (series.Points.Length == 0) return new ScatterSeries { Order = order };
 
@@ -86,11 +103,16 @@ public sealed class ScatterSeries
         }
         token.ThrowIfCancellationRequested();
         return new ScatterSeries { Points = series.Points, SampleCount = series.SampleCount,
-            Minimum = series.Minimum, Maximum = series.Maximum, Order = order, Groups = groups.ToArray() };
+            Minimum = series.Minimum, Maximum = series.Maximum, Order = order, Groups = groups.ToArray(),
+            _identityValues = series._identityValues };
     }
 
     public static ScatterSeries Build(IReadOnlyList<TestValue> values, double? lsl, double? usl,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool trackChips = false)
+        => BuildCore(values, lsl, usl, cancellationToken, null, trackChips);
+
+    private static ScatterSeries BuildCore(IReadOnlyList<TestValue> values, double? lsl, double? usl,
+        CancellationToken cancellationToken, int[]? indices, bool trackChips)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var points = new ScatterPoint[values.Count];
@@ -99,15 +121,18 @@ public sealed class ScatterSeries
         for (int i = 0; i < values.Count; i++)
         {
             if ((i & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
-            double value = values[i].Value;
+            int sourceIndex = indices == null ? i : indices[i];
+            double value = values[sourceIndex].Value;
             if (!double.IsFinite(value)) continue;
-            points[count++] = new(i + 1, value, (lsl.HasValue && value < lsl) || (usl.HasValue && value > usl));
+            points[count++] = new(i + 1, value, (lsl.HasValue && value < lsl) || (usl.HasValue && value > usl))
+                { SourceIndex = sourceIndex };
             min = Math.Min(min, value);
             max = Math.Max(max, value);
         }
         if (count == 0) return Empty;
         if (count != points.Length) Array.Resize(ref points, count);
-        return new ScatterSeries { Points = points, SampleCount = values.Count, Minimum = min, Maximum = max };
+        return new ScatterSeries { Points = points, SampleCount = values.Count, Minimum = min, Maximum = max,
+            _identityValues = trackChips ? values : null };
     }
 
     public static int LowerBound(ScatterPoint[] points, double index)
