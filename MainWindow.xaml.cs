@@ -271,7 +271,7 @@ public partial class MainWindow : Window
     private void UpdateWindowTitle()
     {
         string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
-        Title = $"CSV Analyzer · V2.0.5 | 当前数据：{_currentDataName} | 配置：{configName}";
+        Title = $"CSV Analyzer · V2.0.6 | 当前数据：{_currentDataName} | 配置：{configName}";
     }
 
     private void UpdateConfigInfo()
@@ -483,8 +483,8 @@ public partial class MainWindow : Window
                 if (failOnly)
                 {
                     var exported = await Task.Run(() => FailChipXlsxService.Save(file.FileName, ActiveData, _config, wafers, mode, outlierSigma));
-                    TxtStatus.Text = $"已导出 {exported.FailChips} 颗 Fail 芯片、{exported.Records} 条记录" +
-                        (exported.ReferenceSerial == null ? "；没有可用的良品参考。" : $"；良品参考 SN：{exported.ReferenceSerial}");
+                    TxtStatus.Text = $"已导出 2 个工作表：{exported.FailChips} 颗 Fail 芯片、{exported.RetestGoodChips} 颗复测良品芯片，共 {exported.Records} 条记录" +
+                        (exported.FailChips == 0 ? "" : exported.ReferenceSerial == null ? "；没有可用的良品参考。" : $"；Fail 表良品参考 SN：{exported.ReferenceSerial}");
                     return;
                 }
                 int count = await Task.Run(() => IntegratedCsvService.Save(file.FileName, ActiveData, wafers, mode, outlierSigma));

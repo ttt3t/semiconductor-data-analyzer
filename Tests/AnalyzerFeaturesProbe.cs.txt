@@ -203,7 +203,7 @@ static class Probe
         var waferWindow = new WaferTableWindow(WaferStatisticsService.Build(records, RetestMode.First, labels), wafers); waferWindow.Show(); Pump();
         Check(((DataGrid)waferWindow.FindName("DgWafers")).Columns.Count == 4 && ((string)Call(waferWindow, "BuildClipboardText")!).Contains("开路=Open"), "Wafer Table adds description without shifting numeric wafer columns"); Save(waferWindow, "wafer-descriptions.png"); waferWindow.Close();
         string path = P("fail-chips.xlsx"); var result = FailChipXlsxService.Save(path, data, labels, new[] { "W" }, RetestMode.All);
-        Check(result.FailChips == 3 && result.ReferenceSerial == "g2" && result.Records == 5, "Fail export uses latest HBIN, includes PartialPass as fail, and chooses closest good-only reference");
+        Check(result.FailChips == 3 && result.ReferenceSerial == "g2" && result.RetestGoodChips == 1 && result.Records == 7, "Fail export writes recovered good chips separately and preserves closest good-only reference");
         using (var doc = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(path, false))
         {
             var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(doc).ToArray();
@@ -212,11 +212,13 @@ static class Probe
         }
         using (var workbook = new XLWorkbook(path))
         {
+            Check(workbook.Worksheets.Count == 2 && workbook.Worksheet(2).Name == "复测良品芯片" &&
+                workbook.Worksheet(2).RowsUsed().Skip(7).Select(r => r.Cell(12).GetString()).SequenceEqual(new[] { "other-first", "other-last" }), "recovered good chip history is on the second sheet");
             var sheet = workbook.Worksheet(1); var rows = sheet.RowsUsed().Where(r => records.Any(s => s.Id == r.Cell(12).GetString())).ToDictionary(r => r.Cell(12).GetString());
             Check(rows.Count == 5 && rows["f-last"].RowNumber() == rows["f-first"].RowNumber() + 1 && !rows.ContainsKey("other-first"), "first and retest records are adjacent inside chip blocks and recovered good chips are excluded");
-            Check(rows["f-first"].Cell(13).Style.Fill.BackgroundColor.Color.ToArgb() == System.Drawing.Color.FromArgb(255, 226, 240, 217).ToArgb() &&
-                rows["f-last"].Cell(13).Style.Fill.BackgroundColor.Color.ToArgb() == System.Drawing.Color.FromArgb(255, 252, 224, 232).ToArgb(), "measurement cells are green on pass and pink on fail");
-            Check(Near(rows["g2"].Cell(13).GetDouble(), 2) && sheet.Cell(7, 13).GetString() == "mA" && Near(sheet.Cell(9, 13).GetDouble(), 5), "Fail XLSX applies STDF display units to values and limits");
+            Check(rows["f-first"].Cell(13).Style.Fill.BackgroundColor.Color.ToArgb() == System.Drawing.Color.FromArgb(255, 169, 209, 142).ToArgb() &&
+                rows["f-last"].Cell(13).Style.Fill.BackgroundColor.Color.ToArgb() == System.Drawing.Color.FromArgb(255, 242, 160, 175).ToArgb(), "measurement cells are green on pass and pink on fail");
+            Check(Near(rows["g2"].Cell(13).GetDouble(), 2) && sheet.Cell(3, 13).GetString() == "mA" && Near(sheet.Cell(5, 13).GetDouble(), 5), "Fail XLSX applies STDF display units to values and limits");
             Check(rows["invalid"].Cell(13).GetString() == "bad" && rows["invalid"].Cell(14).IsEmpty(), "invalid text and missing values remain distinguishable in export");
         }
         var noGood = new CsvParseResult { Items = data.Items, Records = records.Where(r => r.X == 3 || r.X == 5).ToList() };
@@ -226,9 +228,9 @@ static class Probe
         try { FailChipXlsxService.Save(untouched, new CsvParseResult { Items = data.Items, Records = records.Where(r => r.X < 3).ToList() }, labels, new[] { "W" }, RetestMode.All); }
         catch (InvalidDataException) { noFails = true; } Check(noFails && File.ReadAllText(untouched) == "keep", "no-fail selection leaves an existing destination untouched");
         var lastOnly = FailChipXlsxService.Save(P("last-only.xlsx"), data, labels, new[] { "W" }, RetestMode.Last);
-        Check(lastOnly.Records == 4 && data.Records.Count == 9 && Near(first.Values[1].Value, .002), "export honors retest selection and does not alter source measurements");
+        Check(lastOnly.Records == 5 && data.Records.Count == 9 && Near(first.Values[1].Value, .002), "export honors retest selection and does not alter source measurements");
         var onlyRetests = FailChipXlsxService.Save(P("only-retests.xlsx"), data, labels, new[] { "W" }, RetestMode.OnlyRetests);
-        Check(onlyRetests.FailChips == 1 && onlyRetests.Records == 2 && onlyRetests.ReferenceSerial == "other-last", "only-retest export retains selected fail history and a valid retested reference");
+        Check(onlyRetests.FailChips == 1 && onlyRetests.Records == 3 && onlyRetests.ReferenceSerial == "other-last", "only-retest export retains selected fail history and a valid retested reference");
         var ftRecords = records.Where(r => r.X == 3).Select((r, i) => new CsvRecord { Id = r.Id, WaferId = i == 0 ? "W" : "W2", SerialNumber = r.SerialNumber,
             X = i * 20, Y = 0, Lot = "L", IsFtIdentity = true, RetestUuid = "UUID", HBin = r.HBin, Measurements = r.Measurements }).ToList();
         var ft = FailChipXlsxService.Save(P("ft-history.xlsx"), new CsvParseResult { Items = data.Items, Records = ftRecords }, labels, new[] { "W", "W2" }, RetestMode.All);
@@ -237,7 +239,7 @@ static class Probe
         using (var clipped = new XLWorkbook(clippedPath))
         {
             var r = clipped.Worksheet(1).RowsUsed().Single(r => r.Cell(12).GetString() == "f-last");
-            Check(r.Cell(13).IsEmpty() && r.Cell(13).Style.Fill.BackgroundColor.Color.ToArgb() == System.Drawing.Color.FromArgb(255, 241, 243, 245).ToArgb(), "optional outlier clipping blanks only the affected measurement with a neutral style");
+            Check(r.Cell(13).IsEmpty() && r.Cell(13).Style.Fill.BackgroundColor.Color.ToArgb() == System.Drawing.Color.FromArgb(255, 217, 222, 227).ToArgb(), "optional outlier clipping blanks only the affected measurement with a neutral style");
         }
         var cancellation = new CancellationTokenSource(); cancellation.Cancel(); bool stopped = false;
         using (new AnalysisOperation(cancellation.Token)) try { FailChipXlsxService.Save(P("cancelled.xlsx"), data, labels, new[] { "W" }, RetestMode.All); } catch (OperationCanceledException) { stopped = true; }

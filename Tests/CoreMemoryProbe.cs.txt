@@ -438,12 +438,119 @@ static class Probe
         Check(marks.CreateMask(ScatterSeries.Build(indexed, null, null, trackChips: true)).SequenceEqual(new[] { true, false }),
             "indexed view resolves original row identity");
     }
+    static void CompactFailExport()
+    {
+        var config = Config(); config.PassHBins = new() { "1" }; config.PartialPassHBins = new() { "3" };
+        var first = new TestItemData { Id = "a", Name = "Current", DisplayName = "Current", TestNumber = "101", Unit = "A", IsStdfMeasurement = true, LowLimit = 0, HighLimit = .005 };
+        var second = new TestItemData { Id = "b", Name = "Voltage", DisplayName = "Voltage", TestNumber = "102", Unit = "V", LowLimit = 10, HighLimit = 15 };
+        CsvRecord R(string sn, int x, string hbin, string a, string? b) => new()
+        {
+            Id = sn, SerialNumber = sn, WaferId = "W", X = x, Y = 0, Site = "1", HBin = hbin, SBin = hbin,
+            Measurements = b == null ? new Dictionary<string, string> { ["a"] = a } : new Dictionary<string, string> { ["a"] = a, ["b"] = b }
+        };
+        var records = new List<CsvRecord>
+        {
+            R("g1", 0, "1", "0", "10"), R("g2", 1, "1", ".002", "12"), R("g3", 2, "1", ".004", "14"),
+            R("f-first", 3, "1", ".001", "11"), R("other-first", 4, "2", ".100", "55"), R("f-last", 3, "2", ".100", "999"),
+            R("other-last", 4, "1", ".002", "12"), R("partial", 5, "3", ".007", "17"), R("invalid", 6, "2", "bad", null),
+            R("b-first", 7, "2", ".100", "55"), R("b-last", 7, "1", ".002", "12"),
+            R("p-first", 8, "1", ".002", "12"), R("p-last", 8, "1", ".002", "12")
+        };
+        var data = DatasetService.Build(new() { first, second }, records);
+        using var lease = new DatasetLease(data.Records); MeasurementDisplay.Configure(data.Items);
+        var snapshot = string.Join("|", records.Select(r => r.Id + ":" + string.Join(",", r.Measurements.OrderBy(kv => kv.Key).Select(kv => kv.Key + "=" + kv.Value))));
+        string path = P("compact-fail.xlsx");
+        var result = FailChipXlsxService.Save(path, data, config, new[] { "W" }, RetestMode.All);
+        Check(result.FailChips == 3 && result.RetestGoodChips == 3 && result.Records == 11 && result.ReferenceSerial == "g2", "two-sheet export counts Fail chips, retested Pass chips and reference rows");
+        using (var doc = DocumentFormat.OpenXml.Packaging.SpreadsheetDocument.Open(path, false))
+        {
+            var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(doc).ToArray();
+            foreach (var error in errors) Console.WriteLine(error.Description + " at " + error.Path?.XPath);
+            Check(errors.Length == 0, "compact two-sheet XLSX passes Open XML validation");
+            foreach (var part in doc.WorkbookPart!.WorksheetParts)
+            {
+                var pane = part.Worksheet.Descendants<DocumentFormat.OpenXml.Spreadsheet.Pane>().Single();
+                Check(pane.HorizontalSplit!.Value == 1 && pane.VerticalSplit!.Value == 1 && pane.TopLeftCell!.Value == "B2", "freeze only test-name row and group column");
+                Check(!part.Worksheet.Descendants<DocumentFormat.OpenXml.Spreadsheet.MergeCell>().Any(), "chip titles and explanatory merged rows removed");
+                Check(part.Worksheet.Descendants<DocumentFormat.OpenXml.Spreadsheet.Row>().All(r => r.OutlineLevel == null || r.OutlineLevel.Value == 0), "flat chip records avoid obsolete outline groups");
+            }
+        }
+        using (var workbook = new ClosedXML.Excel.XLWorkbook(path))
+        {
+            Check(workbook.Worksheets.Select(w => w.Name).SequenceEqual(new[] { "Fail 芯片", "复测良品芯片" }), "two sheets have stable descriptive names and order");
+            var fail = workbook.Worksheet(1); var good = workbook.Worksheet(2);
+            Dictionary<string, ClosedXML.Excel.IXLRow> Rows(ClosedXML.Excel.IXLWorksheet sheet) => sheet.RowsUsed().Where(r => records.Any(s => s.Id == r.Cell(12).GetString())).ToDictionary(r => r.Cell(12).GetString());
+            var fs = Rows(fail); var gs = Rows(good);
+            foreach (var sheet in workbook.Worksheets)
+            {
+                Check(sheet.Cell("A1").GetString() == "组别" && sheet.Cell("M1").GetString() == "Current" && sheet.Cell("A2").GetString() == "#TestNumber", "first row is actual column headers without four explanatory rows");
+                Check(sheet.Cell("M3").GetString() == "mA" && sheet.Cell("M5").GetDouble() == 5, "unfrozen metadata retains scaled units and limits");
+                Check(sheet.RowsUsed().Skip(7).All(r => !r.Cell(12).IsEmpty()) && sheet.RowsUsed().Skip(7).First().RowNumber() == 8, "records start at row 8 without chip titles or spacer rows");
+            }
+            Check(fs.Keys.Order().SequenceEqual(new[] { "f-first", "f-last", "g2", "invalid", "partial" }.Order()), "Fail sheet preserves original good reference and excludes recovered chips");
+            Check(gs.Keys.Order().SequenceEqual(new[] { "other-first", "other-last", "b-first", "b-last", "p-first", "p-last" }.Order()), "good sheet includes all retested final Pass chips, including Pass-to-Pass");
+            Check(gs["other-last"].RowNumber() == gs["other-first"].RowNumber() + 1 && fs["f-last"].RowNumber() == fs["f-first"].RowNumber() + 1, "interleaved source history becomes adjacent chip records on both sheets");
+            Check(fs["g2"].Cell(1).GetString() == "良品参考" && gs["other-first"].Cell(1).GetString() == gs["other-last"].Cell(1).GetString(), "group labels repeat on each record without separate chip title");
+            string Fill(ClosedXML.Excel.IXLRow row, int column) => row.Cell(column).Style.Fill.BackgroundColor.Color.Name;
+            Check(Fill(gs["other-last"], 13) == "ffe2f0d9" && Fill(gs["b-last"], 13) == "ffa9d18e" && Fill(gs["p-last"], 13) == "ffe2f0d9", "adjacent chips alternate light and dark green then repeat");
+            Check(Fill(gs["other-first"], 13) == "fffce0e8" && Fill(gs["b-first"], 13) == "fff2a0af", "failed measurements use corresponding light and dark red");
+            Check(Fill(fs["f-first"], 13) == "ffa9d18e" && Fill(fs["f-last"], 13) == "fff2a0af", "one chip retains its shade across Pass and Fail records");
+            Check(Fill(gs["b-first"], 1) == Fill(gs["b-last"], 1) && Fill(gs["other-last"], 1) != Fill(gs["b-first"], 1), "identity columns also distinguish contiguous chip blocks");
+            Check(fs["invalid"].Cell(13).GetString() == "bad" && fs["invalid"].Cell(14).IsEmpty() && Fill(fs["invalid"], 13) != Fill(fs["invalid"], 14), "invalid text remains yellow and missing measurements neutral");
+            Check(fs["g2"].Cell(13).GetDouble() == 2 && gs["other-last"].Cell(13).GetDouble() == 2, "STDF display scaling remains correct on both sheets");
+        }
+        foreach (var mode in new[] { RetestMode.First, RetestMode.Last, RetestMode.OnlyRetests })
+        {
+            string selectedPath = P("compact-" + mode + ".xlsx");
+            var selected = FailChipXlsxService.Save(selectedPath, data, config, new[] { "W" }, mode);
+            using var book = new ClosedXML.Excel.XLWorkbook(selectedPath);
+            var ids = book.Worksheet(2).RowsUsed().Skip(7).Select(r => r.Cell(12).GetString()).ToArray();
+            Check(ids.Order().SequenceEqual((mode == RetestMode.First ? new[] { "other-first", "b-first", "p-first" } : new[] { "other-last", "b-last", "p-last" }).Order()), mode + " applies record retention within final-Pass cohort");
+            Check(selected.RetestGoodChips == 3 && selected.Records == (mode == RetestMode.OnlyRetests ? 5 : 7), mode + " returns actual written record counts including reference");
+        }
+        var noGood = new CsvParseResult { Items = data.Items, Records = records.Where(r => r.X is 3 or 5).ToList() };
+        string noGoodPath = P("compact-no-good.xlsx");
+        var failOnly = FailChipXlsxService.Save(noGoodPath, noGood, config, new[] { "W" }, RetestMode.All);
+        using (var book = new ClosedXML.Excel.XLWorkbook(noGoodPath))
+            Check(book.Worksheets.Count == 2 && book.Worksheet(2).LastRowUsed()!.RowNumber() == 7 && failOnly.ReferenceSerial == null && failOnly.RetestGoodChips == 0, "empty good cohort still writes its header and metadata sheet");
+        string allGoodPath = P("compact-all-retested-good.xlsx");
+        var allGood = FailChipXlsxService.Save(allGoodPath, new CsvParseResult { Items = data.Items, Records = records.Where(r => r.X == 4).ToList() }, config, new[] { "W" }, RetestMode.All);
+        using (var book = new ClosedXML.Excel.XLWorkbook(allGoodPath))
+            Check(allGood.FailChips == 0 && allGood.RetestGoodChips == 1 && allGood.Records == 2 && book.Worksheet(1).LastRowUsed()!.RowNumber() == 7, "retested-good-only population exports with an empty Fail sheet");
+        string unchanged = P("compact-keep.xlsx"); File.WriteAllText(unchanged, "keep");
+        Reject<InvalidDataException>(() => FailChipXlsxService.Save(unchanged, new CsvParseResult { Items = data.Items, Records = records.Where(r => r.X < 3).ToList() }, config, new[] { "W" }, RetestMode.All), "no Fail or retested-good population is rejected");
+        Check(File.ReadAllText(unchanged) == "keep", "empty export preserves existing destination");
+        Reject<InvalidDataException>(() => FailChipXlsxService.Save(P("invalid-wafer.xlsx"), data, config, new[] { "missing" }, RetestMode.All), "export validates selected wafers");
+        Reject<InvalidDataException>(() => FailChipXlsxService.Save(P("invalid-sigma.xlsx"), data, config, new[] { "W" }, RetestMode.All, 0), "export validates optional outlier sigma");
+        var ftRecords = records.Where(r => r.X is 3 or 4).Select((r, i) => new CsvRecord
+        {
+            Id = r.Id, SerialNumber = r.SerialNumber, WaferId = i < 2 ? "W" : "W2", Lot = "L", IsFtIdentity = true,
+            RetestUuid = r.X == 3 ? "fail-chip" : "good-chip", X = i * 20, Y = 0, HBin = r.HBin, Measurements = r.Measurements
+        }).ToList();
+        string ftPath = P("compact-ft.xlsx");
+        var ft = FailChipXlsxService.Save(ftPath, new CsvParseResult { Items = data.Items, Records = ftRecords }, config, new[] { "W", "W2" }, RetestMode.All);
+        using (var book = new ClosedXML.Excel.XLWorkbook(ftPath))
+            Check(ft.FailChips == 1 && ft.RetestGoodChips == 1 && book.Worksheet(2).RowsUsed().Skip(7).Count() == 2, "FT UUID follows one chip across wafer and XY changes into correct sheet");
+        string clippedPath = P("compact-outliers.xlsx");
+        FailChipXlsxService.Save(clippedPath, data, config, new[] { "W" }, RetestMode.All, 1);
+        using (var book = new ClosedXML.Excel.XLWorkbook(clippedPath))
+        {
+            var clipped = book.Worksheet(1).RowsUsed().Single(r => r.Cell(12).GetString() == "f-last");
+            Check(clipped.Cell(13).IsEmpty() && clipped.Cell(13).Style.Fill.BackgroundColor.Color.Name == "ffd9dee3", "outlier clipping uses the current chip shade's neutral fill");
+        }
+        string after = string.Join("|", records.Select(r => r.Id + ":" + string.Join(",", r.Measurements.OrderBy(kv => kv.Key).Select(kv => kv.Key + "=" + kv.Value))));
+        Check(snapshot == after && first.Values[1].Value == .002, "all export modes leave source measurements intact");
+        using var canceled = new CancellationTokenSource(); canceled.Cancel();
+        using (new AnalysisOperation(canceled.Token))
+            Reject<OperationCanceledException>(() => FailChipXlsxService.Save(P("compact-cancelled.xlsx"), data, config, new[] { "W" }, RetestMode.All), "two-sheet export respects cancellation");
+        Check(!File.Exists(P("compact-cancelled.xlsx")) && !Directory.GetFiles(folder, "compact-*.tmp").Any(), "cancelled/failed exports leave no partial output or temp files");
+    }
     static int Main(string[] args)
     {
         try
         {
             folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
-            Views(); SelectionMatrix(); Projections(); ProductYield(); YieldRowSources(); ScatterMarking();
+            Views(); SelectionMatrix(); Projections(); ProductYield(); YieldRowSources(); ScatterMarking(); CompactFailExport();
             Console.WriteLine($"ALL {checks} CORE MEMORY CHECKS PASSED"); return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }

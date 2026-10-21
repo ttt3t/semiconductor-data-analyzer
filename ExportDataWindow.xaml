@@ -6,8 +6,8 @@
     <DockPanel Margin="20">
         <StackPanel x:Name="ExportOptions" DockPanel.Dock="Bottom" Margin="0,12,0,0">
             <GroupBox x:Name="DataFormatSettings" Header="导出类型" Margin="0,0,0,10">
-                <CheckBox x:Name="ChkFailChips" Content="仅导出 Fail 芯片（XLSX，附一颗良品参考）" Margin="12"
-                          ToolTip="芯片按末次 HBIN 是否属于 Pass 分类；按所选复测口径输出，同颗芯片连续成块。"/>
+                <CheckBox x:Name="ChkFailChips" Content="Fail / 复测良品芯片（XLSX，两个工作表）" Margin="12"
+                          ToolTip="Fail 表保留良品参考；复测良品表包含有复测记录且末次 HBIN 为 Pass 的芯片。按所选复测口径输出，芯片之间以深浅底色区分。"/>
             </GroupBox>
             <GroupBox Header="2. 测试记录保留方式">
                 <StackPanel Margin="12">

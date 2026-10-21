@@ -8,7 +8,10 @@ using SemiconductorCsvAnalyzer.Models;
 
 namespace SemiconductorCsvAnalyzer.Services;
 
-public sealed record FailChipExportResult(int FailChips, int Records, string? ReferenceSerial);
+public sealed record FailChipExportResult(int FailChips, int Records, string? ReferenceSerial)
+{
+    public int RetestGoodChips { get; init; }
+}
 
 /// <summary>Streams rows directly into XLSX; never holds a workbook-sized cell graph in memory.</summary>
 public static class FailChipXlsxService
@@ -34,7 +37,9 @@ public static class FailChipXlsxService
                 classifier.Classify(history[^1].HBin) == OriginalDisposition.Pass);
         }).Where(c => c.Rows.Count > 0).ToArray();
         var fails = chips.Where(c => !c.Good).ToArray();
-        if (fails.Length == 0) throw new InvalidDataException("所选晶圆及复测口径下没有末次 HBIN 不属于 Pass 的芯片。");
+        var retestGoods = chips.Where(c => c.Good && c.History.Count > 1).ToArray();
+        if (fails.Length == 0 && retestGoods.Length == 0)
+            throw new InvalidDataException("所选晶圆及复测口径下没有 Fail 芯片或复测良品芯片。");
         int columns = IdentityHeaders.Length + data.Items.Count;
         if (columns > 16384) throw new InvalidDataException("测试项数量超过 Excel 列数上限，请减少测试项。");
         var bounds = outlierSigma.HasValue ? IntegratedCsvService.CalculateOutlierBounds(data.Items, selected, outlierSigma.Value) : null;
@@ -52,7 +57,7 @@ public static class FailChipXlsxService
                         (bounds == null || value >= bounds[i].Lower && value <= bounds[i].Upper) ? value : double.NaN;
             }
         }
-        foreach (var chip in chips.Where(c => c.Good))
+        foreach (var chip in chips.Where(c => c.Good && fails.Length > 0))
         {
             AnalysisOperation.CheckCancellation(); ReadChip(chip);
             for (int i = 0; i < vector.Length; i++) if (double.IsFinite(vector[i]))
@@ -62,7 +67,7 @@ public static class FailChipXlsxService
             }
         }
         Chip? reference = null; int coverage = 0; double best = double.PositiveInfinity;
-        foreach (var chip in chips.Where(c => c.Good))
+        foreach (var chip in chips.Where(c => c.Good && fails.Length > 0))
         {
             AnalysisOperation.CheckCancellation(); ReadChip(chip);
             int measured = 0; double score = 0;
@@ -75,9 +80,16 @@ public static class FailChipXlsxService
             if (measured > 0 && (measured > coverage || measured == coverage && score / measured < best))
             { reference = chip; coverage = measured; best = score / measured; }
         }
+        // Keep the existing reference in the Fail comparison sheet only.
+        if (fails.Length == 0) reference = null;
         var output = (reference == null ? Enumerable.Empty<Chip>() : new[] { reference }).Concat(fails).ToArray();
-        long totalRows = 12L + output.Sum(c => (long)c.Rows.Count + 2);
-        if (totalRows > 1048576) throw new InvalidDataException("导出行数超过 Excel 上限，请减少所选晶圆。");
+        void ValidateRows(IReadOnlyList<Chip> sheetChips)
+        {
+            long totalRows = 7L + sheetChips.Sum(c => (long)c.Rows.Count);
+            if (totalRows > 1048576) throw new InvalidDataException("导出行数超过 Excel 单个工作表上限，请减少所选晶圆。");
+        }
+        ValidateRows(output);
+        ValidateRows(retestGoods);
         string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
@@ -85,21 +97,23 @@ public static class FailChipXlsxService
             {
                 var workbook = document.AddWorkbookPart(); workbook.Workbook = new Workbook();
                 var styles = workbook.AddNewPart<WorkbookStylesPart>(); styles.Stylesheet = Styles(); styles.Stylesheet.Save();
-                var sheet = workbook.AddNewPart<WorksheetPart>();
-                using (var writer = OpenXmlWriter.Create(sheet))
+                var sheets = workbook.Workbook.AppendChild(new Sheets());
+                void WriteSheet(string name, IReadOnlyList<Chip> sheetChips, bool includeReference = false)
                 {
+                    var sheet = workbook.AddNewPart<WorksheetPart>();
+                    using var writer = OpenXmlWriter.Create(sheet);
                     writer.WriteStartElement(new Worksheet());
-                    writer.WriteElement(new SheetViews(new SheetView(new Pane { HorizontalSplit = 5, VerticalSplit = 11,
-                        TopLeftCell = "F12", ActivePane = PaneValues.BottomRight, State = PaneStateValues.Frozen }) { WorkbookViewId = 0 }));
+                    writer.WriteElement(new SheetViews(new SheetView(new Pane { HorizontalSplit = 1, VerticalSplit = 1,
+                        TopLeftCell = "B2", ActivePane = PaneValues.BottomRight, State = PaneStateValues.Frozen }) { WorkbookViewId = 0 }));
                     writer.WriteElement(new SheetFormatProperties { DefaultRowHeight = 20 });
                     writer.WriteElement(new Columns(new Column { Min = 1, Max = 12, Width = 16, CustomWidth = true },
                         new Column { Min = 13, Max = (uint)Math.Max(13, columns), Width = 20, CustomWidth = true }));
                     writer.WriteStartElement(new SheetData());
-                    uint row = 0; var merged = new List<string>();
-                    void WriteRow(IEnumerable<(string Text, double? Number, uint Style)> cells, bool merge = false, bool detail = false)
+                    uint row = 0;
+                    void WriteRow(IEnumerable<(string Text, double? Number, uint Style)> cells)
                     {
                         AnalysisOperation.CheckCancellation(); row++;
-                        writer.WriteStartElement(new Row { RowIndex = row, Height = row == 5 ? 44 : 23, CustomHeight = true, OutlineLevel = detail ? (byte)1 : (byte)0 });
+                        writer.WriteStartElement(new Row { RowIndex = row, Height = row == 1 ? 44 : 23, CustomHeight = true });
                         int column = 0;
                         foreach (var cell in cells)
                         {
@@ -109,27 +123,22 @@ public static class FailChipXlsxService
                             writer.WriteElement(value);
                         }
                         writer.WriteEndElement();
-                        if (merge && columns > 1) merged.Add($"A{row}:{ColumnName(columns)}{row}");
                     }
                     (string, double?, uint) T(string text, uint style = 0) => (text, null, style);
-                    WriteRow(new[] { T("Fail 芯片数据（附良品参考）", 5) }, true);
-                    WriteRow(new[] { T("芯片按末次 HBIN 分类：仅配置的 Pass 为良品；每颗芯片的首测与复测连续成块，按所选复测口径输出。") }, true);
-                    WriteRow(new[] { T(reference == null ? "未找到有有效测量值的 Pass 参考芯片，以下仅输出 Fail 芯片。" :
-                        "参考：仅使用 Pass 芯片统计逐项均值和 σ，优先测项覆盖最多，再选归一化均方距离最近的芯片；参考块保留其所选测试记录。") }, true);
-                    WriteRow(new[] { T($"Fail 芯片 {fails.Length:N0}；绿色=测项通过，红色=测项失败，黄色=无效，灰色=未测/不适用/剔除。" +
-                        (outlierSigma.HasValue ? $" 单次剔除均值 ± {outlierSigma:G}σ。" : "")) }, true);
                     WriteRow(IdentityHeaders.Concat(data.Items.Select(i => i.DisplayName)).Select(s => T(s, 5)));
-                    void Metadata(string name, Func<TestItemData, (string, double?, uint)> value) => WriteRow(
-                        new[] { T(name, 6) }.Concat(Enumerable.Repeat(T("", 6), IdentityHeaders.Length - 1)).Concat(data.Items.Select(value)));
+                    void Metadata(string label, Func<TestItemData, (string, double?, uint)> value) => WriteRow(
+                        new[] { T(label, 6) }.Concat(Enumerable.Repeat(T("", 6), IdentityHeaders.Length - 1)).Concat(data.Items.Select(value)));
                     Metadata("#TestNumber", i => T(i.TestNumber, 6)); Metadata("#Unit", i => T(i.ShownUnit, 6));
                     Metadata("#LSL", i => ("", i.DisplayLowLimit, 6)); Metadata("#USL", i => ("", i.DisplayHighLimit, 6));
                     Metadata("#SBIN", i => T(i.SBin, 6)); Metadata("#HBIN", i => T(i.HBin, 6));
-                    int index = 0;
-                    foreach (var chip in output)
+                    int chipIndex = 0, failIndex = 0, goodIndex = 0;
+                    foreach (var chip in sheetChips)
                     {
-                        bool good = ReferenceEquals(chip, reference); index++;
-                        var last = chip.History[^1]; string label = good ? "良品参考" : "Fail 芯片 " + (index - (reference == null ? 0 : 1));
-                        WriteRow(new[] { T($"{label} | Wafer {last.WaferId} | X={last.X} Y={last.Y} | SN/UUID {last.RetestUuid ?? last.ChipSerialNumber} | 末次 HBIN {last.HBin}", good ? 6u : 7u) }, true);
+                        string label = includeReference && ReferenceEquals(chip, reference) ? "良品参考" : chip.Good ? "复测良品 " + ++goodIndex : "Fail 芯片 " + ++failIndex;
+                        bool dark = chipIndex++ % 2 != 0;
+                        uint passStyle = dark ? 8u : 1u, failStyle = dark ? 9u : 2u;
+                        uint invalidStyle = dark ? 10u : 3u, absentStyle = dark ? 11u : 4u;
+                        uint identityStyle = dark ? 13u : 12u;
                         var order = chip.History.Select((r, n) => (r.Id, n)).ToDictionary(p => p.Id, p => p.n);
                         foreach (var record in chip.Rows)
                         {
@@ -139,35 +148,36 @@ public static class FailChipXlsxService
                                 string[] identity = { label, record.WaferId, record.X?.ToString() ?? "", record.Y?.ToString() ?? "", record.RetestUuid ?? record.SerialNumber,
                                     record.Site, order[record.Id] == 0 ? "首测" : "复测 " + order[record.Id], record.OriginalSerialNumber ?? record.SerialNumber,
                                     record.SBin, record.HBin, classifier.Classify(record.HBin).ToString(), record.Id };
-                                for (int i = 0; i < identity.Length; i++) yield return T(identity[i], i == 10 ? classifier.Classify(record.HBin) == OriginalDisposition.Pass ? 1u : 2u : 0u);
+                                for (int i = 0; i < identity.Length; i++) yield return T(identity[i], i == 10 ? classifier.Classify(record.HBin) == OriginalDisposition.Pass ? passStyle : failStyle : identityStyle);
                                 for (int i = 0; i < data.Items.Count; i++)
                                 {
-                                    if (!rows.Present(i)) { yield return T("", 4); continue; }
+                                    if (!rows.Present(i)) { yield return T("", absentStyle); continue; }
                                     var item = data.Items[i];
                                     if (!rows.TryNumber(i, out double number))
                                     {
                                         string raw = rows.Text(i);
                                         bool absent = config.NotApplicableTokens.Concat(config.MissingTokens).Append(StdfParser.NotApplicableValue).Contains(raw.Trim(), StringComparer.OrdinalIgnoreCase);
-                                        yield return T(raw, absent ? 4u : 3u); continue;
+                                        yield return T(raw, absent ? absentStyle : invalidStyle); continue;
                                     }
-                                    if (bounds != null && (number < bounds[i].Lower || number > bounds[i].Upper)) { yield return T("", 4); continue; }
+                                    if (bounds != null && (number < bounds[i].Lower || number > bounds[i].Upper)) { yield return T("", absentStyle); continue; }
                                     bool failed = item.LowLimit.HasValue && number < item.LowLimit || item.HighLimit.HasValue && number > item.HighLimit;
-                                    yield return ("", number * item.DisplayFactor, failed ? 2u : 1u);
+                                    yield return ("", number * item.DisplayFactor, failed ? failStyle : passStyle);
                                 }
                             }
-                            WriteRow(Cells(), detail: true);
+                            WriteRow(Cells());
                         }
-                        WriteRow(Array.Empty<(string, double?, uint)>());
                     }
                     writer.WriteEndElement();
-                    if (merged.Count > 0) writer.WriteElement(new MergeCells(merged.Select(s => new MergeCell { Reference = s })));
                     writer.WriteEndElement();
+                    sheets.Append(new Sheet { Name = name, SheetId = (uint)sheets.ChildElements.Count + 1, Id = workbook.GetIdOfPart(sheet) });
                 }
-                workbook.Workbook.Append(new Sheets(new Sheet { Name = "Fail 芯片", SheetId = 1, Id = workbook.GetIdOfPart(sheet) }));
+                WriteSheet("Fail 芯片", output, includeReference: true);
+                WriteSheet("复测良品芯片", retestGoods);
                 workbook.Workbook.Save();
             }
             AnalysisOperation.CheckCancellation(); File.Move(temp, path, true);
-            return new(fails.Length, output.Sum(c => c.Rows.Count), reference?.History[^1].SerialNumber);
+            return new(fails.Length, output.Sum(c => c.Rows.Count) + retestGoods.Sum(c => c.Rows.Count), reference?.History[^1].SerialNumber)
+                { RetestGoodChips = retestGoods.Length };
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }
     }
@@ -180,10 +190,11 @@ public static class FailChipXlsxService
         var fonts = new Fonts(new Font(new FontSize { Val = 11 }, new FontName { Val = "Calibri" }),
             new Font(new Bold(), new Color { Rgb = "FFFFFFFF" }, new FontName { Val = "Calibri" }));
         var fills = new Fills(new Fill(new PatternFill { PatternType = PatternValues.None }), new Fill(new PatternFill { PatternType = PatternValues.Gray125 }));
-        foreach (string color in new[] { "FFE2F0D9", "FFFCE0E8", "FFFFF2CC", "FFF1F3F5", "FF315B82", "FFE5EEF8", "FFD9E2F3" })
+        foreach (string color in new[] { "FFE2F0D9", "FFFCE0E8", "FFFFF2CC", "FFF1F3F5", "FF315B82", "FFE5EEF8", "FFD9E2F3",
+            "FFA9D18E", "FFF2A0AF", "FFFFE699", "FFD9DEE3", "FFF9FBFD", "FFE4EAF2" })
             fills.Append(new Fill(new PatternFill(new ForegroundColor { Rgb = color }) { PatternType = PatternValues.Solid }));
         var formats = new CellFormats(new CellFormat { FontId = 0, FillId = 0, BorderId = 0 });
-        for (uint i = 1; i <= 7; i++) formats.Append(new CellFormat(new Alignment { Vertical = VerticalAlignmentValues.Center, WrapText = i == 5 })
+        for (uint i = 1; i <= 13; i++) formats.Append(new CellFormat(new Alignment { Vertical = VerticalAlignmentValues.Center, WrapText = i == 5 })
             { FillId = i + 1, FontId = i == 5 ? 1u : 0u, BorderId = 0, ApplyFill = true, ApplyAlignment = true });
         return new Stylesheet(fonts, fills, new Borders(new Border()), new CellStyleFormats(new CellFormat()), formats,
             new CellStyles(new CellStyle { Name = "Normal", FormatId = 0, BuiltinId = 0 }));
