@@ -232,7 +232,7 @@ static class Probe
         using var cts = new CancellationTokenSource(); cts.Cancel();
         Reject<OperationCanceledException>(() => DataFileService.ReadForYield(path, config, cts.Token), "yield read honors cancellation");
     }
-    static string StdfFixture(bool big)
+    static string StdfFixture(bool big, uint? firstStart = null, uint? secondStart = null)
     {
         var path = P(big ? "big.stdf" : "little.stdf");
         using var output = File.Create(path); using var writer = new BinaryWriter(output);
@@ -245,7 +245,7 @@ static class Probe
         R(1, 10, w => { U4(w, 0); U4(w, 10); w.Write((byte)1); w.Write((byte)'P'); w.Write((byte)' '); w.Write((byte)' '); U2(w, 0); w.Write((byte)' '); foreach (var s in new[] { "LOT", "PRODUCT", "NODE", "TESTER", "JOB", "REV" }) C(w, s); });
         for (int wafer = 0; wafer < 2; wafer++)
         {
-            R(2, 10, w => { w.Write((byte)1); w.Write((byte)1); U4(w, (uint)(20 + wafer * 10)); C(w, "W" + wafer); });
+            R(2, 10, w => { w.Write((byte)1); w.Write((byte)1); U4(w, wafer == 0 ? firstStart ?? 20U : secondStart ?? 30U); C(w, "W" + wafer); });
             R(5, 10, w => { w.Write((byte)1); w.Write((byte)1); });
             R(15, 10, w => { U4(w, 900); w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((byte)0); U4(w, BitConverter.SingleToUInt32Bits(1.25f + wafer)); C(w, "UUID"); C(w, ""); });
             R(15, 15, w => { U4(w, 901); w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((byte)0); U2(w, 0); U2(w, 2); U4(w, BitConverter.SingleToUInt32Bits(2)); U4(w, BitConverter.SingleToUInt32Bits(3)); });
@@ -295,12 +295,87 @@ static class Probe
         var multi = ProductYieldService.Calculate(product);
         Check(multi.Files.Single().Error.Contains("多个晶圆") && multi.Yields.Count == 0, "wafer override still rejects multi-wafer files");
     }
+    static void YieldRowSources()
+    {
+        var config = Config();
+        var cold = new ProductTestStage { Id = "row-cold", Name = "cold", Kind = "CP", Required = true };
+        var hot = new ProductTestStage { Id = "row-hot", Name = "hot", Kind = "CP", Required = true };
+        ManagedDataFile File(string name, string stage, string lot, string wafer, int x, DateTime? time) => new()
+        {
+            Id = name, StageId = stage, Lot = lot, TestTime = time,
+            FilePath = WriteCsv(name + ".csv", $"SN,{x},0,1,1,1,{wafer},001,1\n")
+        };
+        var old = File("row-old", cold.Id, "L1", "W1", 0, new(2026, 1, 10));
+        var latest = File("row-latest", cold.Id, "L1", "W1", 0, new(2026, 1, 20));
+        var otherWafer = File("row-wafer", cold.Id, "L1", "W2", 1, new(2026, 1, 15));
+        var otherLot = File("row-lot", cold.Id, "L2", "W1", 0, new(2026, 1, 25));
+        var hotFile = File("row-hot-file", hot.Id, "L1", "W1", 0, new(2026, 2, 15));
+        var undated = File("row-undated", cold.Id, "L1", "W1", 9, null);
+        var failed = new ManagedDataFile { Id = "row-failed", StageId = cold.Id, Lot = "L1", FilePath = P("does-not-exist.csv") };
+        var product = new ManagedProduct { Name = "row sources", ConfigText = ConfigLoader.Serialize(config), Flow = new() { cold, hot },
+            Files = new() { old, latest, otherWafer, otherLot, hotFile, undated, failed } };
+        product.Snapshot = ProductYieldService.Calculate(product);
+        void Sources(ManagedYieldRow row, string message, params ManagedDataFile[] expected)
+        {
+            Check(row.SourceFileIds.SetEquals(expected.Select(f => f.Id)), message + " exact source IDs");
+            Check(ManagedAnalysisService.YieldFiles(product, row).Select(f => f.Id)
+                .SequenceEqual(product.Files.Where(f => expected.Contains(f)).Select(f => f.Id)), message + " registration order");
+        }
+        var wafer = ManagementTrendService.DetailYieldRows(product).Single(r => r.StageId == cold.Id && r.Lot == "L1" && r.Wafer == "W1");
+        Sources(wafer, "wafer row includes overwritten retest history", old, latest, undated);
+        Sources(ManagementTrendService.DetailYieldRows(product, period: ManagementPeriod.Lot).Single(r => r.StageId == cold.Id && r.Lot == "L1"),
+            "lot aggregation", old, latest, otherWafer, undated);
+        var january = ManagementTrendService.DetailYieldRows(product, period: ManagementPeriod.Month).Single(r => r.StageId == cold.Id && r.Period == "2026-01");
+        Sources(january, "month aggregation across lots", old, latest, otherWafer, otherLot);
+        Sources(ManagementTrendService.DetailYieldRows(product, "W2", ManagementPeriod.Month).Single(r => r.StageId == cold.Id),
+            "wafer filter before monthly aggregation", otherWafer);
+        Sources(ManagementTrendService.DetailYieldRows(product, period: ManagementPeriod.Year).Single(r => r.StageId == cold.Id && r.Period == "2026"),
+            "year aggregation", old, latest, otherWafer, otherLot);
+        Sources(ManagementTrendService.DetailYieldRows(product, period: ManagementPeriod.Month).Single(r => r.StageId == cold.Id && r.Period == ""),
+            "unknown time is isolated", undated);
+        var february = ManagementTrendService.DetailYieldRows(product, period: ManagementPeriod.Month).Single(r => r.IsCombined && r.Period == "2026-02");
+        Sources(february, "combined February retains January temperature sources", old, latest, hotFile);
+        var batches = ManagedAnalysisService.YieldSources(product, february);
+        Check(batches.Length == 2 && batches[0].Select(s => s.Path).SequenceEqual(new[] { old.FilePath, latest.FilePath }) &&
+            batches[1].Single().Path == hotFile.FilePath && batches[0][1].Options?.AutoMatch == true,
+            "combined row opens one merged batch per step");
+        var monthSources = ManagedAnalysisService.YieldSources(product, january);
+        Check(monthSources.Length == 1 && monthSources[0].Length == 4 && monthSources[0].All(s => s.ShowLotInWafer),
+            "same-step month merges all lots with separate wafer identity");
+        Check(ProductCatalogStore.Clone(february).SourceFileIds.SetEquals(february.SourceFileIds), "source links survive catalog serialization");
+        product.RetestMode = RetestMode.First;
+        product.Snapshot = ProductYieldService.Calculate(product);
+        Sources(ManagementTrendService.DetailYieldRows(product).Single(r => r.StageId == cold.Id && r.Lot == "L1" && r.Wafer == "W1"),
+            "first-test mode keeps all matching source files", old, latest, undated);
+        uint Stamp(DateTime date) => (uint)new DateTimeOffset(DateTime.SpecifyKind(date, DateTimeKind.Utc)).ToUnixTimeSeconds();
+        var multiPath = StdfFixture(false, Stamp(new(2026, 1, 15)), Stamp(new(2026, 2, 15)));
+        var metadata = StdfMetadataService.Read(multiPath);
+        var multiFile = new ManagedDataFile { Id = "row-multi", StageId = cold.Id, FilePath = multiPath, Lot = "MULTI",
+            UseStdfTestTime = true, TestTime = metadata.TestTime, DetectedStdfTestTime = metadata.TestTime };
+        product.Files = new() { multiFile };
+        product.Snapshot = ProductYieldService.Calculate(product);
+        Sources(ManagementTrendService.DetailYieldRows(product, "W0", ManagementPeriod.Month).Single(r => r.StageId == cold.Id && r.Period == "2026-01"),
+            "multi-wafer STDF actual wafer timestamp", multiFile);
+        Check(!ManagementTrendService.DetailYieldRows(product, "W0", ManagementPeriod.Month).Any(r => r.StageId == cold.Id && r.Period == "2026-02"),
+            "multi-wafer timestamp does not leak into another wafer month");
+        var specified = new ManagedDataFile { Id = "row-specified", StageId = cold.Id, Lot = "S", WaferOverride = "W", UseSpecifiedYield = true,
+            SpecifiedKind = "CP", SpecifiedTotal = 10, SpecifiedGood = 9, TestTime = new(2026, 3, 15) };
+        product.Files = new() { specified };
+        product.Snapshot = ProductYieldService.Calculate(product);
+        var manual = ManagementTrendService.DetailYieldRows(product).Single(r => r.StageId == cold.Id);
+        Check(manual.SourceFileIds.SetEquals(new[] { specified.Id }), "specified row retains its registration link");
+        Reject<InvalidDataException>(() => ManagedAnalysisService.YieldFiles(product, manual), "specified row without source reports no original file");
+        var unknown = product.Snapshot.Yields.Single(r => r.IsCombined);
+        Check(unknown.SourceFileIds.SetEquals(new[] { specified.Id }), "unavailable combined row retains underlying source registration");
+        product.Snapshot.DefinitionSignature = "old-version";
+        Check(!ProductYieldService.IsCurrent(product), "old snapshots require recomputation before file navigation");
+    }
     static int Main(string[] args)
     {
         try
         {
             folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
-            Views(); SelectionMatrix(); Projections(); ProductYield();
+            Views(); SelectionMatrix(); Projections(); ProductYield(); YieldRowSources();
             Console.WriteLine($"ALL {checks} CORE MEMORY CHECKS PASSED"); return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }

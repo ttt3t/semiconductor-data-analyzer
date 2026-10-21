@@ -105,8 +105,11 @@
                     </DockPanel>
                 </TabItem>
                 <TabItem Header="良率明细">
-                    <DataGrid x:Name="DgYields" Margin="10" FrozenColumnCount="3" ColumnHeaderStyle="{StaticResource FilterableHeader}">
-                        <DataGrid.RowStyle><Style TargetType="DataGridRow"><Style.Triggers><DataTrigger Binding="{Binding IsCombined}" Value="True"><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Background" Value="#EFF6FF"/></DataTrigger></Style.Triggers></Style></DataGrid.RowStyle>
+                    <DataGrid x:Name="DgYields" Margin="10" FrozenColumnCount="3" ColumnHeaderStyle="{StaticResource FilterableHeader}"
+                              SelectionMode="Single" SelectionUnit="FullRow" PreviewMouseRightButtonDown="YieldRow_RightButtonDown" LoadingRow="YieldRow_Loading">
+                        <DataGrid.RowStyle><Style TargetType="DataGridRow">
+                            <Style.Triggers><DataTrigger Binding="{Binding IsCombined}" Value="True"><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Background" Value="#EFF6FF"/></DataTrigger></Style.Triggers>
+                        </Style></DataGrid.RowStyle>
                         <DataGrid.Columns>
                             <DataGridTextColumn x:Name="YieldPeriodColumn" Header="统计期间" Binding="{Binding PeriodLabel}" Width="130" Visibility="Collapsed"/>
                             <DataGridTextColumn Header="批次" Binding="{Binding Lot}" Width="125"/><DataGridTextColumn Header="晶圆" Binding="{Binding Wafer}" Width="120"/>

@@ -81,6 +81,8 @@ public sealed class ManagementSnapshot
 
 public sealed class ManagedYieldRow
 {
+    // Registration IDs preserve source associations across wafer/lot/time aggregation.
+    public HashSet<string> SourceFileIds { get; set; } = new(StringComparer.Ordinal);
     public string Period { get; set; } = "";
     [JsonIgnore] public string PeriodLabel => Period.Length == 0 ? "未指定时间" : Period;
     public string Kind { get; set; } = "";

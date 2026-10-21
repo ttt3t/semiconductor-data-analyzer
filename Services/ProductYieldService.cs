@@ -6,7 +6,7 @@ using SemiconductorCsvAnalyzer.Models;
 
 namespace SemiconductorCsvAnalyzer.Services;
 
-public static class ProductYieldService
+public static partial class ProductYieldService
 {
     private readonly record struct DeviceKey(string Kind, string Lot, string Wafer, string Identity);
     private sealed record Observation(bool KnownIdentity, string HBin, string SBin, OriginalDisposition Disposition, DateTime? TestTime);
@@ -40,7 +40,7 @@ public static class ProductYieldService
     }
 
     public static string Signature(ManagedProduct product) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-        JsonSerializer.Serialize(new { Schema = 2, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
+        JsonSerializer.Serialize(new { Schema = 3, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
             product.IncludePartialPass, product.Files }))));
 
     public static bool IsCurrent(ManagedProduct product)
@@ -69,6 +69,7 @@ public static class ProductYieldService
         Validate(product);
         var result = new ManagementSnapshot { DefinitionSignature = Signature(product) };
         var devices = new Dictionary<DeviceKey, Dictionary<string, Observation>>();
+        var sources = new SourceIndex();
         for (int i = 0; i < product.Files.Count; i++)
         {
             token.ThrowIfCancellationRequested();
@@ -80,7 +81,7 @@ public static class ProductYieldService
                 if (file.UseSpecifiedYield) { ValidateSpecified(product, file); continue; }
                 var stage = product.Flow.SingleOrDefault(s => s.Id == file.StageId) ?? throw new InvalidDataException("文件的测试步骤已不存在。");
                 if (string.IsNullOrWhiteSpace(file.Lot)) throw new InvalidDataException("未指定批次。");
-                ReadFile(product, file, stage, state, devices, token);
+                ReadFile(product, file, stage, state, devices, sources, token);
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or FormatException)
@@ -98,9 +99,10 @@ public static class ProductYieldService
             foreach (var stage in stages)
             {
                 var selected = population.Where(d => d.Value.ContainsKey(stage.Id)).Select(d => d.Value[stage.Id]).ToArray();
-                void AddStage(Observation[] observations, string period, List<ManagedYieldRow> yields, List<ManagedCategoryCount> counts)
+                void AddStage(Observation[] observations, string? period, List<ManagedYieldRow> yields, List<ManagedCategoryCount> counts)
                 {
-                    var row = Row(group.Key, stage.Id, stage.Label, false); row.Period = period;
+                    var row = Row(group.Key, stage.Id, stage.Label, false); row.Period = period ?? "";
+                    row.SourceFileIds.UnionWith(sources.Find(group.Key, stage.Id, period));
                     row.Total = observations.Length;
                     row.Pass = observations.Count(o => o.HBin.Length > 0 && o.Disposition == OriginalDisposition.Pass);
                     row.PartialPass = observations.Count(o => o.HBin.Length > 0 && o.Disposition == OriginalDisposition.PartialPass);
@@ -113,16 +115,18 @@ public static class ProductYieldService
                     var byCategory = observations.Where(o => o.SBin.Length > 0).GroupBy(o => categories.GetValueOrDefault(BinStatisticsService.NormalizeBin(o.SBin), "未分类"))
                         .ToDictionary(g => g.Key, g => g.Count());
                     foreach (string name in config.SBinCategories.Keys.Concat(byCategory.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
-                        counts.Add(new() { Kind = row.Kind, Lot = row.Lot, Wafer = row.Wafer, StageId = stage.Id, Period = period,
+                        counts.Add(new() { Kind = row.Kind, Lot = row.Lot, Wafer = row.Wafer, StageId = stage.Id, Period = period ?? "",
                             Category = name, Count = byCategory.GetValueOrDefault(name), Total = valid });
                 }
-                AddStage(selected, "", result.Yields, result.Categories);
+                AddStage(selected, null, result.Yields, result.Categories);
                 foreach (var month in selected.GroupBy(o => Month(o.TestTime)))
                     AddStage(month.ToArray(), month.Key, result.MonthlyYields, result.MonthlyCategories);
             }
             var required = stages.Where(s => s.Required).Select(s => s.Id).ToArray();
             var combined = Row(group.Key, "COMBINED:" + group.Key.Kind, group.Key.Kind + " 综合", true);
+            foreach (var stage in stages) combined.SourceFileIds.UnionWith(sources.Find(group.Key, stage.Id, null));
             var monthly = new Dictionary<string, ManagedYieldRow>();
+            var periodSources = new Dictionary<string, HashSet<(string Stage, string Month)>>();
             foreach (var device in population.Where(d => required.Any(d.Value.ContainsKey)))
             {
                 var observations = device.Value;
@@ -131,8 +135,19 @@ public static class ProductYieldService
                 var tested = required.Where(observations.ContainsKey).Select(s => observations[s]).ToArray();
                 string month = tested.All(o => o.TestTime.HasValue) ? Month(tested.Max(o => o.TestTime)) : "";
                 if (!monthly.TryGetValue(month, out var periodRow))
+                {
                     monthly[month] = periodRow = Row(group.Key, combined.StageId, combined.StageName, true);
+                    periodSources[month] = new();
+                }
                 periodRow.Period = month;
+                // A combined month can depend on earlier-temperature files from
+                // other months; registration timestamps alone cannot recover this.
+                foreach (var observation in observations)
+                {
+                    var dependency = (Stage: observation.Key, Month: Month(observation.Value.TestTime));
+                    if (periodSources[month].Add(dependency))
+                        periodRow.SourceFileIds.UnionWith(sources.Find(group.Key, dependency.Stage, dependency.Month));
+                }
                 bool known = observations.Values.All(o => o.KnownIdentity);
                 bool sufficientIdentity = known || required.Length == 1; // One required step needs no cross-temperature matching.
                 bool missingStage = required.Any(s => !observations.ContainsKey(s));
@@ -197,6 +212,7 @@ public static class ProductYieldService
                 Period = Month(file.TestTime),
                 StageName = combined ? kind + " 综合" : product.Flow.Single(s => s.Id == file.StageId).Label,
                 Source = combined ? "指定综合良率" : "指定良率", Note = file.SpecifiedOrigin,
+                SourceFileIds = new(StringComparer.Ordinal) { file.Id },
                 Total = file.SpecifiedTotal ?? 0, Good = file.SpecifiedGood ?? 0,
                 Failed = file.SpecifiedTotal.HasValue ? file.SpecifiedTotal.Value - file.SpecifiedGood!.Value : 0,
                 HasSampleCount = file.SpecifiedTotal.HasValue, HasDispositionCounts = false,
@@ -228,6 +244,8 @@ public static class ProductYieldService
                 var unavailable = new ManagedYieldRow { Kind = group.Key.Kind, Lot = group.Key.Lot, Wafer = group.Key.Wafer,
                 StageId = id, StageName = group.Key.Kind + " 综合", IsCombined = true, CanCalculateYield = false, HasSampleCount = false,
                 HasDispositionCounts = false, Source = "无法自动综合", Note = "存在指定的阶段良率，缺少逐颗芯片跨温对应关系；可另行登记物理分 Bin 得到的综合良率。" };
+                unavailable.SourceFileIds.UnionWith(snapshot.Yields.Where(r => !r.IsCombined && r.Kind == group.Key.Kind &&
+                    r.Lot == group.Key.Lot && r.Wafer == group.Key.Wafer).SelectMany(r => r.SourceFileIds));
                 snapshot.Yields.Add(unavailable);
                 // The true joint population/date is unknown; retain an explicit unknown-time result.
                 snapshot.MonthlyYields.Add(ProductCatalogStore.Clone(unavailable));
@@ -250,7 +268,7 @@ public static class ProductYieldService
     private static string Month(DateTime? time) => time?.ToString("yyyy-MM", System.Globalization.CultureInfo.InvariantCulture) ?? "";
 
     private static void ReadFile(ManagedProduct product, ManagedDataFile file, ProductTestStage stage, ManagedFileResult state,
-        Dictionary<DeviceKey, Dictionary<string, Observation>> devices, CancellationToken token)
+        Dictionary<DeviceKey, Dictionary<string, Observation>> devices, SourceIndex sources, CancellationToken token)
     {
         using var operation = new AnalysisOperation(token);
         var info = new FileInfo(file.FilePath);
@@ -287,6 +305,7 @@ public static class ProductYieldService
         info.Refresh();
         if (!info.Exists || info.Length != length || info.LastWriteTimeUtc != modified) throw new IOException("文件在计算期间被修改，请重新计算。");
         token.ThrowIfCancellationRequested();
+        sources.Add(file, stage, readings);
         foreach (var reading in readings)
         {
             if (!devices.TryGetValue(reading.Key, out var stages)) devices[reading.Key] = stages = new(StringComparer.Ordinal);

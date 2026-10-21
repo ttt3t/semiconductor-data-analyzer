@@ -17,6 +17,7 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 - 导入可按文件名字符位置识别片号、自动或指定格式识别测试时间，并可手动修改；未识别时间默认当前系统时间，支持统一修改全部时间。规则按产品记忆。数据文件支持多选同一步骤后自动合并打开分析器，保留各自配置与晶圆号。
 - STDF / 压缩 STDF 登记时优先自动填入 MIR Lot、WIR / WRR 晶圆号及测试时间；多晶圆保留各自时间供年月统计，支持手动覆盖。基本信息在后台扫描，不建立测量矩阵。
 - 支持删除产品与多条数据登记，仅删除本机目录记录及统计，所有原文件保留。
+- 良率明细行支持右键打开关联数据或在资源管理器定位；批次、月、年汇总按步骤合并打开，跨温综合分步骤打开，多个源文件分别定位。
 - 产品目录和统计摘要存于本机用户目录 `SemiconductorCsvAnalyzer/ProductLibrary`；保存时保留上一份备份，不保存完整测量矩阵。
 
 只启动独立分析器可使用 `SemiconductorCsvAnalyzer.exe --analyzer`。详细口径见 [使用手册](Docs/UserGuide.md)。
