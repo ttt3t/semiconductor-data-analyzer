@@ -23,8 +23,10 @@ internal sealed class DiskColumnStore : DiskResource
     private readonly FileStream _data;
     private bool _complete;
     private readonly bool _readerOnly;
+    private IDisposable? _workLease;
     public DiskColumnStore(int rows, IReadOnlyList<bool> preferSingle)
     {
+        _workLease = DiskStorage.ReserveWork();
         _sourceRows = rows; _columns = preferSingle.Select(s => new Column { Single = s }).ToArray();
         _batchRows = Math.Max(1, Math.Min(4096, DiskStorage.WorkBufferBytes / Math.Max(8, preferSingle.Count * 8)));
         _batch = new double[checked(_batchRows * preferSingle.Count)]; Array.Fill(_batch, double.NaN);
@@ -97,6 +99,7 @@ internal sealed class DiskColumnStore : DiskResource
         }
         _data.Flush(); _complete = true; _spool.Dispose(); _spool = null; _index!.Dispose(); _index = null;
         File.Delete(_spoolPath); File.Delete(_indexPath);
+        _workLease?.Dispose(); _workLease = null;
     }
     public int Count(int item) => _columns[item].Count;
     public bool Single(int item) => _columns[item].Single;
@@ -149,7 +152,7 @@ internal sealed class DiskColumnStore : DiskResource
     }
     protected override void Close()
     {
-        _transaction?.Dispose(); _index?.Dispose(); _spool?.Dispose(); _data.Dispose(); _batch = null;
-        foreach (string file in _readerOnly ? Array.Empty<string>() : new[] { _spoolPath, _indexPath, _dataPath }) try { File.Delete(file); } catch (IOException) { }
+        _transaction?.Dispose(); _index?.Dispose(); _spool?.Dispose(); _data?.Dispose(); _batch = null; _workLease?.Dispose(); _workLease = null;
+        foreach (string? file in _readerOnly ? Array.Empty<string>() : new[] { _spoolPath, _indexPath, _dataPath }) if (file != null) try { File.Delete(file); } catch (IOException) { }
     }
 }

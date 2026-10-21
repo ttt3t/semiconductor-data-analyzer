@@ -67,7 +67,9 @@ public static class RetestIdentityService
         AnalysisOperation.CheckCancellation();
         string signature = config.TestMode + ":" + string.Join(",", config.UuidTestNumbers) + ":" +
             string.Join(",", config.MissingTokens.Concat(config.NotApplicableTokens));
-        if (data.RetestIdentitySignature == signature || config.TestMode == TestAnalysisMode.CP && data.Records.All(r => !r.IsFtIdentity)) return data;
+        if (data.RetestIdentitySignature == signature) return data;
+        if (config.TestMode == TestAnalysisMode.CP && data.Records.All(r => !r.IsFtIdentity))
+        { data.RetestIdentitySignature = signature; return data; }
         Reader? reader = config.TestMode == TestAnalysisMode.FT ? new(data.Items, config) : null;
         int missing = 0;
         var records = data.Records.Select(source =>

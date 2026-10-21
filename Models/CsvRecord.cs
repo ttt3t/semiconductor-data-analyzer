@@ -7,50 +7,50 @@ public sealed class CsvRecord
 {
     [JsonIgnore] internal Action? Changed;
     [JsonInclude] internal long StorageOrder { get; set; }
-    private string _field1 = "";
-    public string Product { get => _field1; set { _field1 = value; Changed?.Invoke(); } }
-    private string _field2 = "";
-    public string Program { get => _field2; set { _field2 = value; Changed?.Invoke(); } }
-    private string _field3 = "";
-    public string Lot { get => _field3; set { _field3 = value; Changed?.Invoke(); } }
-    private DateTime? _field13;
-    public DateTime? StdfTestTime { get => _field13; set { _field13 = value; Changed?.Invoke(); } }
-    private string _field4 = Guid.NewGuid().ToString("N");
-    public string Id { get => _field4; set { _field4 = value; Changed?.Invoke(); } }
-    private string _field5 = "";
-    public string WaferId { get => _field5; set { _field5 = value; Changed?.Invoke(); } }
-    private string _field6 = "";
-    public string SerialNumber { get => _field6; set { _field6 = value; Changed?.Invoke(); } }
+    private string _product = "";
+    public string Product { get => _product; set { if (_product == value) return; _product = value; Changed?.Invoke(); } }
+    private string _program = "";
+    public string Program { get => _program; set { if (_program == value) return; _program = value; Changed?.Invoke(); } }
+    private string _lot = "";
+    public string Lot { get => _lot; set { if (_lot == value) return; _lot = value; Changed?.Invoke(); } }
+    private DateTime? _stdfTestTime;
+    public DateTime? StdfTestTime { get => _stdfTestTime; set { if (_stdfTestTime == value) return; _stdfTestTime = value; Changed?.Invoke(); } }
+    private string _id = Guid.NewGuid().ToString("N");
+    public string Id { get => _id; set { if (_id == value) return; _id = value; Changed?.Invoke(); } }
+    private string _waferId = "";
+    public string WaferId { get => _waferId; set { if (_waferId == value) return; _waferId = value; Changed?.Invoke(); } }
+    private string _serialNumber = "";
+    public string SerialNumber { get => _serialNumber; set { if (_serialNumber == value) return; _serialNumber = value; Changed?.Invoke(); } }
     // Display/run serials may be reassigned; physical no-XY retest identity must not change.
     // Null means the source serial has never been replaced, while empty means it was absent.
-    private string? _field14;
-    public string? OriginalSerialNumber { get => _field14; set { _field14 = value; Changed?.Invoke(); } }
+    private string? _originalSerialNumber;
+    public string? OriginalSerialNumber { get => _originalSerialNumber; set { if (_originalSerialNumber == value) return; _originalSerialNumber = value; Changed?.Invoke(); } }
     public string ChipSerialNumber => OriginalSerialNumber ?? SerialNumber;
     // Keep derived UUID metadata when switching back to CP; never overwrite the source SN.
-    private bool _field15;
-    public bool IsFtIdentity { get => _field15; set { _field15 = value; Changed?.Invoke(); } }
-    private string? _field16;
-    public string? RetestUuid { get => _field16; set { _field16 = value; Changed?.Invoke(); } }
-    private string _field7 = "";
-    public string UuidTestNumbers { get => _field7; set { _field7 = value; Changed?.Invoke(); } }
-    private int? _field17;
-    public int? X { get => _field17; set { _field17 = value; Changed?.Invoke(); } }
-    private int? _field18;
-    public int? Y { get => _field18; set { _field18 = value; Changed?.Invoke(); } }
-    private string _field8 = "";
-    public string Site { get => _field8; set { _field8 = value; Changed?.Invoke(); } }
+    private bool _isFtIdentity;
+    public bool IsFtIdentity { get => _isFtIdentity; set { if (_isFtIdentity == value) return; _isFtIdentity = value; Changed?.Invoke(); } }
+    private string? _retestUuid;
+    public string? RetestUuid { get => _retestUuid; set { if (_retestUuid == value) return; _retestUuid = value; Changed?.Invoke(); } }
+    private string _uuidTestNumbers = "";
+    public string UuidTestNumbers { get => _uuidTestNumbers; set { if (_uuidTestNumbers == value) return; _uuidTestNumbers = value; Changed?.Invoke(); } }
+    private int? _x;
+    public int? X { get => _x; set { if (_x == value) return; _x = value; Changed?.Invoke(); } }
+    private int? _y;
+    public int? Y { get => _y; set { if (_y == value) return; _y = value; Changed?.Invoke(); } }
+    private string _site = "";
+    public string Site { get => _site; set { if (_site == value) return; _site = value; Changed?.Invoke(); } }
     // Legacy integrated-CSV payload only; never used for classification or filtering.
-    private string _field9 = "";
-    public string Result { get => _field9; set { _field9 = value; Changed?.Invoke(); } }
-    private string _field10 = "";
-    public string SBin { get => _field10; set { _field10 = value; Changed?.Invoke(); } }
-    private string _field11 = "";
-    public string HBin { get => _field11; set { _field11 = value; Changed?.Invoke(); } }
-    private MeasurementCollection _field12 = new();
+    private string _result = "";
+    public string Result { get => _result; set { if (_result == value) return; _result = value; Changed?.Invoke(); } }
+    private string _sBin = "";
+    public string SBin { get => _sBin; set { if (_sBin == value) return; _sBin = value; Changed?.Invoke(); } }
+    private string _hBin = "";
+    public string HBin { get => _hBin; set { if (_hBin == value) return; _hBin = value; Changed?.Invoke(); } }
+    private MeasurementCollection _measurements = new();
     [JsonIgnore]
-    public MeasurementCollection Measurements { get => _field12; set { _field12 = value; Changed?.Invoke(); } }
+    public MeasurementCollection Measurements { get => _measurements; set { if (_measurements == value) return; _measurements = value; Changed?.Invoke(); } }
     // A yield-only read retains UUID fields, but still distinguishes an empty row
     // from a row with measurements in columns outside that projection.
     private bool _hasNonblank;
-    [JsonInclude] internal bool HasNonblankMeasurements { get => _hasNonblank; set { _hasNonblank = value; Changed?.Invoke(); } }
+    [JsonInclude] internal bool HasNonblankMeasurements { get => _hasNonblank; set { if (_hasNonblank == value) return; _hasNonblank = value; Changed?.Invoke(); } }
 }

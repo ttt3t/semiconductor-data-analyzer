@@ -8,6 +8,13 @@ static class DiskStorageProbe
     static int checks;
     static void Check(bool value, string message)
     { if (!value) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
+    private sealed class DescendingValues(int count) : IReadOnlyList<TestValue>
+    {
+        public int Count => count;
+        public TestValue this[int index] => new() { Value = count - index };
+        public IEnumerator<TestValue> GetEnumerator() { for (int i = 0; i < Count; i++) yield return this[i]; }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
     static CsvParseResult Fixture(int chips, bool disk)
     {
         var records = new RecordList(0, disk);
@@ -39,6 +46,9 @@ static class DiskStorageProbe
         using (var keys = DiskKeySet.From(new[] { "one", "two", "文本" }))
         using (var other = DiskKeySet.From(new[] { "two", "three" }))
         { keys.UnionWith(other); Check(keys.Count == 4 && keys.Contains("three") && keys.Contains("文本"), "disk membership SQL union preserves ordinal keys and count"); }
+        var vectors = Enumerable.Range(0, 200).Select(_ => PagedVector<long>.From(Enumerable.Range(0, 8000).Select(i => (long)i))).ToArray();
+        Check(DiskStorage.SmallVectorBytes <= DiskStorage.SmallVectorBudget && vectors.Any(v => v.IsOnDisk) && vectors.All(v => v[7999] == 7999), "many small column indices share a process-wide spill budget");
+        foreach (var vector in vectors) vector.Dispose();
         var small = Fixture(50, false); var large = Fixture(2100, true);
         using var lease = new DatasetLease(large.Records);
         Check(large.Records.IsOnDisk && large.Items.All(i => i.Values.IsDiskBacked), "identity and all numeric columns spill from first imported record");
@@ -87,6 +97,8 @@ static class DiskStorageProbe
         double prior = double.NegativeInfinity; int total = 0; bool inOrder = true;
         foreach (double value in ordered) { inOrder &= value >= prior; prior = value; total++; }
         Check(inOrder && total == ExternalValueSort.RunValues + 177, "exact external median sort crosses run boundary without lost values");
+        int medianCount = ExternalValueSort.RunValues + 2;
+        Check(StatisticsService.CalculateMedian(new DescendingValues(medianCount)) == (medianCount + 1) * .5, "large-column median remains exact across spilled runs");
         var diskSimulation = SimulationSnapshot.Build(large, new(), RetestMode.Last, default);
         var smallSimulation = SimulationSnapshot.Build(small, new(), RetestMode.Last, default);
         Check(diskSimulation.Count == 2100 && diskSimulation.States.Select((states, item) => states.Select((state, chip) => state == smallSimulation.States[item][chip % 50]).All(v => v)).All(v => v), "simulation state matrix streams chip histories to disk");
@@ -95,6 +107,25 @@ static class DiskStorageProbe
         using (var rows = new PagedObjectRows<ManagedFileResult>(Enumerable.Range(0, 6000).Select(i => new ManagedFileResult { FileId = "F" + i, Records = i })))
         { DiskStorage.Trim(); Check(rows.Count == 6000 && rows[4096].FileId == "F4096" && rows[5999].Records == 5999, "management table metadata pages remain exact"); }
         Management(folder);
+        string cancelledPath = Path.Combine(folder, "disk-cancel.csv");
+        using (var writer = new StreamWriter(cancelledPath))
+        {
+            writer.WriteLine("SN,X,Y,Site,SBIN,HBIN,Wafer,T\nLSL,,,,,,,0\nUSL,,,,,,,2\nUnit,,,,,,,V");
+            for (int i = 0; i < 100000; i++) writer.WriteLine($"{i + 1},{i},0,1,1,1,W,1");
+        }
+        string cache = Path.GetDirectoryName(DiskStorage.NewPath(".probe"))!;
+        var priorFiles = Directory.EnumerateFiles(cache, Environment.ProcessId + "-*").ToHashSet();
+        bool cancelled = false;
+        using (var cancellation = new CancellationTokenSource())
+        using (var cancelledOperation = new AnalysisOperation(cancellation.Token))
+        {
+            cancellation.CancelAfter(30);
+            try { CsvParser.Parse(cancelledPath, new() { TestItemRow = 1, LowLimitRow = 2, HighLimitRow = 3, UnitRow = 4,
+                DataStartRow = 5, TestItemStartColumn = 8, SerialNumberColumn = 1, XColumn = 2, YColumn = 3, SiteColumn = 4,
+                SBinColumn = 5, HBinColumn = 6, WaferColumn = 7 }, null, cancellation.Token); }
+            catch (OperationCanceledException) { cancelled = true; }
+        }
+        Check(cancelled && !Directory.EnumerateFiles(cache, Environment.ProcessId + "-*").Except(priorFiles).Any(), "mid-import cancellation releases all newly constructed structured cache files");
         DiskStorage.ConfigureBudget(256); Check(DiskStorage.CachedBytes <= DiskStorage.CacheBudgetBytes, "global data page cache respects shared byte budget");
         Console.WriteLine($"DISK STORAGE: {checks} CHECKS PASSED"); return checks;
     }

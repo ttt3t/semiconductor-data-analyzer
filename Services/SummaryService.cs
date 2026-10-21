@@ -93,6 +93,7 @@ public static class SummaryService
             config.OutlierSigma, item.DisplayFactor, item.DisplayUnit, Format = format, Errors = errors });
         if (cacheKey != null && cache!.ReadMetric(cacheKey) is string cached)
         { var saved = System.Text.Json.JsonSerializer.Deserialize<TestItemSummary>(cached, DiskStorage.JsonOptions)!; saved.Data = item; return saved; }
+        using var work = DiskStorage.ReserveWork();
         var (stats, robust, median) = StatisticsService.CalculateSummaryMetrics(
             values, item.LowLimit, item.HighLimit, config.RemoveOutliers, config.OutlierSigma);
         long.TryParse(item.TestNumber, out long testNumber);

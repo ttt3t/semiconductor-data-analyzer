@@ -63,7 +63,7 @@ public static class SampleFilterService
             records = data.Records.Where(r => included.Contains(RecordList.RecordStore.Key(DatasetService.ChipKey(r)))).ToRecordList();
         }
         AnalysisOperation.CheckCancellation();
-        records.ScopeKey = data.Records.ScopeKey + ":filter:" + mode + ":" + match + ":" + System.Text.Json.JsonSerializer.Serialize(rules);
+        records.ScopeKey = data.Records.ScopeKey + ":filter:" + mode + ":" + match + ":" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(rules)));
         var result = DatasetService.CreateView(data, records);
         result.SourceDescription = data.SourceDescription;
         return result;

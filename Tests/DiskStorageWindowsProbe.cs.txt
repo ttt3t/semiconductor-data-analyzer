@@ -44,6 +44,8 @@ static class Probe
             var source = ScatterSeries.BuildSorted(item.Values, 0, 2, ScatterOrder.Site, trackChips: true);
             var original = (ScatterSeries)typeof(object).GetMethod("MemberwiseClone", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(source, null)!;
             var memoryPoints = new PagedVector<ScatterPoint>(); Set(memoryPoints, "_small", source.Points.ToList()); Set(memoryPoints, "_count", source.Points.Count);
+            var accounting = typeof(DiskStorage).GetField("SmallVectorBytes", BindingFlags.Static | BindingFlags.NonPublic)!;
+            accounting.SetValue(null, (long)accounting.GetValue(null)! + source.Points.Count * 24L);
             typeof(ScatterSeries).GetProperty("Points")!.SetValue(original, memoryPoints);
             var smallPlot = new ScatterPlotControl { Width = 900, Height = 450 }; smallPlot.SetSeries(original, 0, 2, "V");
             var window = new Window { Content = smallPlot, SizeToContent = SizeToContent.WidthAndHeight }; window.Show(); Pump();
@@ -67,6 +69,15 @@ static class Probe
             using (var book = new XLWorkbook(fail)) Check(book.Worksheets.Count == 2 && book.Worksheets.Worksheet(2).LastRowUsed()!.RowNumber() == 6007, "independent Fail worker shares cache and exports both sheets");
             string report = Path.Combine(folder, "worker-report.xlsx"); Wait(Worker("SaveReportAsync", report, data, new AnalyzerConfig(), new XlsxReportOptions(new[] { "W" }, RetestMode.Last, null, 0, true, Array.Empty<string>()), "disk regression"));
             using (var book = new XLWorkbook(report)) Check(book.Worksheets.Count == 4, "independent report worker exports four sheets and exits");
+            string cancelled = Path.Combine(folder, "cancelled.xlsx"); File.WriteAllText(cancelled, "original destination");
+            using (var cancellation = new CancellationTokenSource())
+            using (var cancelledOperation = new AnalysisOperation(cancellation.Token))
+            {
+                var task = Worker("SaveFailAsync", cancelled, data, new AnalyzerConfig(), new[] { "W" }, RetestMode.All, null!);
+                cancellation.CancelAfter(100);
+                try { Wait(task); throw new Exception("Export ignored cancellation"); } catch (OperationCanceledException) { }
+                Check(File.ReadAllText(cancelled) == "original destination" && !Directory.EnumerateFiles(folder, "cancelled.xlsx.*").Any(), "cancelled export terminates child, preserves destination and removes temporary workbooks");
+            }
             if (args.Length > 1)
             {
                 var snapshotType = typeof(CsvParser).Assembly.GetType("SemiconductorCsvAnalyzer.Services.DiskDatasetSnapshot")!;

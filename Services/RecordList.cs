@@ -101,6 +101,7 @@ public sealed class RecordList : IList<CsvRecord>, IReadOnlyList<CsvRecord>
             Connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = _path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString()); Connection.Open();
             using (var c = Connection.CreateCommand()) { c.CommandText = "PRAGMA cache_size=-2048; PRAGMA mmap_size=0; PRAGMA temp_store=FILE"; c.ExecuteNonQuery(); }
             Connection.CreateCollation("ORDINAL", StringComparer.Ordinal.Compare); Connection.CreateCollation("ORDINAL_IGNORE_CASE", StringComparer.OrdinalIgnoreCase.Compare);
+            using (var c = Connection.CreateCommand()) { c.CommandText = "SELECT COUNT(*) FROM records"; if (Convert.ToInt32(c.ExecuteScalar()) != Count) throw new InvalidDataException("身份缓存行数校验失败。"); }
             foreach (string path in snapshot.RawPaths) { var raw = new RawMeasurementStore(path); _stores.Add(raw); owner.RawStores.Add(raw); }
             foreach (string[] schema in snapshot.Schemas) _schemas.Add(new(schema));
         }
@@ -203,14 +204,20 @@ public sealed class RecordList : IList<CsvRecord>, IReadOnlyList<CsvRecord>
         internal PagedVector<int> Slots(string sql)
         {
             Flush(); var slots = new PagedVector<int>();
+            try
+            {
             lock (DiskStorage.Sync)
             { using var c = Connection.CreateCommand(); c.CommandText = sql; using var reader = c.ExecuteReader(); while (reader.Read()) { AnalysisOperation.CheckCancellation(); slots.Add(reader.GetInt32(0)); } }
             slots.Seal(); return slots;
+            }
+            catch { slots.Dispose(); throw; }
         }
         internal readonly record struct GroupRow(int Slot, int Count);
         internal PagedVector<GroupRow> GroupRows(bool reverse = false)
         {
             Flush(); var rows = new PagedVector<GroupRow>();
+            try
+            {
             lock (DiskStorage.Sync)
             {
                 using var c = Connection.CreateCommand();
@@ -218,6 +225,8 @@ public sealed class RecordList : IList<CsvRecord>, IReadOnlyList<CsvRecord>
                 using var r = c.ExecuteReader(); while (r.Read()) { AnalysisOperation.CheckCancellation(); rows.Add(new(r.GetInt32(0), r.GetInt32(1))); }
             }
             rows.Seal(); return rows;
+            }
+            catch { rows.Dispose(); throw; }
         }
         public IEnumerable<CsvRecord> Query(string sql)
         {
@@ -266,7 +275,7 @@ public sealed class RecordList : IList<CsvRecord>, IReadOnlyList<CsvRecord>
                 using var r = c.ExecuteReader(); var result = new List<string>(); while (r.Read()) result.Add(r.GetString(0)); return result;
             }
         }
-        protected override void Close() { _codes?.Dispose(); _transaction?.Dispose(); Connection.Dispose(); if (!_readerOnly) try { File.Delete(_path); } catch (System.IO.IOException) { } }
+        protected override void Close() { _codes?.Dispose(); _transaction?.Dispose(); Connection?.Dispose(); if (!_readerOnly && _path != null) try { File.Delete(_path); } catch (System.IO.IOException) { } }
     }
 }
 

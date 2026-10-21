@@ -52,12 +52,13 @@ internal static class ExportWorker
     private static async Task<Result> RunAsync(Job job, CancellationToken token)
     {
         await Gate.WaitAsync(token);
-        string manifest = DiskStorage.NewPath(".job.json"), output = Path.GetFullPath(job.Output);
-        // Replace the destination only after the child has finished successfully.
-        job.Output = output + "." + Guid.NewGuid().ToString("N") + ".xlsx";
-        job.Result = DiskStorage.NewPath(".result.json"); job.DataMemoryMiB = UiPreferencesService.Current.Value.DataMemoryMiB;
+        string manifest = "", temporaryOutput = "";
         try
         {
+            manifest = DiskStorage.NewPath(".job.json"); string output = Path.GetFullPath(job.Output);
+            // Replace the destination only after the child has finished successfully.
+            temporaryOutput = job.Output = output + "." + Guid.NewGuid().ToString("N") + ".xlsx";
+            job.Result = DiskStorage.NewPath(".result.json"); job.DataMemoryMiB = UiPreferencesService.Current.Value.DataMemoryMiB;
             await using (var file = File.Create(manifest)) await JsonSerializer.SerializeAsync(file, job, cancellationToken: token);
             var start = new ProcessStartInfo { FileName = Environment.ProcessPath ?? throw new IOException("无法定位当前程序。"), UseShellExecute = false, CreateNoWindow = true };
             if (Assembly.GetEntryAssembly() != Assembly.GetExecutingAssembly()) start.FileName = "dotnet";
@@ -75,8 +76,17 @@ internal static class ExportWorker
         }
         finally
         {
-            foreach (string file in new[] { manifest, job.Result, job.Output }) try { File.Delete(file); } catch (IOException) { } catch (UnauthorizedAccessException) { }
-            Gate.Release();
+            try
+            {
+                foreach (string file in new[] { manifest, job.Result, temporaryOutput }.Where(p => p.Length > 0))
+                    try { File.Delete(file); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+                if (temporaryOutput.Length > 0)
+                    foreach (string file in Directory.EnumerateFiles(Path.GetDirectoryName(temporaryOutput)!, Path.GetFileName(temporaryOutput) + ".*"))
+                        try { File.Delete(file); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            finally { Gate.Release(); }
         }
     }
     internal static int Execute(string path)
@@ -86,7 +96,7 @@ internal static class ExportWorker
         {
             using (var manifest = File.OpenRead(path)) job = JsonSerializer.Deserialize<Job>(manifest) ?? throw new InvalidDataException("导出任务为空。");
             if (job.Version != DiskStorage.FormatVersion) throw new InvalidDataException("导出任务版本不匹配。");
-            DiskStorage.ConfigureBudget(job.DataMemoryMiB);
+            DiskStorage.ConfigureExportBudget(job.DataMemoryMiB);
             using var operation = new AnalysisOperation();
             FailChipExportResult? result = null;
             if (job.Kind == "management") ManagementReportService.SaveWorkbook(job.Output, job.Product!, job.Filter, default, job.Period);

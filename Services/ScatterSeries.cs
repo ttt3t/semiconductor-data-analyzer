@@ -120,6 +120,8 @@ public sealed class ScatterSeries
     {
         cancellationToken.ThrowIfCancellationRequested();
         var points = new PagedVector<ScatterPoint>();
+        try
+        {
         int count = 0;
         double min = double.PositiveInfinity, max = double.NegativeInfinity;
         for (int i = 0; i < values.Count; i++)
@@ -137,12 +139,15 @@ public sealed class ScatterSeries
         points.Seal();
         return new ScatterSeries { Points = points, SampleCount = values.Count, Minimum = min, Maximum = max,
             _identityValues = trackChips ? values : null };
+        }
+        catch { points.Dispose(); throw; }
     }
 
     private static ScatterSeries BuildDiskSorted(IReadOnlyList<TestValue> values, double? lsl, double? usl,
         ScatterOrder order, CancellationToken token, IReadOnlyList<string>? waferOrder, bool trackChips)
     {
         string path = DiskStorage.NewPath(".point-order");
+        PagedVector<ScatterPoint>? points = null;
         try
         {
             using var database = DiskStorage.OpenDatabase(path);
@@ -166,7 +171,7 @@ public sealed class ScatterSeries
                 }
                 transaction.Commit();
             }
-            var points = new PagedVector<ScatterPoint>(); var groups = new List<ScatterGroup>();
+            points = new PagedVector<ScatterPoint>(); var groups = new List<ScatterGroup>();
             using var read = database.CreateCommand();
             read.CommandText = "SELECT source,wafer,wafername,site,value FROM points ORDER BY " +
                 (order == ScatterOrder.Site ? "sitenum,site COLLATE ORDINAL_IGNORE_CASE,site COLLATE ORDINAL," : order == ScatterOrder.Wafer ? "wafer," : "") +
@@ -190,6 +195,7 @@ public sealed class ScatterSeries
             return new ScatterSeries { Points = points, SampleCount = values.Count, Minimum = points.Count == 0 ? 0 : minimum,
                 Maximum = points.Count == 0 ? 0 : maximum, Order = order, Groups = points.Count == 0 ? Array.Empty<ScatterGroup>() : groups.ToArray(), _identityValues = trackChips ? values : null };
         }
+        catch { points?.Dispose(); throw; }
         finally { try { File.Delete(path); } catch (IOException) { } }
     }
 

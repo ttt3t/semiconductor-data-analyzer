@@ -20,6 +20,17 @@ public static class DiskStorage
     }
     public const int WorkBufferBytes = 16 * 1024 * 1024;
     internal static readonly SemaphoreSlim Jobs = new(2);
+    internal static IDisposable ReserveWork()
+    { Jobs.Wait(AnalysisOperation.Token); return new WorkLease(); }
+    private sealed class WorkLease : IDisposable
+    { private bool _released; public void Dispose() { if (!_released) { _released = true; Jobs.Release(); } } }
+    internal static void ConfigureExportBudget(int dataBudgetMiB)
+    {
+        ConfigureBudget(dataBudgetMiB);
+        lock (Gate) { CacheBudgetBytes /= 4; while (_bytes > CacheBudgetBytes && Lru.Last is { } node) Remove(node); }
+    }
+    internal static long SmallVectorBytes;
+    internal const long SmallVectorBudget = 8L * 1024 * 1024;
     private sealed record Entry(object Value, long Bytes, Action? Flush);
     private static readonly object Gate = new();
     internal static object Sync => Gate;
@@ -120,6 +131,7 @@ public sealed class PagedVector<T> : IReadOnlyList<T>, IDisposable where T : unm
     private List<T>? _small = new();
     private VectorFile? _disk;
     private int _count;
+    private bool _disposed;
     private const int SmallBytes = 64 * 1024;
     private static readonly int ElementBytes = Unsafe.SizeOf<T>();
     public int Count => _count;
@@ -132,9 +144,16 @@ public sealed class PagedVector<T> : IReadOnlyList<T>, IDisposable where T : unm
     }
     public void Add(T value)
     {
-        if (_small != null && (long)(_count + 1) * ElementBytes > SmallBytes)
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_small != null)
         {
-            _disk = new VectorFile(); foreach (var item in _small) _disk.Add(item); _small = null;
+            long total = Interlocked.Add(ref DiskStorage.SmallVectorBytes, ElementBytes);
+            if ((long)(_count + 1) * ElementBytes > SmallBytes || total > DiskStorage.SmallVectorBudget)
+            {
+                try { _disk = new VectorFile(); foreach (var item in _small) _disk.Add(item); }
+                catch { Interlocked.Add(ref DiskStorage.SmallVectorBytes, -ElementBytes); throw; }
+                _small = null; Interlocked.Add(ref DiskStorage.SmallVectorBytes, -(long)(_count + 1) * ElementBytes);
+            }
         }
         if (_small != null) _small.Add(value); else _disk!.Add(value);
         _count++;
@@ -146,9 +165,9 @@ public sealed class PagedVector<T> : IReadOnlyList<T>, IDisposable where T : unm
         if (snapshot.Small != null) return From(snapshot.Small);
         return new PagedVector<T> { _small = null, _count = snapshot.Count, _disk = new VectorFile(snapshot.Path!, snapshot.Count) };
     }
-    public void Seal() => _disk?.Flush();
+    public void Seal() => _disk?.Seal();
     public static PagedVector<T> From(IEnumerable<T> values)
-    { var result = new PagedVector<T>(); foreach (var value in values) { if ((result.Count & 4095) == 0) AnalysisOperation.CheckCancellation(); result.Add(value); } result.Seal(); return result; }
+    { var result = new PagedVector<T>(); try { foreach (var value in values) { if ((result.Count & 4095) == 0) AnalysisOperation.CheckCancellation(); result.Add(value); } result.Seal(); return result; } catch { result.Dispose(); throw; } }
     public static implicit operator PagedVector<T>(T[] values) => From(values);
     public IEnumerable<T> Range(int start, int count)
     {
@@ -167,24 +186,31 @@ public sealed class PagedVector<T> : IReadOnlyList<T>, IDisposable where T : unm
     }
     public IEnumerator<T> GetEnumerator() => Range(0, Count).GetEnumerator();
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
-    public void Dispose() { _disk?.Dispose(); _disk = null; _small = new(); _count = 0; }
+    public void Dispose() { if (_disposed) return; _disposed = true; _disk?.Dispose(); _disk = null; if (_small != null) Interlocked.Add(ref DiskStorage.SmallVectorBytes, -(long)_count * ElementBytes); _small = new(); _count = 0; GC.SuppressFinalize(this); }
+    ~PagedVector() { if (_small != null) Interlocked.Add(ref DiskStorage.SmallVectorBytes, -(long)_count * ElementBytes); }
     private sealed class VectorFile : DiskResource
     {
         internal static readonly int PerPage = Math.Max(1, 65536 / ElementBytes);
         private readonly string _path = DiskStorage.NewPath(".vector");
-        private readonly FileStream _file;
+        private FileStream _file;
         private bool _dirty;
+        private bool _sealed;
         private readonly bool _readerOnly;
         internal string StoragePath => _path;
-        public VectorFile() : base(false) => _file = new FileStream(_path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read | FileShare.Delete, 65536, FileOptions.RandomAccess);
+        public VectorFile() : base(false) => _file = new FileStream(_path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read | FileShare.Delete, 2048, FileOptions.RandomAccess);
         public VectorFile(string path, int count) : base(false)
         {
-            _readerOnly = true; _path = path;
+            _readerOnly = _sealed = true; _path = path;
             _file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.RandomAccess);
             if (_file.Length != (long)count * ElementBytes) throw new InvalidDataException("行索引缓存长度校验失败。");
         }
-        public void Add(T value) { Span<T> one = stackalloc T[1]; one[0] = value; _file.Write(MemoryMarshal.AsBytes(one)); _dirty = true; }
+        public void Add(T value) { if (_sealed) _file.Seek(0, SeekOrigin.End); Span<T> one = stackalloc T[1]; one[0] = value; _file.Write(MemoryMarshal.AsBytes(one)); _dirty = true; }
         public void Flush() { if (_dirty) { _file.Flush(); _dirty = false; DiskStorage.Evict(CacheId); } }
+        public void Seal()
+        {
+            Flush(); if (_sealed) return;
+            _file.Dispose(); _file = new FileStream(_path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read | FileShare.Delete, 1, FileOptions.RandomAccess); _sealed = true;
+        }
         public byte[] Page(int page)
         {
             Flush();
