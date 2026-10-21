@@ -91,6 +91,18 @@ static class DiskStorageProbe
         DiskStorage.Trim();
         var summary2 = SummaryService.Build(large.Items, new[] { "S0", "S1", "S2", "S3" }, true, new());
         Check(summary1.Zip(summary2).All(p => p.First.Count == p.Second.Count && p.First.Mean == p.Second.Mean && p.First.Median == p.Second.Median), "disk summary result cache survives page eviction");
+        int resources = large.Records.Resources.Count;
+        SummaryRows published; IDisposable summaryLease;
+        using (var preparation = new AnalysisOperation())
+        {
+            published = new SummaryRows(2500);
+            for (int i = 0; i < published.Count; i++) published[i] = new() { Data = large.Items[0], Site = i.ToString(), Mean = i };
+            summaryLease = published.AcquireLease();
+        }
+        Check(published[2499].Mean == 2499 && large.Records.Resources.Count == resources, "published summary lease survives preparation without accumulating stores on source dataset");
+        var statisticsStore = typeof(SummaryRows).GetField("_store", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(published)!;
+        string statisticsPath = (string)statisticsStore.GetType().GetField("_path", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(statisticsStore)!;
+        summaryLease.Dispose(); Check(!File.Exists(statisticsPath), "replaced summary table releases its disk store independently of source data");
         var altered = SummaryService.Build(large.Items, new[] { "S0" }, true, new() { RemoveOutliers = false });
         Check(altered.All(r => r.RobustMean == r.Mean), "statistics cache includes outlier configuration");
         var ordered = ExternalValueSort.Sort(Enumerable.Range(0, ExternalValueSort.RunValues + 177).Select(i => (double)(-i)));

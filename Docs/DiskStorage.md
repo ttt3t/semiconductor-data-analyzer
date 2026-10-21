@@ -41,7 +41,7 @@ SQLite 保存身份、SN/XY/芯片/设备索引、统计结果和排序工作表
 
 ## 验收
 
-- `bash Tests/run-core-memory.sh`：336 项通过（原 296 项 + 40 项磁盘块边界、淘汰、只读快照、部分复测、外部中位数、状态矩阵、宽表索引合计预算、大文件跨温匹配及中途取消检查）。
+- `bash Tests/run-core-memory.sh`：338 项通过（原 296 项 + 42 项磁盘块边界、淘汰、只读快照、部分复测、外部中位数、状态矩阵、宽表索引合计预算、大文件跨温匹配及中途取消检查）。
 - Windows：既有 77 项分析器集成和 22 项散点检查已通过；新增 `Tests/run-disk-storage.ps1 -Assembly <dll> -Exe <发布单exe>` 比较后台/原绘制器逐像素结果，验证分页视图选择、Map、独立导出和发布单 EXE 的 SQLite 原生依赖。
 - Linux 交叉编译：`dotnet publish SemiconductorCsvAnalyzer.csproj -c Release -r win-x64 --self-contained false -p:EnableWindowsTargeting=true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=false -p:DebugType=None -p:DebugSymbols=false`。
 

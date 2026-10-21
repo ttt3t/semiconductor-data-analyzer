@@ -63,6 +63,15 @@ static class Probe
             Check(view.Count == 1667 && ((TestItemSummary)view.GetItemAt(0)).Count == 4998, "paged WPF statistics view filters and sorts without full object shadow list");
             var grid = new DataGrid { ItemsSource = view, Height = 400, Width = 600, EnableRowVirtualization = true }; var tableWindow = new Window { Content = grid }; tableWindow.Show(); Pump();
             grid.SelectedIndex = 1200; grid.ScrollIntoView(grid.SelectedItem); Pump(); Check(grid.SelectedItem != null && view.IndexOf(grid.SelectedItem) == 1200, "paged statistics preserve selection when scrolling"); tableWindow.Close(); view.ReleaseIndex();
+            var wide = DatasetService.Build(Enumerable.Range(0, 2500).Select(i => new TestItemData { Id = "I" + i, Name = "I" + i, DisplayName = "I" + i }).ToList(),
+                new RecordList { new CsvRecord { Id = "wide", SerialNumber = "1", X = 0, Y = 0, WaferId = "W", Site = "1", HBin = "1", Measurements = new Dictionary<string, string> { ["I0"] = "1" } } });
+            var main = new MainWindow(new LayoutSettings(Path.Combine(folder, "layout.json")), new RecentFilesService(Path.Combine(folder, "recent.json")), new UiPreferencesService(Path.Combine(folder, "ui.json")));
+            Set(main, "_data", wide); main.Show();
+            var refresh = typeof(MainWindow).GetMethod("RefreshTestItemList", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            Wait((Task)refresh.Invoke(main, null)!);
+            var previousRows = (SummaryRows)Field(main, "_summaries")!; string previousPath = (string)Field(Field(previousRows, "_store")!, "_path")!;
+            Wait((Task)refresh.Invoke(main, null)!);
+            Check(((SummaryRows)Field(main, "_summaries")!).IsPaged && !File.Exists(previousPath), "main-window repeated recalculation retires previous paged statistics after replacing its view"); main.Close();
             var pages = MapDataService.PfPages(data, item, null); Check(pages.Sum(p => p.Dies.Count) == 3000 && pages[0].Dies[0].Color.IsFrozen, "disk PF maps preserve latest coordinates and frozen colors");
             foreach (var page in pages) (page.Dies as IDisposable)?.Dispose();
             string fail = Path.Combine(folder, "worker-fail.xlsx"); Wait(Worker("SaveFailAsync", fail, data, new AnalyzerConfig(), new[] { "W" }, RetestMode.All, null!));
@@ -76,7 +85,12 @@ static class Probe
                 var task = Worker("SaveFailAsync", cancelled, data, new AnalyzerConfig(), new[] { "W" }, RetestMode.All, null!);
                 cancellation.CancelAfter(100);
                 try { Wait(task); throw new Exception("Export ignored cancellation"); } catch (OperationCanceledException) { }
-                Check(File.ReadAllText(cancelled) == "original destination" && !Directory.EnumerateFiles(folder, "cancelled.xlsx.*").Any(), "cancelled export terminates child, preserves destination and removes temporary workbooks");
+                // Windows DOS wildcard matching treats a trailing .* as optional, so
+                // enumerate the directory and require the literal generated prefix.
+                var leftovers = Directory.EnumerateFiles(folder).Where(p => Path.GetFileName(p).StartsWith("cancelled.xlsx.", StringComparison.Ordinal)).ToArray();
+                bool preserved = File.ReadAllText(cancelled) == "original destination";
+                if (!preserved || leftovers.Length > 0) Console.WriteLine(JsonSerializer.Serialize(new { preserved, leftovers }));
+                Check(preserved && leftovers.Length == 0, "cancelled export terminates child, preserves destination and removes temporary workbooks");
             }
             if (args.Length > 1)
             {

@@ -16,6 +16,13 @@ public sealed class SummaryRows : IList, IReadOnlyList<TestItemSummary>
     public int Count { get; }
     public Func<TestItemSummary, double?>? RunValueProvider { get; set; }
     public bool IsPaged => _store != null;
+    internal IDisposable AcquireLease() => new Lease(_store);
+    private sealed class Lease : IDisposable
+    {
+        private DiskResource? _resource;
+        public Lease(DiskResource? resource) { _resource = resource; resource?.Acquire(); }
+        public void Dispose() => Interlocked.Exchange(ref _resource, null)?.Release();
+    }
     public SummaryRows(int count = 0)
     { Count = count; if (count <= 2048) _small = new TestItemSummary[count]; else _store = new Store(); }
     public TestItemSummary this[int index]
@@ -31,7 +38,7 @@ public sealed class SummaryRows : IList, IReadOnlyList<TestItemSummary>
             {
                 _items.TryAdd(value.Data.Id, value.Data);
                 if (_small != null) _small[index] = value;
-                else { value.Data.Values.Own(_store!); _store!.Set(index, value); }
+                else _store!.Set(index, value);
             }
         }
     }

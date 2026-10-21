@@ -44,6 +44,7 @@ public partial class MainWindow : Window
     private bool _isBusy;
     private CancellationTokenSource? _operationCancellation;
     private DatasetLease? _datasetLease;
+    private IDisposable? _summaryLease;
     private bool _closeAfterOperation;
     private bool _operationCommitting;
     private readonly Dictionary<string, string> _columnFilters = new(StringComparer.OrdinalIgnoreCase);
@@ -135,10 +136,10 @@ public partial class MainWindow : Window
             ClearDetail();
             ScatterPlot.ClearChipMarks();
             DgTestItems.ItemsSource = null;
-            if (_summaryView != null) _summaryView.Filter = null;
+            if (_summaryView is PagedSummaryView oldView) oldView.ReleaseIndex();
             _summaryView = null;
             _currentItem = null;
-            _summaries = new();
+            _summaryLease?.Dispose(); _summaryLease = null; _summaries = new();
             _allItems = new();
             _devices = Array.Empty<DeviceInfo>();
             _data = new(); _scopeData = _scopeSource = null; _sampleRanges = _scopeRanges = Array.Empty<SampleRange>(); (_sampleIncludedIds as IDisposable)?.Dispose(); _sampleIncludedIds = null;
@@ -604,6 +605,7 @@ public partial class MainWindow : Window
         AnalysisOperation.CheckCancellation();
         data = prepared.Source;
         var lease = new DatasetLease(data.Records, prepared.Scope.Records, prepared.Data.Records);
+        var summaryLease = prepared.Summaries.AcquireLease();
         string? keepName = _currentItem?.DisplayName;
         string keepSite = _combineSites ? TestItemSummary.CombinedSite : _currentSite;
         string? keepWafer = _combineWafers ? null : _currentWafer;
@@ -618,12 +620,14 @@ public partial class MainWindow : Window
         (_sampleIncludedIds as IDisposable)?.Dispose(); _sampleIncludedIds = prepared.Included;
         TxtSampleFilterAction.Text = _sampleRanges.Count == 0 ? "数据筛选" : $"数据筛选（{_sampleRanges.Count}）";
         var previousLease = _datasetLease; _datasetLease = lease; previousLease?.Dispose();
+        var previousSummaryLease = _summaryLease; _summaryLease = summaryLease;
         _allItems = prepared.Data.Items;
         _devices = prepared.Scope.Devices;
         _allSites = prepared.Sites;
         _summaries = prepared.Summaries;
         InitializeRun(changedData);
         ApplySearchFilter(keepName, keepSite, keepWafer);
+        previousSummaryLease?.Dispose();
         UpdateBottomInfo();
         ScheduleDetail();
         _sampleFilterWindow?.UpdateItems(data.Items, _retestMode);
@@ -756,7 +760,7 @@ public partial class MainWindow : Window
     {
         if (_summaryView == null || !ReferenceEquals(_summaryView.SourceCollection, _summaries))
         {
-            if (_summaryView != null) _summaryView.Filter = null;
+            if (_summaryView is PagedSummaryView oldView) oldView.ReleaseIndex();
             _summaryView = new PagedSummaryView(_summaries);
             DgTestItems.ItemsSource = _summaryView;
         }

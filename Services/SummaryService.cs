@@ -49,31 +49,35 @@ public static class SummaryService
             var values = item.Values;
             var groups = new Dictionary<(string? Wafer, string Site), PagedVector<int>>();
             var errors = new Dictionary<(string? Wafer, string Site), int>();
-            int i = 0;
-            foreach (var sample in values.ReadScopedNumbers())
+            try
             {
-                if ((i & 1023) == 0) AnalysisOperation.CheckCancellation();
-                var key = (combineWafers ? null : sample.Wafer,
-                    combineSites ? TestItemSummary.CombinedSite : SiteKey(sample.Site));
-                if (!groups.TryGetValue(key, out var indices)) groups[key] = indices = new();
-                indices.Add(i++);
-            }
-            foreach (var error in item.Errors)
-            {
-                var key = (combineWafers ? null : error.WaferId,
-                    combineSites ? TestItemSummary.CombinedSite : SiteKey(error.Site));
-                ref int count = ref CollectionsMarshal.GetValueRefOrAddDefault(errors, key, out _);
-                count++;
-            }
-            int offset = itemIndex * groupsPerItem;
-            foreach (string? wafer in waferGroups)
-                foreach (string site in siteGroups)
+                int i = 0;
+                foreach (var sample in values.ReadScopedNumbers())
                 {
-                    var key = (wafer, site);
-                    expandedResults[offset++] = Create(item, site, wafer, new IndexedTestValues(values,
-                        groups.TryGetValue(key, out var indices) ? (IReadOnlyList<int>)indices : Array.Empty<int>()),
-                        errors.GetValueOrDefault(key), config, format);
+                    if ((i & 1023) == 0) AnalysisOperation.CheckCancellation();
+                    var key = (combineWafers ? null : sample.Wafer,
+                        combineSites ? TestItemSummary.CombinedSite : SiteKey(sample.Site));
+                    if (!groups.TryGetValue(key, out var indices)) groups[key] = indices = new();
+                    indices.Add(i++);
                 }
+                foreach (var error in item.Errors)
+                {
+                    var key = (combineWafers ? null : error.WaferId,
+                        combineSites ? TestItemSummary.CombinedSite : SiteKey(error.Site));
+                    ref int count = ref CollectionsMarshal.GetValueRefOrAddDefault(errors, key, out _);
+                    count++;
+                }
+                int offset = itemIndex * groupsPerItem;
+                foreach (string? wafer in waferGroups)
+                    foreach (string site in siteGroups)
+                    {
+                        var key = (wafer, site);
+                        expandedResults[offset++] = Create(item, site, wafer, new IndexedTestValues(values,
+                            groups.TryGetValue(key, out var indices) ? (IReadOnlyList<int>)indices : Array.Empty<int>()),
+                            errors.GetValueOrDefault(key), config, format);
+                    }
+            }
+            finally { foreach (var group in groups.Values) group.Dispose(); }
         }
 
         if (itemCount == 1) BuildItem(0);
