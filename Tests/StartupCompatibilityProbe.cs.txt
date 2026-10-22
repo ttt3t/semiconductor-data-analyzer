@@ -1,0 +1,96 @@
+using System.ComponentModel;
+using System.Collections.Specialized;
+using System.IO;
+using System.Reflection;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Threading;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Controls;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static readonly List<Exception> failures = new();
+    static void Check(bool value, string message) { if (!value) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
+    static void Pump()
+    {
+        var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame);
+    }
+    static object? Field(object instance, string name) => instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(instance);
+    static void Set(object instance, string name, object? value) => instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(instance, value);
+    [STAThread] static int Main(string[] args)
+    {
+        bool expectBug = args.Contains("--expect-deferred-failure");
+        try
+        {
+            string folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            var app = new App(); app.InitializeComponent(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            app.DispatcherUnhandledException += (_, e) => { failures.Add(e.Exception); Console.WriteLine(e.Exception); e.Handled = true; };
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            var rows = new PagedObjectRows<ManagedYieldRow>(new[] { new ManagedYieldRow { Lot = "B", Total = 2 }, new ManagedYieldRow { Lot = "A", Total = 1 } });
+            var view = new PagedSummaryView(rows);
+            int resets = 0; ((INotifyCollectionChanged)view).CollectionChanged += (_, _) => resets++;
+            using (view.DeferRefresh())
+            {
+                view.SortDescriptions.Add(new(nameof(ManagedYieldRow.Lot), ListSortDirection.Ascending));
+                if (expectBug) Check(resets > 0, "V2.1.0 regression reproduced: sort refresh escapes the deferred batch");
+                else Check(resets == 0, "sort changes remain deferred until the batch ends");
+            }
+            if (!expectBug) Check(resets == 1 && ((ManagedYieldRow)view.GetItemAt(0)).Lot == "A", "deferred sorting refreshes exactly once and preserves order");
+            rows.Dispose(); view.ReleaseIndex();
+            string layoutPath = Path.Combine(folder, "layout.settings.json");
+            var layout = new LayoutSettings(layoutPath);
+            layout.Save("ProductManagement", new WindowLayout { Width = 1400, Height = 850, Tables = new() {
+                ["Files"] = new() { Sorts = new() { new() { Property = "File.TestTimeText", Direction = ListSortDirection.Descending } } },
+                ["Yields"] = new() { Sorts = new() { new() { Property = "YieldText", Direction = ListSortDirection.Descending } } }
+            } });
+            var global = LayoutSettings.Current; object? oldDocument = Field(global, "_document"), oldPath = Field(global, "_path");
+            Set(global, "_document", Field(layout, "_document")); Set(global, "_path", layoutPath);
+            try
+            {
+                foreach (int count in new[] { 0, 2, 2100 })
+                {
+                    string path = Path.Combine(folder, "legacy-catalog-" + count + ".json");
+                    var product = new ManagedProduct { Name = "旧版登记 · 本地磁盘", ConfigText = ConfigLoader.Serialize(new()), Flow = new() { new() { Id = "CP", Kind = "CP", Name = "常温", Temperature = 25 } }, Snapshot = new() };
+                    for (int i = 0; i < count; i++)
+                    {
+                        string id = "F" + i;
+                        product.Files.Add(new() { Id = id, StageId = "CP", Lot = "L" + i, FilePath = Path.Combine(folder, "原始数据 " + i + ".csv"), TestTime = new DateTime(2026, 10, 21).AddMinutes(i) });
+                        product.Snapshot.Files.Add(new() { FileId = id, Records = 100 });
+                        product.Snapshot.Yields.Add(new() { Kind = "CP", Lot = "L" + i, Wafer = "W", StageId = "CP", StageName = "常温", Total = 100, Good = 95, Pass = 95, Failed = 5, SourceFileIds = new() { id } });
+                    }
+                    File.WriteAllText(path, JsonSerializer.Serialize(new ProductCatalog { Products = new() { product } }));
+                    byte[] before = File.ReadAllBytes(path);
+                    var window = new ProductManagementWindow(new ProductCatalogStore(path)); window.Show();
+                    for (int i = 0; i < 4; i++) Pump();
+                    var files = (DataGrid)window.FindName("DgFiles");
+                    Check(failures.Count == 0 && window.IsVisible && files.Items.Count == count, "existing catalog and saved sorts open successfully: " + count + " registrations");
+                    Check(((TextBlock)window.FindName("TxtNotice")).Text.IndexOf("未能读取", StringComparison.Ordinal) < 0, "startup does not hide catalog initialization errors: " + count);
+                    var expected = product.Files.OrderByDescending(f => f.TestTimeText, StringComparer.CurrentCulture).FirstOrDefault()?.Id;
+                    Check(count == 0 || ((ProductManagementWindow.FileRow)files.Items[0]).File.Id == expected, "previous file-time sort is restored: " + count);
+                    window.Close(); Pump();
+                    Check(before.SequenceEqual(File.ReadAllBytes(path)), "opening and closing preserves original catalog bytes: " + count);
+                }
+            }
+            finally { Set(global, "_document", oldDocument); Set(global, "_path", oldPath); }
+            string preferences = Path.Combine(folder, "ui.preferences.json");
+            File.WriteAllText(preferences, "{\"CompactTable\":false,\"ShowColumnFilters\":true,\"AlternateRows\":false,\"RunSelection\":\"WaferCoordinates\",\"DefaultStdfMode\":\"Standard\"}");
+            string original = File.ReadAllText(preferences); var loaded = new UiPreferencesService(preferences).Value;
+            Check(!loaded.CompactTable && !loaded.AlternateRows && loaded.RunSelection == RunSelectionMode.WaferCoordinates && loaded.DataMemoryMiB == 256 && File.ReadAllText(preferences) == original, "legacy preferences retain values without a cache-budget field or rewrite");
+            Check(failures.Count == 0, "no deferred dispatcher exceptions after restoring old user state");
+            Check(!expectBug, "baseline must reproduce a startup dispatcher failure, not only a refresh contract violation");
+            Console.WriteLine($"ALL {checks} STARTUP COMPATIBILITY CHECKS PASSED"); app.Shutdown(); return 0;
+        }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine(e);
+            if (expectBug && failures.Any(f => f.ToString().Contains("defer", StringComparison.OrdinalIgnoreCase)))
+            { Console.WriteLine("EXPECTED V2.1.0 STARTUP CRASH REPRODUCED WITH SAVED SORTS"); return 0; }
+            return 1;
+        }
+    }
+}

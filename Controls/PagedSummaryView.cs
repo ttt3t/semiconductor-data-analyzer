@@ -19,7 +19,13 @@ public sealed class PagedSummaryView : CollectionView
     public PagedSummaryView(SummaryRows source) : this(source, i => source.Read(i)) { }
     public PagedSummaryView(IList source) : this(source, i => source[i]!) { }
     private PagedSummaryView(IList source, Func<int, object> read) : base(source)
-    { _source = source; _read = read; ((INotifyCollectionChanged)_sort).CollectionChanged += (_, _) => Refresh(); }
+    {
+        _source = source; _read = read;
+        // WPF restores saved sort descriptions inside an ItemCollection.DeferRefresh
+        // batch. Sending Reset during that batch makes the attached DataGrid query
+        // a deferred view and throws on the dispatcher during window startup.
+        ((INotifyCollectionChanged)_sort).CollectionChanged += (_, _) => RefreshOrDefer();
+    }
     public override bool CanSort => true;
     public override bool CanFilter => true;
     public override SortDescriptionCollection SortDescriptions => _sort;

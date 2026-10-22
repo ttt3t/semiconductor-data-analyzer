@@ -1,7 +1,7 @@
 <Window x:Class="SemiconductorCsvAnalyzer.HelpWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="详细说明 · CSV Analyzer V2.1.0" Width="1080" Height="800" MinWidth="720" MinHeight="480"
+        Title="详细说明 · CSV Analyzer V2.1.1" Width="1080" Height="800" MinWidth="720" MinHeight="480"
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False" FontFamily="Microsoft YaHei UI" Background="{DynamicResource WorkspaceBackground}">
     <Window.Resources>
         <ResourceDictionary>
