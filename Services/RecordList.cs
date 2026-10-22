@@ -83,6 +83,7 @@ public sealed class RecordList : IList<CsvRecord>, IReadOnlyList<CsvRecord>
         private readonly Dictionary<RawMeasurementStore, int> _storeIds = new();
         private readonly Dictionary<MeasurementSchema, int> _schemaIds = new();
         private SqliteTransaction? _transaction;
+        private SqliteCommand? _writeCommand;
         private int _writes;
         public int Count { get; private set; }
         private const int PageRows = 64;
@@ -144,15 +145,22 @@ public sealed class RecordList : IList<CsvRecord>, IReadOnlyList<CsvRecord>
         private void Write(int slot, CsvRecord r)
         {
             _codes?.Dispose(); _codes = null;
-            using var c = Connection.CreateCommand();
-            c.CommandText = "INSERT OR REPLACE INTO records VALUES($slot,$id,$sn,$wafer,$site,$chip,$device,$json,$raw,$ord,$x,$y)";
-            c.Parameters.AddWithValue("$slot", slot); c.Parameters.AddWithValue("$id", r.Id); c.Parameters.AddWithValue("$sn", r.SerialNumber.Trim());
-            c.Parameters.AddWithValue("$wafer", r.WaferId); c.Parameters.AddWithValue("$site", r.Site);
-            c.Parameters.AddWithValue("$chip", Key(DatasetService.ChipKey(r)));
+            if (_writeCommand == null)
+            {
+                _writeCommand = Connection.CreateCommand();
+                _writeCommand.CommandText = "INSERT OR REPLACE INTO records VALUES($slot,$id,$sn,$wafer,$site,$chip,$device,$json,$raw,$ord,$x,$y)";
+                foreach (string name in new[] { "$slot", "$id", "$sn", "$wafer", "$site", "$chip", "$device", "$json", "$raw", "$ord", "$x", "$y" })
+                    _writeCommand.Parameters.AddWithValue(name, DBNull.Value);
+                _writeCommand.Prepare();
+            }
+            var c = _writeCommand; c.Transaction = _transaction;
+            c.Parameters["$slot"].Value = slot; c.Parameters["$id"].Value = r.Id; c.Parameters["$sn"].Value = r.SerialNumber.Trim();
+            c.Parameters["$wafer"].Value = r.WaferId; c.Parameters["$site"].Value = r.Site;
+            c.Parameters["$chip"].Value = Key(DatasetService.ChipKey(r));
             bool blank = !r.X.HasValue && !r.Y.HasValue && string.IsNullOrWhiteSpace(r.ChipSerialNumber) && string.IsNullOrWhiteSpace(r.Site) && string.IsNullOrWhiteSpace(r.SBin) && string.IsNullOrWhiteSpace(r.HBin) && !r.HasNonblankMeasurements;
-            c.Parameters.AddWithValue("$device", blank ? DBNull.Value : Key(r.IsFtIdentity ? DatasetService.ChipKey(r) : (r.WaferId, r.X, r.Y, r.X.HasValue && r.Y.HasValue ? "" : r.Id)));
-            c.Parameters.AddWithValue("$ord", r.StorageOrder); c.Parameters.AddWithValue("$x", (object?)r.X ?? DBNull.Value); c.Parameters.AddWithValue("$y", (object?)r.Y ?? DBNull.Value);
-            c.Parameters.AddWithValue("$json", JsonSerializer.Serialize(r)); c.Parameters.AddWithValue("$raw", Raw(r.Measurements)); c.ExecuteNonQuery();
+            c.Parameters["$device"].Value = blank ? DBNull.Value : Key(r.IsFtIdentity ? DatasetService.ChipKey(r) : (r.WaferId, r.X, r.Y, r.X.HasValue && r.Y.HasValue ? "" : r.Id));
+            c.Parameters["$ord"].Value = r.StorageOrder; c.Parameters["$x"].Value = (object?)r.X ?? DBNull.Value; c.Parameters["$y"].Value = (object?)r.Y ?? DBNull.Value;
+            c.Parameters["$json"].Value = JsonSerializer.Serialize(r); c.Parameters["$raw"].Value = Raw(r.Measurements); c.ExecuteNonQuery();
             if (++_writes >= 4096) { _transaction!.Commit(); _transaction.Dispose(); _transaction = Connection.BeginTransaction(); _writes = 0; }
         }
         internal IEnumerable<(string Site, string Wafer)> ReadIdentityCodes()
@@ -161,7 +169,16 @@ public sealed class RecordList : IList<CsvRecord>, IReadOnlyList<CsvRecord>
             CodeAt(0, true);
             foreach (var code in _codes!) yield return (_sites[code.Site], _wafers[code.Wafer]);
         }
-        public void Add(CsvRecord record) { lock (DiskStorage.Sync) { Write(Count, record); Count++; } }
+        public void Add(CsvRecord record)
+        {
+            lock (DiskStorage.Sync)
+            {
+                // A private batch may have read its last, partial page before
+                // appending another file. Do not reuse that shorter cached page.
+                if (Count % PageRows != 0) DiskStorage.Evict(CacheId, Count / PageRows * PageRows);
+                Write(Count, record); Count++;
+            }
+        }
         public void Replace(int index, CsvRecord record) { lock (DiskStorage.Sync) { DiskStorage.Evict(CacheId); Write(index, record); } }
         public void Clear() { lock (DiskStorage.Sync) { DiskStorage.Evict(CacheId); Execute("DELETE FROM records"); Count = 0; } }
         private void SavePage(Page page)
@@ -275,7 +292,7 @@ public sealed class RecordList : IList<CsvRecord>, IReadOnlyList<CsvRecord>
                 using var r = c.ExecuteReader(); var result = new List<string>(); while (r.Read()) result.Add(r.GetString(0)); return result;
             }
         }
-        protected override void Close() { _codes?.Dispose(); _transaction?.Dispose(); Connection?.Dispose(); if (!_readerOnly && _path != null) try { File.Delete(_path); } catch (System.IO.IOException) { } }
+        protected override void Close() { _codes?.Dispose(); _writeCommand?.Dispose(); _transaction?.Dispose(); Connection?.Dispose(); if (!_readerOnly && _path != null) try { File.Delete(_path); } catch (System.IO.IOException) { } }
     }
 }
 

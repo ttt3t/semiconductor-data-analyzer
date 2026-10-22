@@ -1,0 +1,22 @@
+using System.Diagnostics;
+using System.Text.Json;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+string root = Path.GetFullPath(args[0]); Directory.CreateDirectory(root);
+int files=args.Length>1?int.Parse(args[1]):25;int rows=args.Length>2?int.Parse(args[2]):2000, tests=args.Length>3?int.Parse(args[3]):120;
+var paths=Enumerable.Range(1,files).Select(i=>Path.Combine(root,$"wafer-{i:D2}.csv")).ToArray();
+foreach(var csv in paths) if(!File.Exists(csv)) {
+using var w=new StreamWriter(csv);
+w.WriteLine("SN,X,Y,Site,SBIN,HBIN,Wafer,"+string.Join(',',Enumerable.Range(1,tests).Select(i=>"Item"+i)));
+foreach(var h in new[]{"LSL","USL","Unit","Test Num"}) w.WriteLine(h+",,,,,,,"+string.Join(',',Enumerable.Range(1,tests).Select(i=>h switch{"LSL"=>"0","USL"=>"2","Unit"=>"V",_=>i.ToString()})));
+string vals=string.Join(',',Enumerable.Repeat("1.25",tests));for(int i=0;i<rows;i++) w.WriteLine($"{i+1},{i},0,{i%4+1},1,1,W,{vals}");
+}
+using var op=new AnalysisOperation();
+var c=new AnalyzerConfig{TestItemRow=1,LowLimitRow=2,HighLimitRow=3,UnitRow=4,TestNumberRow=5,SBinRow=0,HBinRow=0,DataStartRow=6,TestItemStartColumn=8,SerialNumberColumn=1,XColumn=2,YColumn=3,SiteColumn=4,SBinColumn=5,HBinColumn=6,WaferColumn=7};
+Console.WriteLine("START "+files+" files");
+var watch=Stopwatch.StartNew();
+var data=DatasetService.LoadSources(paths.Select((p,i)=>new CsvImportSource(p,i==0?null:new ImportOptions(false,"",false,false))).ToArray(),c);
+using var lease=new DatasetLease(data.Records); double load=watch.Elapsed.TotalSeconds;Console.WriteLine("LOADED "+load);watch.Restart();
+var summaries=SummaryService.Build(data.Items,new[]{"1","2","3","4"},data.Wafers,false,false,c);
+if(summaries.Count != tests*files*4||summaries.Any(s=>s.Count!=rows/4||s.Mean!=1.25)||data.Records.Count!=files*rows) throw new Exception("Batch statistics mismatch");
+Console.WriteLine(JsonSerializer.Serialize(new{files,rows=rows*files,tests,bytes=paths.Sum(p=>new FileInfo(p).Length),loadSeconds=load,summarySeconds=watch.Elapsed.TotalSeconds,alloc=GC.GetTotalAllocatedBytes(),peak=Process.GetCurrentProcess().PeakWorkingSet64}));

@@ -51,6 +51,10 @@ static class DiskStorageProbe
         foreach (var vector in vectors) vector.Dispose();
         var small = Fixture(50, false); var large = Fixture(2100, true);
         using var lease = new DatasetLease(large.Records);
+        var column = large.Items[0].Values;
+        var selected = new IndexedTestValues(column, new[] { column.Count - 1, 0, column.Count / 2, 0 });
+        var expectedValues = selected.Select(v => v.Value).ToArray();
+        Check(StatisticsService.Numbers(selected).SequenceEqual(expectedValues) && StatisticsService.Calculate(selected, 0, 30).Mean == expectedValues.Average(), "paged grouped numeric reads preserve arbitrary order, duplicates and sparse-column boundaries");
         Check(large.Records.IsOnDisk && large.Items.All(i => i.Values.IsDiskBacked), "identity and all numeric columns spill from first imported record");
         foreach (RetestMode mode in Enum.GetValues<RetestMode>())
         {

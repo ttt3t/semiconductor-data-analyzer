@@ -140,6 +140,19 @@ internal sealed class DiskColumnStore : DiskResource
             for (int i = 0; i < count; i++) yield return c.Single ? BinaryPrimitives.ReadSingleLittleEndian(page.AsSpan(i * c.Stride + c.ValueOffset)) : BinaryPrimitives.ReadDoubleLittleEndian(page.AsSpan(i * c.Stride + c.ValueOffset));
         }
     }
+    internal IEnumerable<double> SelectedValues(int item, IEnumerable<int> positions)
+    {
+        var c = _columns[item]; int perPage = 65536 / c.Stride;
+        int currentPage = -1; byte[] bytes = Array.Empty<byte>();
+        foreach (int position in positions)
+        {
+            if ((uint)position >= (uint)c.Count) throw new ArgumentOutOfRangeException(nameof(positions));
+            int next = position / perPage;
+            if (next != currentPage) { bytes = Page(c, next); currentPage = next; }
+            int offset = position % perPage * c.Stride + c.ValueOffset;
+            yield return c.Single ? BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(offset)) : BinaryPrimitives.ReadDoubleLittleEndian(bytes.AsSpan(offset));
+        }
+    }
     internal IEnumerable<(int Row, double Value)> Entries(int item)
     {
         var c = _columns[item]; int perPage = 65536 / c.Stride;

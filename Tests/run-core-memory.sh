@@ -6,6 +6,7 @@ task_probe="$task_root/bin/CoreMemoryProbe"
 mkdir -p "$task_probe"
 cp "$task_root/Tests/CoreMemoryProbe.cs.txt" "$task_probe/Program.cs"
 cp "$task_root/Tests/DiskStorageProbe.cs.txt" "$task_probe/DiskStorageProbe.cs"
+cp "$task_root/Tests/BatchImportProbe.cs.txt" "$task_probe/BatchImportProbe.cs"
 cat > "$task_probe/CoreMemoryProbe.csproj" <<'PROJECT'
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>

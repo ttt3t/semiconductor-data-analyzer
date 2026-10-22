@@ -158,7 +158,7 @@ public static class StatisticsService
     internal static IEnumerable<double> Numbers(IReadOnlyList<TestValue> values) => values switch
     {
         TestValueColumn column => column.ReadNumbers(),
-        IndexedTestValues selected => Enumerable.Range(0, selected.Count).Select(selected.GetValueAt),
+        IndexedTestValues selected => selected.ReadNumbers(),
         _ => values.Select(v => v.Value)
     };
 

@@ -51,7 +51,7 @@ try {
                     if ($null -eq $taskGrid) { continue }
                     $taskPattern = $taskGrid.GetCurrentPattern([System.Windows.Automation.GridPattern]::Pattern)
                     $taskReady = $taskPattern.Current.RowCount -eq 2100
-                } else { $taskReady = $taskProcess.MainWindowTitle.Contains('V2.1.1') }
+                } else { $taskReady = $taskProcess.MainWindowTitle.Contains('V2.1.2') }
                 if ($taskReady) { break }
             }
             if (!$taskReady) { throw "Published EXE did not render the expected $taskMode window. Title: $($taskProcess.MainWindowTitle); grid rows: $($taskPattern.Current.RowCount)" }

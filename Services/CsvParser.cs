@@ -29,6 +29,8 @@ public sealed partial class CsvParseResult
             return _wafersCache;
         }
     }
+    internal void SetKnownWafers(IReadOnlyList<string> wafers)
+    { _wafersSource = Records; _wafersRecordCount = Records.Count; _wafersCache = wafers; }
 }
 
 public static class CsvParser
@@ -40,7 +42,7 @@ public static class CsvParser
         => ParseCore(csvPath, config, progress, cancellationToken, false);
 
     internal static CsvParseResult ParseCore(string csvPath, AnalyzerConfig config, Action<string>? progress,
-        CancellationToken cancellationToken, bool yieldOnly)
+        CancellationToken cancellationToken, bool yieldOnly, bool deferColumns = false)
     {
         if (!cancellationToken.CanBeCanceled) cancellationToken = AnalysisOperation.Token;
         cancellationToken.ThrowIfCancellationRequested();
@@ -157,7 +159,10 @@ public static class CsvParser
         if (items.Count == 0)
             throw new InvalidDataException("未解析到任何有效测试项");
 
-        var records = new RecordList(Math.Max(0, rowCount - config.DataStartRow + 1), disk: !yieldOnly);
+        int capacity = Math.Max(0, rowCount - config.DataStartRow + 1);
+        // Small batch inputs can feed the shared destination directly. RecordList
+        // automatically spills after 2048 rows, so large inputs remain bounded.
+        var records = new RecordList(deferColumns ? Math.Min(2048, capacity) : capacity, disk: !yieldOnly && !deferColumns);
         var schema = new MeasurementSchema(items.Select(i => i.Id));
         string waferId = Path.GetFileNameWithoutExtension(csvPath);
         string unannotatedWaferId = $"{waferId} (未标注 wafer)";
@@ -230,8 +235,12 @@ public static class CsvParser
                     return string.IsNullOrWhiteSpace(cell) ? fallback : cell.Trim();
                 }
 
+                bool nonblank = false;
                 for (int i = 0; i < items.Count; i++)
+                {
                     rawMeasurements[i] = GetCell(rowCells, items[i].ColumnIndex);
+                    nonblank |= !string.IsNullOrWhiteSpace(rawMeasurements[i]);
+                }
 
                 string rowWafer;
                 if (config.WaferColumn == 0) rowWafer = waferId;
@@ -252,7 +261,8 @@ public static class CsvParser
                     Program = Context(config.ProgramColumn, config.Program),
                     Lot = Context(config.LotColumn, config.Lot),
                     SBin = sbin,
-                    HBin = hbin
+                    HBin = hbin,
+                    HasNonblankMeasurements = nonblank
                 };
                 if (projection != null) projection.Capture(record, rawMeasurements);
                 else record.Measurements = rawStore!.Append(schema, rawMeasurements);
@@ -261,7 +271,11 @@ public static class CsvParser
 
             stamp.Validate(input);
             rawStore?.Seal();
-            var parsed = projection != null ? projection.Complete(records) : DatasetService.Build(items, records);
+            // A batch will remap definitions and build its numeric columns once.
+            // Keep exact raw cells here, without constructing disposable per-file columns.
+            var parsed = projection != null ? projection.Complete(records) : deferColumns
+                ? new CsvParseResult { Items = items, Records = records, Devices = DatasetService.BuildDevices(records) }
+                : DatasetService.Build(items, records);
             if (skippedHeaders > 0) parsed.SourceDescription = $"已跳过 {skippedHeaders} 行重复表头";
             progress?.Invoke($"解析完成，共 {items.Count} 个测试项，{parsed.Devices.Count} 颗唯一芯片");
             return parsed;

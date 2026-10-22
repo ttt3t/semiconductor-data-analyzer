@@ -120,6 +120,12 @@ public sealed class TestValueColumn : IList<TestValue>, IReadOnlyList<TestValue>
         if (_disk != null && _source == null && !_diskProjection) return _disk.Values(_diskItem);
         return Enumerable.Range(0, Count).Select(GetValueAt);
     }
+    internal IEnumerable<double> ReadSelectedNumbers(IReadOnlyList<int> positions)
+    {
+        if (_disk != null && _source == null && !_diskProjection)
+            return _disk.SelectedValues(_diskItem, positions);
+        return positions.Select(GetValueAt);
+    }
     internal IEnumerable<(double Value, string Site, string Wafer)> ReadScopedNumbers()
     {
         if (_disk != null && !_diskProjection && _records is RecordList records)
@@ -297,20 +303,12 @@ public sealed class IndexedTestValues : IReadOnlyList<TestValue>
     internal double GetValueAt(int index) => _source is TestValueColumn col ? col.GetValueAt(_indices[index]) : _source[_indices[index]].Value;
     internal string SiteAt(int index) => _source is TestValueColumn c ? c.SiteAt(_indices[index]) : GetRecordAt(index).Site;
     internal CsvRecord GetRecordAt(int index) => _source is TestValueColumn col ? col.GetRecordAt(_indices[index]) : _source[_indices[index]].Record;
+    internal IEnumerable<double> ReadNumbers() => _source is TestValueColumn col
+        ? col.ReadSelectedNumbers(_indices) : _indices.Select(i => _source[i].Value);
 
     internal void CopyValuesTo(Span<double> destination)
     {
-        int n = _indices.Count;
-        if (_source is TestValueColumn col)
-        {
-            for (int i = 0; i < n; i++)
-                destination[i] = col.GetValueAt(_indices[i]);
-        }
-        else
-        {
-            for (int i = 0; i < n; i++)
-                destination[i] = _source[_indices[i]].Value;
-        }
+        int i = 0; foreach (double value in ReadNumbers()) destination[i++] = value;
     }
 
     public static IndexedTestValues ForSite(IReadOnlyList<TestValue> source, string site)

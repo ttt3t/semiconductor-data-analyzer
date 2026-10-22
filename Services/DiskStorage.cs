@@ -58,6 +58,8 @@ public static class DiskStorage
         lock (Gate)
             foreach (var node in Cache.Where(p => p.Key.Item1 == owner).Select(p => p.Value).ToArray()) Remove(node);
     }
+    internal static void Evict(Guid owner, long page)
+    { lock (Gate) if (Cache.TryGetValue((owner, page), out var node)) Remove(node); }
     public static void Trim() { lock (Gate) while (Lru.Last is { } node) Remove(node); }
     internal static void ReadExactly(Microsoft.Win32.SafeHandles.SafeFileHandle file, Span<byte> buffer, long offset)
     {

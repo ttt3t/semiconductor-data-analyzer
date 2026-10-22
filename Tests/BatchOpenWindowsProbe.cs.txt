@@ -1,0 +1,44 @@
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Threading;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame); }
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            string folder = Path.GetFullPath(args[0]);
+            var config = new AnalyzerConfig { TestItemRow = 1, LowLimitRow = 2, HighLimitRow = 3, UnitRow = 4, TestNumberRow = 5,
+                SBinRow = 0, HBinRow = 0, DataStartRow = 6, TestItemStartColumn = 8, SerialNumberColumn = 1, XColumn = 2,
+                YColumn = 3, SiteColumn = 4, SBinColumn = 5, HBinColumn = 6, WaferColumn = 7 };
+            var sources = Directory.GetFiles(folder, "wafer-*.csv").OrderBy(p => p, StringComparer.Ordinal).Select((p, i) => new CsvImportSource(p, i == 0 ? null : new(false, "", false, false))).ToArray();
+            if (sources.Length != 25) throw new Exception("Expected 25 batch fixtures.");
+            var app = new App(); app.InitializeComponent(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            var failures = new List<Exception>(); app.DispatcherUnhandledException += (_, e) => { failures.Add(e.Exception); e.Handled = true; Console.Error.WriteLine(e.Exception); };
+            var window = new MainWindow(new LayoutSettings(Path.Combine(folder, "ui-layout.json")), new RecentFilesService(Path.Combine(folder, "ui-recent.json")), new UiPreferencesService(Path.Combine(folder, "ui-prefs.json")));
+            typeof(MainWindow).GetField("_config", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, config);
+            typeof(MainWindow).GetField("_managedConfigLoaded", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, true);
+            window.Show(); Pump();
+            var clock = Stopwatch.StartNew();
+            var task = (Task)typeof(MainWindow).GetMethod("OpenBatchAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, new object[] { sources })!;
+            while (!task.IsCompleted) { if (clock.Elapsed.TotalSeconds > 180) throw new TimeoutException("Batch UI did not finish."); Pump(); Thread.Sleep(2); }
+            task.GetAwaiter().GetResult(); Pump();
+            var data = (CsvParseResult)typeof(MainWindow).GetField("_data", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+            var grid = (DataGrid)window.FindName("DgTestItems");
+            if (data.Records.Count != 50000 || data.Items.Count != 120 || grid.Items.Count != 12000 || failures.Count != 0) throw new Exception("Incomplete batch UI results.");
+            Console.WriteLine($"PASS actual OpenBatchAsync: 25 CSV / 50000 rows / 120 tests / 12000 grouped summaries, {clock.Elapsed.TotalSeconds:F3}s");
+            window.Close(); Pump(); if (failures.Count != 0) throw new Exception("Batch close raised dispatcher errors.");
+            app.Shutdown(); return 0;
+        }
+        catch (Exception exception) { Console.Error.WriteLine(exception); return 1; }
+    }
+}

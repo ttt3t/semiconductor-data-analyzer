@@ -29,6 +29,18 @@ public static class DataFileService
         return ParseCore(path, config, null, cancellationToken, stdfMode, true);
     }
 
+    internal static CsvParseResult ReadForMerge(string path, AnalyzerConfig config, StdfImportMode mode)
+    {
+        // Other formats retain their existing import semantics. Ordinary CSV batches
+        // need raw rows and definitions, not a complete analysis of each input file.
+        if (IsStdf(path) || IntegratedCsvService.IsIntegrated(path))
+            return Parse(path, config, cancellationToken: AnalysisOperation.Token, stdfMode: mode);
+        var result = CsvParser.ParseCore(path, config, null, AnalysisOperation.Token, false, deferColumns: true);
+        if (SerialNumberService.Normalize(result, config.SerialNumberColumn <= 0))
+            result.SerialNumberNotice = $"文件“{Path.GetFileName(path)}”：{result.SerialNumberNotice}";
+        return result;
+    }
+
     private static CsvParseResult ParseCore(string path, AnalyzerConfig config, Action<string>? progress,
         CancellationToken cancellationToken, StdfImportMode stdfMode, bool yieldOnly)
     {

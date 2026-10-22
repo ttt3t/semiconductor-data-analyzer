@@ -265,7 +265,7 @@ public static partial class DatasetService
     {
         if (sources.Count == 0) throw new InvalidDataException("没有可重新读取的数据文件。");
         CsvParseResult result;
-        try { result = ParseSource(sources[0], config); }
+        try { result = ParseSource(sources[0], config, deferColumns: sources.Count > 1); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         { throw new InvalidDataException($"文件“{sources[0].Path}”导入失败：{ex.Message}", ex); }
         return sources.Count == 1 ? result : AppendSources(result, sources.Skip(1).ToArray(), config);
@@ -282,20 +282,21 @@ public static partial class DatasetService
             AnalysisOperation.CheckCancellation();
             try
             {
-                var incoming = ParseSource(source, config);
+                var incoming = ParseSource(source, config, deferColumns: true);
                 result = MergeDefinitions(result, incoming, source.Options ??
-                    throw new InvalidDataException("追加文件缺少导入选项。"));
+                    throw new InvalidDataException("追加文件缺少导入选项。"), appendToUnpublished: !ReferenceEquals(result, existing));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             { throw new InvalidDataException($"文件“{Path.GetFileName(source.Path)}”导入失败：{ex.Message}", ex); }
         }
-        return CompleteMerge(result);
+        return CompleteMerge(result, config);
     }
 
     public static CsvParseResult Merge(CsvParseResult existing, CsvParseResult incoming, ImportOptions options)
         => CompleteMerge(MergeDefinitions(existing, incoming, options));
 
-    private static CsvParseResult MergeDefinitions(CsvParseResult existing, CsvParseResult incoming, ImportOptions options)
+    private static CsvParseResult MergeDefinitions(CsvParseResult existing, CsvParseResult incoming, ImportOptions options,
+        bool appendToUnpublished = false)
     {
         if (options.AutoMatch)
         {
@@ -304,13 +305,14 @@ public static partial class DatasetService
             options = options with { MatchByNumber = uniqueNumbers };
         }
         if (incoming.Records.Count == 0) throw new InvalidDataException("新文件没有可导入的测试记录。");
+        var existingWafers = existing.Wafers;
         if (options.SameWafer && options.TargetWafer.Length == 0)
         {
-            if (existing.Wafers.Count != 1)
+            if (existingWafers.Count != 1)
                 throw new InvalidDataException("合并到首个文件时，首个文件必须仅包含一片晶圆；请改选不同 wafer。");
-            options = options with { TargetWafer = existing.Wafers[0] };
+            options = options with { TargetWafer = existingWafers[0] };
         }
-        if (options.SameWafer && (!existing.Wafers.Contains(options.TargetWafer) || incoming.Wafers.Count != 1))
+        if (options.SameWafer && (!existingWafers.Contains(options.TargetWafer) || incoming.Wafers.Count != 1))
             throw new InvalidDataException("同 wafer 导入需要选择已有 wafer，且新文件只能包含一个 wafer。");
         string Key(TestItemData item)
         {
@@ -346,7 +348,7 @@ public static partial class DatasetService
             itemMap.Add(source.Id, target.Id);
         }
         var waferMap = new Dictionary<string, string>(StringComparer.Ordinal);
-        var taken = existing.Wafers.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var taken = existingWafers.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (string wafer in incoming.Wafers)
         {
             string name = options.SameWafer ? options.TargetWafer : wafer;
@@ -358,7 +360,10 @@ public static partial class DatasetService
             waferMap.Add(wafer, name);
         }
         // A subsequent serial normalization must never edit records held by the active dataset.
-        var records = existing.Records.Select(CloneRecord).ToRecordList();
+        // Detach from the active dataset once. Further batch inputs can append to
+        // this private accumulator instead of rewriting every previous input.
+        var records = appendToUnpublished ? existing.Records : existing.Records.Select(CloneRecord).ToRecordList();
+        int reassigned = appendToUnpublished ? existing.ReassignedSerialNumberCount : records.Count(r => r.OriginalSerialNumber != null);
         var schemas = new Dictionary<MeasurementSchema, MeasurementSchema>();
         MeasurementCollection Remap(MeasurementCollection raw)
         {
@@ -368,6 +373,8 @@ public static partial class DatasetService
             return raw.Remap(mapped);
         }
         foreach (var record in incoming.Records)
+        {
+            AnalysisOperation.CheckCancellation();
             records.Add(new CsvRecord
             {
                 WaferId = waferMap[record.WaferId], SerialNumber = record.SerialNumber, X = record.X, Y = record.Y,
@@ -376,18 +383,22 @@ public static partial class DatasetService
                 Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
                 Product = record.Product, Program = record.Program, Lot = record.Lot,
                 StdfTestTime = record.StdfTestTime,
-                Measurements = Remap(record.Measurements)
+                Measurements = Remap(record.Measurements), HasNonblankMeasurements = record.HasNonblankMeasurements
             });
-        return new CsvParseResult
+            if (record.OriginalSerialNumber != null) reassigned++;
+        }
+        var result = new CsvParseResult
         {
             Items = items, Records = records,
             SerialNumberNotice = string.Join("\n\n", new[] { existing.SerialNumberNotice, incoming.SerialNumberNotice }
                 .Where(notice => notice.Length > 0)),
-            ReassignedSerialNumberCount = records.Count(r => r.OriginalSerialNumber != null)
+            ReassignedSerialNumberCount = reassigned
         };
+        result.SetKnownWafers(existingWafers.Concat(waferMap.Values).Distinct(StringComparer.Ordinal).ToArray());
+        return result;
     }
 
-    private static CsvParseResult CompleteMerge(CsvParseResult definitions)
+    private static CsvParseResult CompleteMerge(CsvParseResult definitions, AnalyzerConfig? config = null)
     {
         var merged = Build(definitions.Items, definitions.Records);
         MeasurementDisplay.Configure(merged.Items);
@@ -397,10 +408,10 @@ public static partial class DatasetService
             merged.SerialNumberNotice = "整合数据：" + merged.SerialNumberNotice;
         if (priorNotice.Length > 0)
             merged.SerialNumberNotice = priorNotice + (merged.SerialNumberNotice.Length > 0 ? "\n\n" + merged.SerialNumberNotice : "");
-        return merged;
+        return config == null ? merged : RetestIdentityService.PrepareUnpublished(merged, config);
     }
 
-    private static CsvParseResult ParseSource(CsvImportSource source, AnalyzerConfig config)
+    private static CsvParseResult ParseSource(CsvImportSource source, AnalyzerConfig config, bool deferColumns = false)
     {
         var layout = source.ConfigText.Length > 0 ? ConfigLoader.Parse(source.ConfigText) : config;
         if (source.ConfigText.Length > 0)
@@ -409,7 +420,8 @@ public static partial class DatasetService
             layout.PassHBins = config.PassHBins; layout.PartialPassHBins = config.PartialPassHBins;
             layout.MissingTokens = config.MissingTokens; layout.NotApplicableTokens = config.NotApplicableTokens;
         }
-        var data = DataFileService.Parse(source.Path, layout, cancellationToken: AnalysisOperation.Token, stdfMode: source.StdfMode);
+        var data = deferColumns ? DataFileService.ReadForMerge(source.Path, layout, source.StdfMode)
+            : DataFileService.Parse(source.Path, layout, cancellationToken: AnalysisOperation.Token, stdfMode: source.StdfMode);
         if (source.WaferOverride is { Length: > 0 } && data.Devices.Select(d => d.WaferId).Distinct().Skip(1).Any())
             throw new InvalidDataException("含多晶圆的文件不能整体覆盖为一个片号，请在登记中清空晶圆覆盖值。");
         if (source.WaferOverride != null || source.LotOverride != null || source.ShowLotInWafer)
@@ -434,7 +446,7 @@ public static partial class DatasetService
         X = record.X, Y = record.Y, Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
         Product = record.Product, Program = record.Program, Lot = record.Lot,
         StdfTestTime = record.StdfTestTime,
-        Measurements = record.Measurements
+        Measurements = record.Measurements, HasNonblankMeasurements = record.HasNonblankMeasurements
     };
 
     internal static IReadOnlyList<DeviceInfo> BuildDevices(IReadOnlyList<CsvRecord> records)
