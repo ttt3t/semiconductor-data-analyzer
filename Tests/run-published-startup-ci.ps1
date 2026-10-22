@@ -36,6 +36,16 @@ try {
                 if ($taskProcess.MainWindowHandle -eq 0) { continue }
                 $taskWindow = [System.Windows.Automation.AutomationElement]::FromHandle($taskProcess.MainWindowHandle)
                 if ($taskMode -eq 'management') {
+                    # The file grid is on the third tab; WPF does not expose
+                    # controls on inactive tabs through UI Automation.
+                    $taskTabsCondition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'MainTabs')
+                    $taskTabs = $taskWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $taskTabsCondition)
+                    if ($null -eq $taskTabs) { continue }
+                    $taskTabCondition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::TabItem)
+                    $taskTabItems = $taskTabs.FindAll([System.Windows.Automation.TreeScope]::Children, $taskTabCondition)
+                    if ($taskTabItems.Count -lt 3) { continue }
+                    $taskTabSelection = $taskTabItems[2].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+                    $taskTabSelection.Select()
                     $taskCondition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'DgFiles')
                     $taskGrid = $taskWindow.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $taskCondition)
                     if ($null -eq $taskGrid) { continue }
@@ -44,7 +54,7 @@ try {
                 } else { $taskReady = $taskProcess.MainWindowTitle.Contains('V2.1.1') }
                 if ($taskReady) { break }
             }
-            if (!$taskReady) { throw "Published EXE did not render the expected $taskMode window." }
+            if (!$taskReady) { throw "Published EXE did not render the expected $taskMode window. Title: $($taskProcess.MainWindowTitle); grid rows: $($taskPattern.Current.RowCount)" }
             Start-Sleep -Seconds 2
             $taskProcess.Refresh()
             if ($taskProcess.HasExited) { throw "Published EXE crashed after rendering $taskMode." }
