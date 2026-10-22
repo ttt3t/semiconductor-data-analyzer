@@ -109,10 +109,10 @@ static class Probe
         Check(first.Items[0].Values.Select(v => v.Value).SequenceEqual(new[] { 1.25, 1.75 }) && last.Items[0].Values.Select(v => v.Value).SequenceEqual(new[] { 3.5, 1.75 }), "first and last partial retests preserve sparse source alignment");
         Check(DatasetService.SelectRetests(sparse, RetestMode.OnlyRetests).Items[0].Values.Single().Value == 3.5, "only-retest mode selects correct compact cell");
         var snapshot = SimulationSnapshot.Build(sparse, config, RetestMode.Last, default);
-        int chip = Enumerable.Range(0, snapshot.Count).First(c => snapshot.Chips[c].X == 1);
+        int chip = Array.FindIndex(snapshot.Chips, c => c.X == 1);
         Check(snapshot.Value(chip, 0) == 3.5 && snapshot.Value(chip, 1) == 1.25, "joint simulation reads sparse values from physical source rows");
-        Check(snapshot.States[0][Enumerable.Range(0, snapshot.Count).First(c => snapshot.Chips[c].X == 2)] == MeasurementState.Invalid &&
-            double.IsNaN(snapshot.Value(Enumerable.Range(0, snapshot.Count).First(c => snapshot.Chips[c].X == 4), 0)), "simulation distinguishes invalid and nonconsecutive unmeasured cells");
+        Check(snapshot.States[0][Array.FindIndex(snapshot.Chips, c => c.X == 2)] == MeasurementState.Invalid &&
+            double.IsNaN(snapshot.Value(Array.FindIndex(snapshot.Chips, c => c.X == 4), 0)), "simulation distinguishes invalid and nonconsecutive unmeasured cells");
         var filtered = SampleFilterService.Apply(sparse, new[] { new SampleRange("a", 1, 2) }, RetestMode.All);
         Check(filtered.Records.Select(r => r.Id).SequenceEqual(new[] { rows[1].Id, rows[15].Id }) && MapDataService.PfPages(sparse, a, null).Sum(p => p.Dies.Count) == 4, "sample filters and PF maps keep compact-column populations");
         string exported = P("sparse-integrated.csv"); IntegratedCsvService.Save(exported, sparse); var loaded = IntegratedCsvService.Load(exported); using var loadedLease = new DatasetLease(loaded.Records);
@@ -235,9 +235,9 @@ static class Probe
         void Tick(object r) { Set(r, "_lastActivity", Stopwatch.GetTimestamp() - Stopwatch.Frequency * 6); Call(r, "OnTick", null, EventArgs.Empty); Wait(r); }
         bool ready = false; var r = Create(() => ready);
         Call(r, "RequestStartup"); Tick(r);
-        Check(Count(r) == 0 && (bool)Field(r, "_pending")!, "startup cache eviction waits for calculation/input idle");
+        Check(Count(r) == 0 && (bool)Field(r, "_pending")!, "startup collection waits for calculation/input idle");
         ready = true; Tick(r);
-        Check(Count(r) == 1 && !(bool)Field(r, "_pending")!, "startup page cache is evicted once after idle");
+        Check(Count(r) == 1 && !(bool)Field(r, "_pending")!, "small startup heap is reclaimed once after idle");
         var second = Create(() => true); Call(second, "RequestStartup"); Tick(second);
         Check(Count(second) == 0, "opening a second window does not compact the process again");
         Call(r, "Request"); Tick(r); Check(Count(r) == 1, "ordinary requests obey collection cooldown");
@@ -254,7 +254,7 @@ static class Probe
         type.GetField("_lastAllocated", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, GC.GetTotalAllocatedBytes());
         type.GetField("_lastCollection", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, 0L);
         var loaded = Create(() => true); Call(loaded, "RequestStartup"); Tick(loaded);
-        Check(Count(loaded) == 0, "startup eviction skips a large loaded heap");
+        Check(Count(loaded) == 0, "startup compaction skips a large loaded heap");
         GC.KeepAlive(big); ((IDisposable)loaded).Dispose();
         string runtime = Path.ChangeExtension(assemblyPath, ".runtimeconfig.json");
         Check(File.ReadAllText(runtime).Contains("\"System.GC.Server\": false"), "workstation GC is explicit in the application runtime configuration");

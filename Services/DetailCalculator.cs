@@ -23,7 +23,7 @@ public static class DetailCalculator
         IReadOnlyList<TestValue> values = item.Values;
         if (request.Site != null || request.Wafer != null)
         {
-            var filtered = new PagedVector<int>();
+            var filtered = new List<int>();
             for (int i = 0; i < item.Values.Count; i++)
             {
                 if ((i & 4095) == 0) token.ThrowIfCancellationRequested();

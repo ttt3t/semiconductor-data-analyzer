@@ -11,9 +11,9 @@ public sealed partial class CsvParseResult
     public string SourceDescription { get; set; } = "";
     public StdfFileMetadata? StdfMetadata { get; set; }
     public List<TestItemData> Items { get; set; } = new();
-    public IReadOnlyList<DeviceInfo> Devices { get; set; } = Array.Empty<DeviceInfo>();
-    public RecordList Records { get; set; } = new();
-    private RecordList? _wafersSource;
+    public List<DeviceInfo> Devices { get; set; } = new();
+    public List<CsvRecord> Records { get; set; } = new();
+    private List<CsvRecord>? _wafersSource;
     private int _wafersRecordCount = -1;
     private IReadOnlyList<string>? _wafersCache;
     public IReadOnlyList<string> Wafers
@@ -29,8 +29,6 @@ public sealed partial class CsvParseResult
             return _wafersCache;
         }
     }
-    internal void SetKnownWafers(IReadOnlyList<string> wafers)
-    { _wafersSource = Records; _wafersRecordCount = Records.Count; _wafersCache = wafers; }
 }
 
 public static class CsvParser
@@ -42,7 +40,7 @@ public static class CsvParser
         => ParseCore(csvPath, config, progress, cancellationToken, false);
 
     internal static CsvParseResult ParseCore(string csvPath, AnalyzerConfig config, Action<string>? progress,
-        CancellationToken cancellationToken, bool yieldOnly, bool deferColumns = false)
+        CancellationToken cancellationToken, bool yieldOnly)
     {
         if (!cancellationToken.CanBeCanceled) cancellationToken = AnalysisOperation.Token;
         cancellationToken.ThrowIfCancellationRequested();
@@ -159,10 +157,7 @@ public static class CsvParser
         if (items.Count == 0)
             throw new InvalidDataException("未解析到任何有效测试项");
 
-        int capacity = Math.Max(0, rowCount - config.DataStartRow + 1);
-        // Small batch inputs can feed the shared destination directly. RecordList
-        // automatically spills after 2048 rows, so large inputs remain bounded.
-        var records = new RecordList(deferColumns ? Math.Min(2048, capacity) : capacity, disk: !yieldOnly && !deferColumns);
+        var records = new List<CsvRecord>(Math.Max(0, rowCount - config.DataStartRow + 1));
         var schema = new MeasurementSchema(items.Select(i => i.Id));
         string waferId = Path.GetFileNameWithoutExtension(csvPath);
         string unannotatedWaferId = $"{waferId} (未标注 wafer)";
@@ -235,12 +230,8 @@ public static class CsvParser
                     return string.IsNullOrWhiteSpace(cell) ? fallback : cell.Trim();
                 }
 
-                bool nonblank = false;
                 for (int i = 0; i < items.Count; i++)
-                {
                     rawMeasurements[i] = GetCell(rowCells, items[i].ColumnIndex);
-                    nonblank |= !string.IsNullOrWhiteSpace(rawMeasurements[i]);
-                }
 
                 string rowWafer;
                 if (config.WaferColumn == 0) rowWafer = waferId;
@@ -261,8 +252,7 @@ public static class CsvParser
                     Program = Context(config.ProgramColumn, config.Program),
                     Lot = Context(config.LotColumn, config.Lot),
                     SBin = sbin,
-                    HBin = hbin,
-                    HasNonblankMeasurements = nonblank
+                    HBin = hbin
                 };
                 if (projection != null) projection.Capture(record, rawMeasurements);
                 else record.Measurements = rawStore!.Append(schema, rawMeasurements);
@@ -271,11 +261,7 @@ public static class CsvParser
 
             stamp.Validate(input);
             rawStore?.Seal();
-            // A batch will remap definitions and build its numeric columns once.
-            // Keep exact raw cells here, without constructing disposable per-file columns.
-            var parsed = projection != null ? projection.Complete(records) : deferColumns
-                ? new CsvParseResult { Items = items, Records = records, Devices = DatasetService.BuildDevices(records) }
-                : DatasetService.Build(items, records);
+            var parsed = projection != null ? projection.Complete(records) : DatasetService.Build(items, records);
             if (skippedHeaders > 0) parsed.SourceDescription = $"已跳过 {skippedHeaders} 行重复表头";
             progress?.Invoke($"解析完成，共 {items.Count} 个测试项，{parsed.Devices.Count} 颗唯一芯片");
             return parsed;

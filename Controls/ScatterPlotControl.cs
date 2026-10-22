@@ -140,8 +140,8 @@ public class ScatterPlotControl : CachedPlotControl
 
     public void ClearChipMarks()
     {
-        CancelRightGesture(); CancelMarkWork();
-        _chipMarks.Clear(); _pagedMarks = null;
+        CancelRightGesture();
+        _chipMarks.Clear();
         _markedPoints = Array.Empty<bool>();
         _markedCoords.Clear();
         _markedCoords.Capacity = 256;
@@ -220,7 +220,7 @@ public class ScatterPlotControl : CachedPlotControl
         };
         Unloaded += (_, _) =>
         {
-            CancelRightGesture(); CancelMarkWork();
+            CancelRightGesture();
             _hoverTimer.Stop();
             _hover = null;
             ReleaseRasterBuffers();
@@ -236,110 +236,8 @@ public class ScatterPlotControl : CachedPlotControl
         MouseRightButtonUp += OnMouseRightButtonUp;
     }
 
-    private CancellationTokenSource? _markCancellation;
-    private long _markVersion;
-    private void CancelMarkWork()
-    { _markVersion++; _markCancellation?.Cancel(); _markCancellation?.Dispose(); _markCancellation = null; }
-    private void RefreshMarks()
-    {
-        CancelMarkWork(); _pagedMarks = null; _markedPoints = Array.Empty<bool>();
-        if (!_series.Points.IsOnDisk) { _markedPoints = _chipMarks.CreateMask(_series); return; }
-        if (_chipMarks.Count == 0) return;
-        var series = _series; long version = _markVersion;
-        var lease = series.AcquireLease();
-        var cancellation = _markCancellation = new CancellationTokenSource(); var token = cancellation.Token;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var mask = _chipMarks.CreatePagedMask(series, token); token.ThrowIfCancellationRequested();
-                await Dispatcher.InvokeAsync(() => { if (version == _markVersion && ReferenceEquals(series, _series)) { _pagedMarks = mask; InvalidatePlot(); } });
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception ex) { await MarkReadFailed(ex, token); }
-            finally { lease?.Dispose(); }
-        });
-    }
-    private void SelectPagedMarks(ScatterSeries series, double x1, double x2, double y1, double y2)
-    {
-        CancelMarkWork(); long version = _markVersion;
-        var lease = series.AcquireLease();
-        var cancellation = _markCancellation = new CancellationTokenSource(); var token = cancellation.Token;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                using var selection = _chipMarks.SelectRectangle(series, x1, x2, y1, y2, token); token.ThrowIfCancellationRequested();
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    if (version != _markVersion || !ReferenceEquals(series, _series)) return;
-                    _chipMarks.Merge(selection); ChipMarksChanged?.Invoke(this, EventArgs.Empty); RefreshMarks();
-                });
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception ex) { await MarkReadFailed(ex, token); }
-            finally { lease?.Dispose(); }
-        });
-    }
-    private async Task MarkReadFailed(Exception error, CancellationToken token)
-    {
-        if (token.IsCancellationRequested || Dispatcher.HasShutdownStarted) return;
-        await Dispatcher.InvokeAsync(() => { if (!token.IsCancellationRequested) AutomationProperties.SetHelpText(this, "芯片标记读取失败：" + error.Message); });
-    }
-
-    private ScatterRasterRequest? _rasterRequest, _readyRaster;
-    private CancellationTokenSource? _rasterCancellation;
-    private DrawingGroup? _lastDrawing;
-    private bool _rasterPending;
-    private PagedVector<byte>? _pagedMarks;
-
-    private bool EnsurePagedRaster()
-    {
-        GetVisibleRange(out double min, out double max, out _, out _);
-        double dpi = PresentationSource.FromVisual(this) == null ? Math.Max(1.5, Dpi) : Dpi;
-        double targetW = _plotW * dpi, targetH = _plotH * dpi;
-        double scale = Math.Min(1, Math.Sqrt(MaxRasterPixels / (targetW * targetH)));
-        scale = Math.Min(scale, Math.Min(8192 / targetW, 8192 / targetH));
-        int width = Math.Clamp((int)Math.Round(targetW * scale), 1, 8192);
-        int height = Math.Min(Math.Clamp((int)Math.Round(targetH * scale), 1, 8192), MaxRasterPixels / width);
-        var request = new ScatterRasterRequest(_series, _pagedMarks, _markedPoints, width, height,
-            scale < 1 ? Math.Min(width / _plotW, height / _plotH) : dpi,
-            _plotW, _plotH, _dataMinX, _dataMaxX, _dataMinY, _dataMaxY, _scaleX, _scaleY, _offsetX, _offsetY, min, max, _series.Order != ScatterOrder.SerialNumber);
-        if (request == _readyRaster) return true;
-        if (request == _rasterRequest) return false;
-        _rasterCancellation?.Cancel(); _rasterCancellation?.Dispose();
-        var cancellation = _rasterCancellation = new CancellationTokenSource();
-        var token = cancellation.Token; _rasterRequest = request; _rasterPending = true;
-        _ = Task.Run(async () =>
-        {
-            bool entered = false;
-            try
-            {
-                await DiskStorage.Jobs.WaitAsync(token); entered = true;
-                uint[] pixels = new ScatterRasterizer().Render(request, token); token.ThrowIfCancellationRequested();
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    if (token.IsCancellationRequested || _rasterRequest != request) return;
-                    var bitmap = new WriteableBitmap(width, height, 96 * dpi, 96 * dpi, PixelFormats.Pbgra32, null);
-                    bitmap.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * sizeof(uint), 0); bitmap.Freeze();
-                    _pointBitmap = bitmap; _readyRaster = request; _rasterPending = false;
-                    InvalidateVisual(); _overlayLayer.InvalidateVisual();
-                });
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception ex)
-            {
-                if (!token.IsCancellationRequested && !Dispatcher.HasShutdownStarted)
-                    await Dispatcher.InvokeAsync(() => { if (_rasterRequest == request) { _rasterPending = false; _rasterRequest = null; AutomationProperties.SetHelpText(this, "散点图读取失败：" + ex.Message); } });
-            }
-            finally { if (entered) DiskStorage.Jobs.Release(); }
-        });
-        return false;
-    }
-
     private void ReleaseRasterBuffers()
     {
-        _rasterCancellation?.Cancel(); _rasterRequest = _readyRaster = null; _rasterPending = false; _lastDrawing = null;
         _pointBitmap = null;
         _pointBitmapDpi = 0;
         _pixelBuffer = Array.Empty<uint>();
@@ -479,7 +377,7 @@ public class ScatterPlotControl : CachedPlotControl
         CancelRightGesture();
         _dragStart = null;
         var start = e.GetPosition(this);
-        if (!IsInPlot(start) || _rasterPending) return;
+        if (!IsInPlot(start)) return;
         Focus();
         _rightStart = _rightPosition = start;
         if (CaptureMouse()) _selectionTimer.Start();
@@ -522,13 +420,12 @@ public class ScatterPlotControl : CachedPlotControl
         {
             if (rectangle.Width < 2 || rectangle.Height < 2) return;
             if (TryScreenToData(rectangle.TopLeft, out double x1, out double y1) &&
-                TryScreenToData(rectangle.BottomRight, out double x2, out double y2))
+                TryScreenToData(rectangle.BottomRight, out double x2, out double y2) &&
+                _chipMarks.AddRectangle(_series, x1, x2, y1, y2))
             {
-                if (_series.Points.IsOnDisk) SelectPagedMarks(_series, x1, x2, y1, y2);
-                else if (_chipMarks.AddRectangle(_series, x1, x2, y1, y2))
-                {
-                    _markedPoints = _chipMarks.CreateMask(_series); InvalidatePlot(); ChipMarksChanged?.Invoke(this, EventArgs.Empty);
-                }
+                _markedPoints = _chipMarks.CreateMask(_series);
+                InvalidatePlot();
+                ChipMarksChanged?.Invoke(this, EventArgs.Empty);
             }
         }
         else if (Math.Abs(end.X - start.X) <= SystemParameters.MinimumHorizontalDragDistance &&
@@ -634,9 +531,8 @@ public class ScatterPlotControl : CachedPlotControl
     private void ApplySeries(ScatterSeries series)
     {
         CancelRightGesture();
-        _rasterCancellation?.Cancel(); _rasterRequest = _readyRaster = null; _rasterPending = false; _pointBitmap = null;
         _series = series;
-        RefreshMarks();
+        _markedPoints = _chipMarks.CreateMask(series);
         _markedCoords.Clear();
         if (_markedCoords.Capacity > Math.Max(256L, (long)series.Points.Length * 4))
             _markedCoords.Capacity = Math.Max(256, series.Points.Length);
@@ -668,23 +564,6 @@ public class ScatterPlotControl : CachedPlotControl
     }
 
     protected override void DrawPlot(DrawingContext dc)
-    {
-        if (_series.Points.IsOnDisk && _hasPlot)
-        {
-            if (!EnsurePagedRaster())
-            {
-                if (_lastDrawing != null) dc.DrawDrawing(_lastDrawing);
-                else dc.DrawRectangle(Brushes.White, null, new Rect(RenderSize));
-                return;
-            }
-            var drawing = new DrawingGroup();
-            using (var layer = drawing.Open()) DrawPlotCore(layer);
-            _lastDrawing = drawing; dc.DrawDrawing(drawing);
-        }
-        else DrawPlotCore(dc);
-    }
-
-    private void DrawPlotCore(DrawingContext dc)
     {
         _renderCount++;
 
@@ -814,7 +693,6 @@ public class ScatterPlotControl : CachedPlotControl
     {
         var points = _series.Points;
         if (points.Length == 0 || _plotW < 1 || _plotH < 1) return;
-        if (points.IsOnDisk) { if (_pointBitmap != null) dc.DrawImage(_pointBitmap, plotRect); return; }
 
         // Offscreen report export renders at 144 DPI (1.5x); match it so exported scatter plots stay crisp.
         double renderDpi = PresentationSource.FromVisual(this) == null ? Math.Max(1.5, Dpi) : Dpi;
@@ -1060,7 +938,7 @@ public class ScatterPlotControl : CachedPlotControl
         protected override void OnRender(DrawingContext dc)
         {
             var o = _owner;
-            if (o.IsResizePreview || o._rasterPending) return;
+            if (o.IsResizePreview) return;
             if (o._selecting)
             {
                 dc.DrawRectangle(SelectionFill, SelectionPen, o.SelectionRectangle());

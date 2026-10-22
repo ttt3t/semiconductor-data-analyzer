@@ -8,7 +8,7 @@ $taskAssemblyXml = [Security.SecurityElement]::Escape($taskAssembly)
 $taskProject = @"
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0-windows</TargetFramework><UseWPF>true</UseWPF><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
-  <ItemGroup><Reference Include="SemiconductorCsvAnalyzer"><HintPath>$taskAssemblyXml</HintPath></Reference><PackageReference Include="ClosedXML" Version="0.105.1"/><PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.32"/></ItemGroup>
+  <ItemGroup><Reference Include="SemiconductorCsvAnalyzer"><HintPath>$taskAssemblyXml</HintPath></Reference><PackageReference Include="ClosedXML" Version="0.105.1"/></ItemGroup>
 </Project>
 "@
 [IO.File]::WriteAllText((Join-Path $taskProjectRoot 'Probe.csproj'), $taskProject)

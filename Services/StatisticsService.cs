@@ -16,11 +16,11 @@ public static class StatisticsService
         var sites = new Dictionary<string, (int Count, int InSpec)>(StringComparer.Ordinal);
         if (values is TestValueColumn col)
         {
-            foreach (var sample in col.ReadScopedNumbers())
+            for (int i = 0; i < n; i++)
             {
-                string rawSite = sample.Site;
+                string rawSite = col.GetRecordAt(i).Site;
                 string site = string.IsNullOrWhiteSpace(rawSite) ? "(空)" : rawSite;
-                double v = sample.Value;
+                double v = col.GetValueAt(i);
                 bool failed = (lowLimit.HasValue && v < lowLimit.Value) ||
                     (highLimit.HasValue && v > highLimit.Value);
                 ref var counts = ref CollectionsMarshal.GetValueRefOrAddDefault(sites, site, out _);
@@ -32,7 +32,7 @@ public static class StatisticsService
         {
             for (int i = 0; i < n; i++)
             {
-                string rawSite = idx.SiteAt(i);
+                string rawSite = idx.GetRecordAt(i).Site;
                 string site = string.IsNullOrWhiteSpace(rawSite) ? "(空)" : rawSite;
                 double v = idx.GetValueAt(i);
                 bool failed = (lowLimit.HasValue && v < lowLimit.Value) ||
@@ -79,15 +79,16 @@ public static class StatisticsService
         if (!removeOutliers) return (original.Mean, original.StdDev);
         if (!double.IsFinite(original.Mean) || !double.IsFinite(original.StdDev)) return (null, null);
 
-        double radius = sigmaMultiplier * original.StdDev;
-        double lower = original.Mean - radius, upper = original.Mean + radius;
-        int count = 0; double mean = 0, m2 = 0;
-        foreach (double value in Numbers(values))
+        if (values is TestValueColumn col && col.TryGetContiguousValues(out var contiguous))
+            return CalculateRobust(contiguous, original, removeOutliers, sigmaMultiplier);
+
+        double[] rented = ArrayPool<double>.Shared.Rent(n);
+        try
         {
-            if (!double.IsFinite(value) || value < lower || value > upper) continue;
-            count++; double delta = value - mean; mean += delta / count; m2 += delta * (value - mean);
+            CopyValues(values, rented.AsSpan(0, n));
+            return CalculateRobust(rented.AsSpan(0, n), original, removeOutliers, sigmaMultiplier);
         }
-        return count == 0 ? (null, null) : (mean, Math.Sqrt(Math.Max(0, m2 / count)));
+        finally { ArrayPool<double>.Shared.Return(rented); }
     }
 
     internal static (double? Mean, double? Sigma) CalculateRobust(
@@ -121,13 +122,6 @@ public static class StatisticsService
         int n = values.Count;
         if (n == 0) return null;
 
-        if (n > ExternalValueSort.RunValues)
-        {
-            using var sortedValues = ExternalValueSort.Sort(Numbers(values)).GetEnumerator();
-            double previous = 0, current = 0;
-            for (int i = 0; i <= n / 2; i++) { previous = current; if (!sortedValues.MoveNext()) throw new InvalidOperationException("数值列长度不一致。"); current = sortedValues.Current; }
-            return n % 2 == 1 ? current : previous * .5 + current * .5;
-        }
         // Sort a pooled copy so sample order remains unchanged in the value table and scatter plot.
         double[] sorted = ArrayPool<double>.Shared.Rent(n);
         try
@@ -151,16 +145,22 @@ public static class StatisticsService
         if (n == 0)
             return (new StatisticsResult(), (null, null), null);
 
-        var stats = Calculate(values, lsl, usl);
-        return (stats, CalculateRobust(values, stats, removeOutliers, sigmaMultiplier), CalculateMedian(values));
+        double[] buffer = ArrayPool<double>.Shared.Rent(n);
+        try
+        {
+            var span = buffer.AsSpan(0, n);
+            CopyValues(values, span);
+            var stats = Calculate(span, lsl, usl);
+            var robust = CalculateRobust(span, stats, removeOutliers, sigmaMultiplier);
+            Array.Sort(buffer, 0, n);
+            int middle = n / 2;
+            double median = n % 2 == 1
+                ? buffer[middle]
+                : buffer[middle - 1] * 0.5 + buffer[middle] * 0.5;
+            return (stats, robust, median);
+        }
+        finally { ArrayPool<double>.Shared.Return(buffer); }
     }
-
-    internal static IEnumerable<double> Numbers(IReadOnlyList<TestValue> values) => values switch
-    {
-        TestValueColumn column => column.ReadNumbers(),
-        IndexedTestValues selected => selected.ReadNumbers(),
-        _ => values.Select(v => v.Value)
-    };
 
     public static StatisticsResult Calculate(IReadOnlyList<TestValue> values, double? lsl, double? usl)
     {
@@ -168,29 +168,16 @@ public static class StatisticsService
         if (n == 0)
             return new StatisticsResult();
 
-        double sum = 0, min = double.PositiveInfinity, max = double.NegativeInfinity;
-        int below = 0, above = 0, inSpec = 0;
-        foreach (double x in Numbers(values))
-        {
-            sum += x; min = Math.Min(min, x); max = Math.Max(max, x);
-            bool low = lsl.HasValue && x < lsl.Value, high = usl.HasValue && x > usl.Value;
-            if (low) below++; if (high) above++; if (!low && !high) inSpec++;
-        }
-        double mean = sum / n, variance = 0;
-        foreach (double x in Numbers(values)) { double delta = x - mean; variance += delta * delta; }
-        return Capability(new StatisticsResult { Count = n, Mean = mean, StdDev = Math.Sqrt(variance / n), Min = min, Max = max,
-            BelowLsl = below, AboveUsl = above, InSpec = inSpec, InSpecPercent = 100.0 * inSpec / n }, lsl, usl);
-    }
+        if (values is TestValueColumn col && col.TryGetContiguousValues(out var contiguous))
+            return Calculate(contiguous, lsl, usl);
 
-    private static StatisticsResult Capability(StatisticsResult result, double? lsl, double? usl)
-    {
-        double sigma = result.StdDev, mean = result.Mean;
-        if (sigma < 1e-15) return result;
-        if (lsl.HasValue && usl.HasValue)
-        { result.Cp = (usl.Value - lsl.Value) / (6 * sigma); result.Cpu = (usl.Value - mean) / (3 * sigma); result.Cpl = (mean - lsl.Value) / (3 * sigma); result.Cpk = Math.Min(result.Cpu.Value, result.Cpl.Value); }
-        else if (usl.HasValue) result.Cpk = result.Cpu = (usl.Value - mean) / (3 * sigma);
-        else if (lsl.HasValue) result.Cpk = result.Cpl = (mean - lsl.Value) / (3 * sigma);
-        return result;
+        double[] rented = ArrayPool<double>.Shared.Rent(n);
+        try
+        {
+            CopyValues(values, rented.AsSpan(0, n));
+            return Calculate(rented.AsSpan(0, n), lsl, usl);
+        }
+        finally { ArrayPool<double>.Shared.Return(rented); }
     }
 
     internal static StatisticsResult Calculate(ReadOnlySpan<double> values, double? lsl, double? usl)
@@ -273,7 +260,7 @@ public static class StatisticsService
     {
         if (source is TestValueColumn col)
         {
-            int i = 0; foreach (double value in col.ReadNumbers()) destination[i++] = value;
+            col.CopyValuesTo(destination);
         }
         else if (source is IndexedTestValues idx)
         {

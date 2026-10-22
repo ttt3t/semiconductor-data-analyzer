@@ -18,18 +18,6 @@ public partial class MainWindow
     private int[] _runPositions = Array.Empty<int>();
     private bool _updatingRunInput;
 
-    private bool HasRunCoordinates() => (uint)_runIndex < (uint)_data.Records.Count && _data.Records[_runIndex].X.HasValue && _data.Records[_runIndex].Y.HasValue;
-    private int CoordinateRow(string wafer, int x, int y) => _data.Records.Store is { } store ? store.RunLookup(wafer: wafer, x: x, y: y) : _runByCoordinates.GetValueOrDefault((wafer, x, y), -1);
-    private int FirstCoordinateRow(string wafer) => _data.Records.Store is { } store ? store.RunLookup(wafer: wafer) : _runRowsByWafer.TryGetValue(wafer, out var rows) && rows.Count > 0 ? rows[0] : -1;
-    private int CoordinateNeighbor(int step)
-    {
-        if (!HasRunCoordinates()) return -1;
-        string wafer = _data.Records[_runIndex].WaferId;
-        if (_data.Records.Store is { } store) return store.RunLookup(wafer: wafer, after: _runIndex, previous: step < 0);
-        int position = _runPositions[_runIndex] + step; var rows = _runRowsByWafer[wafer];
-        return (uint)position < (uint)rows.Count ? rows[position] : -1;
-    }
-
     private void ClearCoordinateRunIndex()
     {
         _runByCoordinates = new();
@@ -43,12 +31,9 @@ public partial class MainWindow
         if (changedData)
         {
             // Drop old index capacity too when a large file is replaced by a small one.
-            _runBySerial = new(_data.Records.IsOnDisk ? 0 : _data.Records.Count, StringComparer.Ordinal);
+            _runBySerial = new(_data.Records.Count, StringComparer.Ordinal);
             _runItems = new(_data.Items.Count, StringComparer.Ordinal);
             ClearCoordinateRunIndex();
-            if (_data.Records.Store is { } store) _runWafers = store.CoordinateWafers();
-            else
-            {
             _runPositions = new int[_data.Records.Count];
             Array.Fill(_runPositions, -1);
             for (int row = 0; row < _data.Records.Count; row++)
@@ -65,7 +50,6 @@ public partial class MainWindow
                 rows.Add(row);
                 _runByCoordinates[(record.WaferId, x, y)] = row;
             }
-            }
             foreach (var item in _data.Items) _runItems[item.Id] = item;
             _runIndex = _data.Records.Count == 0 ? -1 : 0;
         }
@@ -73,7 +57,7 @@ public partial class MainWindow
         if (changedData && _runSelectionMode == RunSelectionMode.WaferCoordinates && _runIndex >= 0)
         {
             var current = _data.Records[_runIndex];
-            _runIndex = CoordinateRow(current.WaferId, current.X!.Value, current.Y!.Value);
+            _runIndex = _runByCoordinates[(current.WaferId, current.X!.Value, current.Y!.Value)];
         }
         UpdateRunInput();
         RefreshRunValues(refreshView: false);
@@ -103,8 +87,8 @@ public partial class MainWindow
             PreviousRunWaferButton.IsEnabled = waferIndex > 0;
             NextRunWaferButton.IsEnabled = waferIndex >= 0 && waferIndex + 1 < _runWafers.Count;
             int position = available && _runPositions.Length > _runIndex ? _runPositions[_runIndex] : -1;
-            PreviousCoordinateRunButton.IsEnabled = _data.Records.IsOnDisk ? CoordinateNeighbor(-1) >= 0 : position > 0;
-            NextCoordinateRunButton.IsEnabled = _data.Records.IsOnDisk ? CoordinateNeighbor(1) >= 0 : position >= 0 && current != null && position + 1 < _runRowsByWafer[current.WaferId].Count;
+            PreviousCoordinateRunButton.IsEnabled = position > 0;
+            NextCoordinateRunButton.IsEnabled = position >= 0 && current != null && position + 1 < _runRowsByWafer[current.WaferId].Count;
             RunWaferTextBox.ToolTip = "输入完整晶圆名称后回车，或使用上下按钮切换晶圆；优先保留当前 XY，找不到时显示该晶圆首个坐标的末次记录。";
             RunCoordinatesInput.ToolTip = current == null ? "没有完整 XY 坐标，请在设置中改用序列号模式。" :
                 $"{current.WaferId} · ({current.X}, {current.Y}) · Run {current.SerialNumber}\n输入 X/Y 后回车定位末次记录；上下按钮按导入顺序浏览当前晶圆的原始记录（含各次复测）。";
@@ -116,13 +100,13 @@ public partial class MainWindow
     {
         if (_runSelectionMode == RunSelectionMode.WaferCoordinates)
         {
-            if (!HasRunCoordinates())
+            if ((uint)_runIndex >= (uint)_runPositions.Length || _runPositions[_runIndex] < 0)
             {
-                _runIndex = _runWafers.Count == 0 ? -1 : FirstCoordinateRow(_runWafers[0]);
+                _runIndex = _runWafers.Count == 0 ? -1 : _runRowsByWafer[_runWafers[0]][0];
                 if (_runIndex >= 0)
                 {
                     var current = _data.Records[_runIndex];
-                    _runIndex = CoordinateRow(current.WaferId, current.X!.Value, current.Y!.Value);
+                    _runIndex = _runByCoordinates[(current.WaferId, current.X!.Value, current.Y!.Value)];
                 }
             }
         }
@@ -140,7 +124,7 @@ public partial class MainWindow
         if (mode == RunSelectionMode.WaferCoordinates && _runIndex >= 0)
         {
             var current = _data.Records[_runIndex];
-            _runIndex = CoordinateRow(current.WaferId, current.X!.Value, current.Y!.Value);
+            _runIndex = _runByCoordinates[(current.WaferId, current.X!.Value, current.Y!.Value)];
         }
         UpdateRunInput();
         RefreshRunValues();
@@ -164,18 +148,19 @@ public partial class MainWindow
         var record = (uint)_runIndex < (uint)_data.Records.Count ? _data.Records[_runIndex] : null;
         string site = record == null ? "" : SiteKey(record.Site);
         bool included = record != null && (_sampleIncludedIds == null || _sampleIncludedIds.Contains(record.Id));
-        double? RunValue(TestItemSummary summary)
+        // Read one position from each numeric column; never materialize raw strings or scan every die.
+        foreach (var summary in _summaries)
         {
+            double? value = null;
             if (included && record != null && (summary.IsCombined || summary.Site == site) &&
-                (summary.IsWaferCombined || summary.Wafer == record.WaferId) && _runItems.TryGetValue(summary.Data.Id, out var source))
+                (summary.IsWaferCombined || summary.Wafer == record.WaferId) &&
+                _runItems.TryGetValue(summary.Data.Id, out var source))
             {
                 double number = source.Values.GetSourceRowValue(_runIndex);
-                if (double.IsFinite(number)) return number * summary.Data.DisplayFactor;
+                if (double.IsFinite(number)) value = number * summary.Data.DisplayFactor;
             }
-            return null;
+            summary.RunValue = value;
         }
-        _summaries.RunValueProvider = RunValue;
-        foreach (var summary in _summaries.HotRows) summary.RunValue = RunValue(summary);
         // Ordinary Run navigation updates only the Value cells, without rebuilding the view or charts.
         if (refreshView && (_columnValueFilters.ContainsKey("RunValue") ||
             _columnFilters.TryGetValue("RunValue", out var filter) && !string.IsNullOrWhiteSpace(filter) ||
@@ -186,8 +171,7 @@ public partial class MainWindow
     private bool CommitRunText()
     {
         if (_updatingRunInput || _runSelectionMode != RunSelectionMode.SerialNumber || _isBusy || _data.Records.Count == 0) return false;
-        int index = _data.Records.Store is { } store ? store.RunLookup(serial: RunTextBox.Text.Trim()) : _runBySerial.GetValueOrDefault(RunTextBox.Text.Trim(), -1);
-        if (index >= 0)
+        if (_runBySerial.TryGetValue(RunTextBox.Text.Trim(), out int index))
         {
             SelectRun(index);
             return true;
@@ -216,8 +200,9 @@ public partial class MainWindow
     {
         if (_runSelectionMode == RunSelectionMode.SerialNumber) { SelectRun(_runIndex + step); return; }
         if (!CommitCoordinateRunText()) return;
-        int next = CoordinateNeighbor(step);
-        if (next >= 0) SelectRun(next);
+        var rows = _runRowsByWafer[_data.Records[_runIndex].WaferId];
+        int position = _runPositions[_runIndex] + step;
+        if ((uint)position < (uint)rows.Count) SelectRun(rows[position]);
     }
 
     private bool CommitCoordinateRunText()
@@ -226,7 +211,7 @@ public partial class MainWindow
             (uint)_runIndex >= (uint)_data.Records.Count) return false;
         if (int.TryParse(RunXTextBox.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int x) &&
             int.TryParse(RunYTextBox.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int y) &&
-            (CoordinateRow(RunWaferTextBox.Text.Trim(), x, y) is int row && row >= 0))
+            _runByCoordinates.TryGetValue((RunWaferTextBox.Text.Trim(), x, y), out int row))
         {
             // Leaving the fields unchanged must not jump away from a browsed first retest.
             var current = _data.Records[_runIndex];
@@ -242,15 +227,14 @@ public partial class MainWindow
 
     private bool SelectRunWafer(string wafer)
     {
-        int firstRow = FirstCoordinateRow(wafer);
-        if (_isBusy || firstRow < 0) return false;
+        if (_isBusy || !_runRowsByWafer.TryGetValue(wafer, out var rows) || rows.Count == 0) return false;
         var current = (uint)_runIndex < (uint)_data.Records.Count ? _data.Records[_runIndex] : null;
-        int row = firstRow;
-        if (current?.X is int x && current.Y is int y && (CoordinateRow(wafer, x, y) is int match && match >= 0)) row = match;
+        int row = rows[0];
+        if (current?.X is int x && current.Y is int y && _runByCoordinates.TryGetValue((wafer, x, y), out int match)) row = match;
         else
         {
             var first = _data.Records[row];
-            row = CoordinateRow(wafer, first.X!.Value, first.Y!.Value);
+            row = _runByCoordinates[(wafer, first.X!.Value, first.Y!.Value)];
         }
         SelectRun(row);
         return true;
@@ -283,7 +267,7 @@ public partial class MainWindow
             if (CommitCoordinateRunText())
             {
                 var current = _data.Records[_runIndex];
-                SelectRun(CoordinateRow(current.WaferId, current.X!.Value, current.Y!.Value));
+                SelectRun(_runByCoordinates[(current.WaferId, current.X!.Value, current.Y!.Value)]);
             }
             e.Handled = true;
         }

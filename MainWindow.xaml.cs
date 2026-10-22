@@ -21,10 +21,10 @@ public partial class MainWindow : Window
     private readonly RecentFilesService _recentFiles;
     private readonly UiPreferencesService _uiPreferences;
     private List<TestItemData> _allItems = new();
-    private SummaryRows _summaries = new();
-    private CollectionView? _summaryView;
+    private List<TestItemSummary> _summaries = new();
+    private ListCollectionView? _summaryView;
     private readonly IdleMemoryReclaimer _memoryReclaimer;
-    private IReadOnlyList<DeviceInfo> _devices = Array.Empty<DeviceInfo>();
+    private List<DeviceInfo> _devices = new();
     private List<string> _allSites = new();
     private TestItemData? _currentItem;
     private string _currentSite = TestItemSummary.CombinedSite;
@@ -44,7 +44,6 @@ public partial class MainWindow : Window
     private bool _isBusy;
     private CancellationTokenSource? _operationCancellation;
     private DatasetLease? _datasetLease;
-    private IDisposable? _summaryLease;
     private bool _closeAfterOperation;
     private bool _operationCommitting;
     private readonly Dictionary<string, string> _columnFilters = new(StringComparer.OrdinalIgnoreCase);
@@ -136,13 +135,13 @@ public partial class MainWindow : Window
             ClearDetail();
             ScatterPlot.ClearChipMarks();
             DgTestItems.ItemsSource = null;
-            if (_summaryView is PagedSummaryView oldView) oldView.ReleaseIndex();
+            if (_summaryView != null) _summaryView.Filter = null;
             _summaryView = null;
             _currentItem = null;
-            _summaryLease?.Dispose(); _summaryLease = null; _summaries = new();
+            _summaries = new();
             _allItems = new();
-            _devices = Array.Empty<DeviceInfo>();
-            _data = new(); _scopeData = _scopeSource = null; _sampleRanges = _scopeRanges = Array.Empty<SampleRange>(); (_sampleIncludedIds as IDisposable)?.Dispose(); _sampleIncludedIds = null;
+            _devices = new();
+            _data = new(); _scopeData = _scopeSource = null; _sampleRanges = _scopeRanges = Array.Empty<SampleRange>(); _sampleIncludedIds = null;
             _sources.Clear();
             _datasetLease?.Dispose(); _datasetLease = null;
             _runIndex = -1;
@@ -272,7 +271,7 @@ public partial class MainWindow : Window
     private void UpdateWindowTitle()
     {
         string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
-        Title = $"CSV Analyzer · V2.1.2 | 当前数据：{_currentDataName} | 配置：{configName}";
+        Title = $"CSV Analyzer · V2.0.6 | 当前数据：{_currentDataName} | 配置：{configName}";
     }
 
     private void UpdateConfigInfo()
@@ -483,7 +482,7 @@ public partial class MainWindow : Window
             {
                 if (failOnly)
                 {
-                    var exported = await ExportWorker.SaveFailAsync(file.FileName, ActiveData, _config, wafers, mode, outlierSigma);
+                    var exported = await Task.Run(() => FailChipXlsxService.Save(file.FileName, ActiveData, _config, wafers, mode, outlierSigma));
                     TxtStatus.Text = $"已导出 2 个工作表：{exported.FailChips} 颗 Fail 芯片、{exported.RetestGoodChips} 颗复测良品芯片，共 {exported.Records} 条记录" +
                         (exported.FailChips == 0 ? "" : exported.ReferenceSerial == null ? "；没有可用的良品参考。" : $"；Fail 表良品参考 SN：{exported.ReferenceSerial}");
                     return;
@@ -518,7 +517,7 @@ public partial class MainWindow : Window
         {
             await RunBusyAsync(async () =>
             {
-                await ExportWorker.SaveReportAsync(file.FileName, ActiveData, _config, report, _currentDataName + (_sampleRanges.Count > 0 ? "（已应用数据筛选）" : ""));
+                await XlsxReportService.SaveAsync(file.FileName, ActiveData, _config, report, _currentDataName + (_sampleRanges.Count > 0 ? "（已应用数据筛选）" : ""));
                 TxtStatus.Text = $"报告已导出：4 个工作表，{focused.Length} 个关注测项";
             });
         }
@@ -569,8 +568,8 @@ public partial class MainWindow : Window
         }
     }
 
-    private sealed record PreparedAnalysis(CsvParseResult Data, List<string> Sites, SummaryRows Summaries,
-        CsvParseResult Source, CsvParseResult Scope, IReadOnlyList<SampleRange> Ranges, SampleMatchMode Match, DiskKeySet? Included);
+    private sealed record PreparedAnalysis(CsvParseResult Data, List<string> Sites, List<TestItemSummary> Summaries,
+        CsvParseResult Source, CsvParseResult Scope, IReadOnlyList<SampleRange> Ranges, SampleMatchMode Match);
 
     private Task<PreparedAnalysis> PrepareAnalysisAsync(CsvParseResult data, AnalyzerConfig config)
     {
@@ -588,7 +587,7 @@ public partial class MainWindow : Window
             var analysis = DatasetService.SelectRetests(scope, mode);
             var sites = CollectSites(scope.Items, scope.Records);
             return new PreparedAnalysis(analysis, sites,
-                SummaryService.Build(analysis.Items, sites, scope.Wafers, combine, combineWafers, config), data, scope, ranges, match, ranges.Length == 0 ? null : DiskKeySet.From(scope.Records.Select(r => r.Id)));
+                SummaryService.Build(analysis.Items, sites, scope.Wafers, combine, combineWafers, config), data, scope, ranges, match);
         });
     }
 
@@ -604,8 +603,7 @@ public partial class MainWindow : Window
     {
         AnalysisOperation.CheckCancellation();
         data = prepared.Source;
-        var lease = new DatasetLease(data.Records, prepared.Scope.Records, prepared.Data.Records);
-        var summaryLease = prepared.Summaries.AcquireLease();
+        var lease = new DatasetLease(data.Records);
         string? keepName = _currentItem?.DisplayName;
         string keepSite = _combineSites ? TestItemSummary.CombinedSite : _currentSite;
         string? keepWafer = _combineWafers ? null : _currentWafer;
@@ -617,17 +615,15 @@ public partial class MainWindow : Window
         _scopeData = prepared.Scope;
         _scopeSource = data; _scopeMode = _retestMode; _scopeRanges = prepared.Ranges;
         _sampleMatch = _scopeMatch = prepared.Match;
-        (_sampleIncludedIds as IDisposable)?.Dispose(); _sampleIncludedIds = prepared.Included;
+        _sampleIncludedIds = _sampleRanges.Count == 0 ? null : prepared.Scope.Records.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
         TxtSampleFilterAction.Text = _sampleRanges.Count == 0 ? "数据筛选" : $"数据筛选（{_sampleRanges.Count}）";
         var previousLease = _datasetLease; _datasetLease = lease; previousLease?.Dispose();
-        var previousSummaryLease = _summaryLease; _summaryLease = summaryLease;
         _allItems = prepared.Data.Items;
         _devices = prepared.Scope.Devices;
         _allSites = prepared.Sites;
         _summaries = prepared.Summaries;
         InitializeRun(changedData);
         ApplySearchFilter(keepName, keepSite, keepWafer);
-        previousSummaryLease?.Dispose();
         UpdateBottomInfo();
         ScheduleDetail();
         _sampleFilterWindow?.UpdateItems(data.Items, _retestMode);
@@ -760,8 +756,8 @@ public partial class MainWindow : Window
     {
         if (_summaryView == null || !ReferenceEquals(_summaryView.SourceCollection, _summaries))
         {
-            if (_summaryView is PagedSummaryView oldView) oldView.ReleaseIndex();
-            _summaryView = new PagedSummaryView(_summaries);
+            if (_summaryView != null) _summaryView.Filter = null;
+            _summaryView = new ListCollectionView(_summaries);
             DgTestItems.ItemsSource = _summaryView;
         }
 

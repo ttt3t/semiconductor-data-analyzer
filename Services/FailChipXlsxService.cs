@@ -17,7 +17,7 @@ public sealed record FailChipExportResult(int FailChips, int Records, string? Re
 public static class FailChipXlsxService
 {
     private static readonly string[] IdentityHeaders = { "组别", "Wafer", "X", "Y", "SN / UUID", "Site", "测试顺序", "原始序列号", "SBIN", "HBIN", "HBIN 判定", "Record ID" };
-    private sealed record Chip(RecordList History, RecordList Rows, bool Good);
+    private sealed record Chip(List<CsvRecord> History, List<CsvRecord> Rows, bool Good);
 
     public static FailChipExportResult Save(string path, CsvParseResult data, AnalyzerConfig config,
         IReadOnlyCollection<string> wafers, RetestMode mode, double? outlierSigma = null)
@@ -26,39 +26,20 @@ public static class FailChipXlsxService
         var selectedWafers = wafers.ToHashSet(StringComparer.Ordinal);
         if (selectedWafers.Count == 0 || selectedWafers.Except(data.Wafers).Any()) throw new InvalidDataException("请选择有效晶圆。");
         if (outlierSigma.HasValue && (!double.IsFinite(outlierSigma.Value) || outlierSigma <= 0)) throw new InvalidDataException("离群点 σ 必须大于 0。");
-        var source = selectedWafers.Count == data.Wafers.Count ? data.Records : data.Records.Where(r => selectedWafers.Contains(r.WaferId)).ToRecordList();
+        var source = data.Records.Where(r => selectedWafers.Contains(r.WaferId)).ToList();
         var selected = DatasetService.SelectRetestRecords(source, mode);
+        var byId = selected.ToDictionary(r => r.Id, StringComparer.Ordinal);
         var classifier = new HBinClassifier(config);
-        IEnumerable<Chip> Chips()
+        var chips = source.GroupBy(DatasetService.ChipKey).Select(g =>
         {
-            if (!source.IsOnDisk)
-            {
-                foreach (var group in source.GroupBy(DatasetService.ChipKey))
-                {
-                    RecordList history = group.ToList(); var retained = new RecordList();
-                    foreach (var r in history) { int index = selected.FindId(r.Id); if (index >= 0) retained.Add(selected[index]); }
-                    if (retained.Count > 0) yield return new(history, retained, classifier.Classify(history[^1].HBin) == OriginalDisposition.Pass);
-                }
-            }
-            else
-            {
-                using var order = source.Store!.GroupRows();
-                for (int i = 0; i < order.Count;)
-                {
-                    AnalysisOperation.CheckCancellation(); int count = order[i].Count;
-                    var history = new RecordList(); var retained = new RecordList();
-                    for (int j = 0; j < count; j++)
-                    {
-                        var r = source[order[i++].Slot]; history.Add(r);
-                        int index = selected.FindId(r.Id); if (index >= 0) retained.Add(selected[index]);
-                    }
-                    if (retained.Count > 0) yield return new(history, retained, classifier.Classify(history[^1].HBin) == OriginalDisposition.Pass);
-                }
-            }
-        }
-        var chips = Chips(); var fails = chips.Where(c => !c.Good); var retestGoods = chips.Where(c => c.Good && c.History.Count > 1);
-        int failCount = fails.Count(), goodCount = retestGoods.Count();
-        if (failCount == 0 && goodCount == 0) throw new InvalidDataException("所选晶圆及复测口径下没有 Fail 芯片或复测良品芯片。");
+            var history = g.ToList();
+            return new Chip(history, history.Where(r => byId.ContainsKey(r.Id)).Select(r => byId[r.Id]).ToList(),
+                classifier.Classify(history[^1].HBin) == OriginalDisposition.Pass);
+        }).Where(c => c.Rows.Count > 0).ToArray();
+        var fails = chips.Where(c => !c.Good).ToArray();
+        var retestGoods = chips.Where(c => c.Good && c.History.Count > 1).ToArray();
+        if (fails.Length == 0 && retestGoods.Length == 0)
+            throw new InvalidDataException("所选晶圆及复测口径下没有 Fail 芯片或复测良品芯片。");
         int columns = IdentityHeaders.Length + data.Items.Count;
         if (columns > 16384) throw new InvalidDataException("测试项数量超过 Excel 列数上限，请减少测试项。");
         var bounds = outlierSigma.HasValue ? IntegratedCsvService.CalculateOutlierBounds(data.Items, selected, outlierSigma.Value) : null;
@@ -76,7 +57,7 @@ public static class FailChipXlsxService
                         (bounds == null || value >= bounds[i].Lower && value <= bounds[i].Upper) ? value : double.NaN;
             }
         }
-        foreach (var chip in chips.Where(c => c.Good && failCount > 0))
+        foreach (var chip in chips.Where(c => c.Good && fails.Length > 0))
         {
             AnalysisOperation.CheckCancellation(); ReadChip(chip);
             for (int i = 0; i < vector.Length; i++) if (double.IsFinite(vector[i]))
@@ -86,7 +67,7 @@ public static class FailChipXlsxService
             }
         }
         Chip? reference = null; int coverage = 0; double best = double.PositiveInfinity;
-        foreach (var chip in chips.Where(c => c.Good && failCount > 0))
+        foreach (var chip in chips.Where(c => c.Good && fails.Length > 0))
         {
             AnalysisOperation.CheckCancellation(); ReadChip(chip);
             int measured = 0; double score = 0;
@@ -100,9 +81,9 @@ public static class FailChipXlsxService
             { reference = chip; coverage = measured; best = score / measured; }
         }
         // Keep the existing reference in the Fail comparison sheet only.
-        if (failCount == 0) reference = null;
-        var output = (reference == null ? Enumerable.Empty<Chip>() : new[] { reference }).Concat(fails);
-        void ValidateRows(IEnumerable<Chip> sheetChips)
+        if (fails.Length == 0) reference = null;
+        var output = (reference == null ? Enumerable.Empty<Chip>() : new[] { reference }).Concat(fails).ToArray();
+        void ValidateRows(IReadOnlyList<Chip> sheetChips)
         {
             long totalRows = 7L + sheetChips.Sum(c => (long)c.Rows.Count);
             if (totalRows > 1048576) throw new InvalidDataException("导出行数超过 Excel 单个工作表上限，请减少所选晶圆。");
@@ -117,7 +98,7 @@ public static class FailChipXlsxService
                 var workbook = document.AddWorkbookPart(); workbook.Workbook = new Workbook();
                 var styles = workbook.AddNewPart<WorkbookStylesPart>(); styles.Stylesheet = Styles(); styles.Stylesheet.Save();
                 var sheets = workbook.Workbook.AppendChild(new Sheets());
-                void WriteSheet(string name, IEnumerable<Chip> sheetChips, bool includeReference = false)
+                void WriteSheet(string name, IReadOnlyList<Chip> sheetChips, bool includeReference = false)
                 {
                     var sheet = workbook.AddNewPart<WorksheetPart>();
                     using var writer = OpenXmlWriter.Create(sheet);
@@ -153,19 +134,19 @@ public static class FailChipXlsxService
                     int chipIndex = 0, failIndex = 0, goodIndex = 0;
                     foreach (var chip in sheetChips)
                     {
-                        string label = includeReference && reference != null && chip.History[^1].Id == reference.History[^1].Id ? "良品参考" : chip.Good ? "复测良品 " + ++goodIndex : "Fail 芯片 " + ++failIndex;
+                        string label = includeReference && ReferenceEquals(chip, reference) ? "良品参考" : chip.Good ? "复测良品 " + ++goodIndex : "Fail 芯片 " + ++failIndex;
                         bool dark = chipIndex++ % 2 != 0;
                         uint passStyle = dark ? 8u : 1u, failStyle = dark ? 9u : 2u;
                         uint invalidStyle = dark ? 10u : 3u, absentStyle = dark ? 11u : 4u;
                         uint identityStyle = dark ? 13u : 12u;
-                        var order = chip.History;
+                        var order = chip.History.Select((r, n) => (r.Id, n)).ToDictionary(p => p.Id, p => p.n);
                         foreach (var record in chip.Rows)
                         {
                             rows.Read(record);
                             IEnumerable<(string, double?, uint)> Cells()
                             {
                                 string[] identity = { label, record.WaferId, record.X?.ToString() ?? "", record.Y?.ToString() ?? "", record.RetestUuid ?? record.SerialNumber,
-                                    record.Site, order.FindId(record.Id) == 0 ? "首测" : "复测 " + order.FindId(record.Id), record.OriginalSerialNumber ?? record.SerialNumber,
+                                    record.Site, order[record.Id] == 0 ? "首测" : "复测 " + order[record.Id], record.OriginalSerialNumber ?? record.SerialNumber,
                                     record.SBin, record.HBin, classifier.Classify(record.HBin).ToString(), record.Id };
                                 for (int i = 0; i < identity.Length; i++) yield return T(identity[i], i == 10 ? classifier.Classify(record.HBin) == OriginalDisposition.Pass ? passStyle : failStyle : identityStyle);
                                 for (int i = 0; i < data.Items.Count; i++)
@@ -195,8 +176,8 @@ public static class FailChipXlsxService
                 workbook.Workbook.Save();
             }
             AnalysisOperation.CheckCancellation(); File.Move(temp, path, true);
-            return new(failCount, output.Sum(c => c.Rows.Count) + retestGoods.Sum(c => c.Rows.Count), reference?.History[^1].SerialNumber)
-                { RetestGoodChips = goodCount };
+            return new(fails.Length, output.Sum(c => c.Rows.Count) + retestGoods.Sum(c => c.Rows.Count), reference?.History[^1].SerialNumber)
+                { RetestGoodChips = retestGoods.Length };
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }
     }

@@ -68,7 +68,7 @@ public partial class WaferMapWindow : Window
             HoverInfo.Visibility = Visibility.Collapsed;
             HoverText.Text = "";
             _ready = false;
-            Map.Dies = null; ReleasePageStorage();
+            Map.Dies = null;
             WaferList.ItemsSource = null;
             DgLegend.ItemsSource = null;
             _pfDies = Array.Empty<WaferDie>();
@@ -108,16 +108,11 @@ public partial class WaferMapWindow : Window
         Canvas.SetTop(HoverInfo, Math.Clamp(y, 4, Math.Max(4, Map.ActualHeight - size.Height - 4)));
     }
 
-    private IReadOnlyList<WaferMapPage> _storagePages = Array.Empty<WaferMapPage>();
-    private void ReleasePageStorage()
-    { foreach (var page in _storagePages) (page.Dies as IDisposable)?.Dispose(); _storagePages = Array.Empty<WaferMapPage>(); }
-
     public void SetPages(IReadOnlyList<WaferMapPage> pages)
     {
         string? selected = (WaferList.SelectedItem as WaferMapPage)?.WaferId;
         _ready = false;
         // Own the view instead of leaving a default view cached for this snapshot.
-        var oldPages = _storagePages; _storagePages = pages;
         var snapshot = pages.ToList();
         WaferList.ItemsSource = new ListCollectionView(snapshot);
         int index = snapshot.FindIndex(p => p.WaferId == selected);
@@ -125,7 +120,6 @@ public partial class WaferMapWindow : Window
         if (WaferList.SelectedItem != null) WaferList.ScrollIntoView(WaferList.SelectedItem);
         _ready = true;
         ApplySelectedPage();
-        foreach (var old in oldPages) if (!pages.Contains(old)) (old.Dies as IDisposable)?.Dispose();
         if (pages.Count == 0)
         {
             Map.Dies = null; _pfDies = Array.Empty<WaferDie>(); _heatDies = null; _heatmapScale = null;

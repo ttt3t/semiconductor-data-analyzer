@@ -12,7 +12,7 @@ public partial class MainWindow
     private Models.RetestMode _scopeMode;
     private SampleMatchMode _sampleMatch, _scopeMatch;
     private SampleFilterWindow? _sampleFilterWindow;
-    private IReadOnlySet<string>? _sampleIncludedIds;
+    private HashSet<string>? _sampleIncludedIds;
     private CsvParseResult ActiveData => _scopeData ?? _data;
 
     private void SampleFilter_Click(object sender, RoutedEventArgs e)

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using SemiconductorCsvAnalyzer.Models;
 
 namespace SemiconductorCsvAnalyzer.Services;
@@ -22,9 +21,8 @@ public sealed class ScatterChipMarks
         }
     }
 
-    private DiskKeySet? _chips;
-    private DiskKeySet Chips => _chips ??= new();
-    public int Count => _chips?.Count ?? 0;
+    private readonly HashSet<ChipKey> _chips = new();
+    public int Count => _chips.Count;
 
     public bool AddRectangle(ScatterSeries series, double minX, double maxX, double minY, double maxY)
     {
@@ -36,50 +34,22 @@ public sealed class ScatterChipMarks
         var points = series.Points;
         for (int i = ScatterSeries.LowerBound(points, minX); i < points.Length && points[i].Index <= maxX; i++)
             if (points[i].Value >= minY && points[i].Value <= maxY && series.RecordAtPoint(i) is { } record)
-                changed |= Chips.Add(JsonSerializer.Serialize(ChipKey.From(record)));
+                changed |= _chips.Add(ChipKey.From(record));
         return changed;
     }
 
     public bool[] CreateMask(ScatterSeries series)
     {
-        if (Count == 0 || !series.HasChipIdentities) return Array.Empty<bool>();
+        if (_chips.Count == 0 || !series.HasChipIdentities) return Array.Empty<bool>();
         var mask = new bool[series.Points.Length];
         for (int i = 0; i < mask.Length; i++)
-            if (series.RecordAtPoint(i) is { } record) mask[i] = Chips.Contains(JsonSerializer.Serialize(ChipKey.From(record)));
+            if (series.RecordAtPoint(i) is { } record) mask[i] = _chips.Contains(ChipKey.From(record));
         return mask;
     }
 
-    internal PagedVector<byte>? CreatePagedMask(ScatterSeries series, CancellationToken token = default)
-    {
-        if (Count == 0 || !series.HasChipIdentities) return null;
-        var mask = new PagedVector<byte>();
-        for (int i = 0; i < series.Points.Count; i++)
-        {
-            if ((i & 255) == 0) token.ThrowIfCancellationRequested();
-            mask.Add(series.RecordAtPoint(i) is { } record && Chips.Contains(JsonSerializer.Serialize(ChipKey.From(record))) ? (byte)1 : (byte)0);
-        }
-        mask.Seal(); return mask;
-    }
-    internal DiskKeySet SelectRectangle(ScatterSeries series, double x1, double x2, double y1, double y2, CancellationToken token)
-    {
-        var selection = new DiskKeySet();
-        try
-        {
-            double minX = Math.Min(x1, x2), maxX = Math.Max(x1, x2), minY = Math.Min(y1, y2), maxY = Math.Max(y1, y2);
-            for (int i = ScatterSeries.LowerBound(series.Points, minX); i < series.Points.Count && series.Points[i].Index <= maxX; i++)
-            {
-                if ((i & 255) == 0) token.ThrowIfCancellationRequested();
-                var point = series.Points[i];
-                if (point.Value >= minY && point.Value <= maxY && series.RecordAtPoint(i) is { } record) selection.Add(JsonSerializer.Serialize(ChipKey.From(record)));
-            }
-            return selection;
-        }
-        catch { selection.Dispose(); throw; }
-    }
-    internal void Merge(DiskKeySet selection) => Chips.UnionWith(selection);
     public void Clear()
     {
-        _chips?.Clear();
-
+        _chips.Clear();
+        _chips.TrimExcess();
     }
 }

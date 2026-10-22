@@ -67,9 +67,7 @@ public static class RetestIdentityService
         AnalysisOperation.CheckCancellation();
         string signature = config.TestMode + ":" + string.Join(",", config.UuidTestNumbers) + ":" +
             string.Join(",", config.MissingTokens.Concat(config.NotApplicableTokens));
-        if (data.RetestIdentitySignature == signature) return data;
-        if (config.TestMode == TestAnalysisMode.CP && data.Records.All(r => !r.IsFtIdentity))
-        { data.RetestIdentitySignature = signature; return data; }
+        if (data.RetestIdentitySignature == signature || config.TestMode == TestAnalysisMode.CP && data.Records.All(r => !r.IsFtIdentity)) return data;
         Reader? reader = config.TestMode == TestAnalysisMode.FT ? new(data.Items, config) : null;
         int missing = 0;
         var records = data.Records.Select(source =>
@@ -81,41 +79,19 @@ public static class RetestIdentityService
             record.UuidTestNumbers = reader?.Recipe ?? source.UuidTestNumbers;
             if (record.IsFtIdentity && record.RetestUuid == "") missing++;
             return record;
-        }).ToRecordList();
+        }).ToList();
         // Numeric columns and disk-backed raw measurements stay shared and immutable.
-        records.Inherit(data.Records);
-        var result = DatasetService.CreateView(data, records);
-        result.RetestIdentitySignature = signature;
-        result.MissingUuidCount = missing;
+        var result = new CsvParseResult
+        {
+            Items = data.Items, Records = records, Devices = DatasetService.BuildDevices(records),
+            SourceDescription = data.SourceDescription, SerialNumberNotice = data.SerialNumberNotice,
+            StdfMetadata = data.StdfMetadata,
+            ReassignedSerialNumberCount = data.ReassignedSerialNumberCount,
+            RetestIdentitySignature = signature, MissingUuidCount = missing
+        };
         if (missing > 0)
             result.RetestIdentityNotice = $"FT UUID：{missing:N0} / {records.Count:N0} 条记录未读全指定值，已独立保留，不使用序列号或坐标合并。" +
                 (reader!.MissingTests.Length > 0 ? "\n源数据未找到 Test Num：" + string.Join(", ", reader.MissingTests) : "");
         return result;
-    }
-
-    // Only for a newly built batch, before any window or view can observe it.
-    // Public Prepare still detaches identities when changing an active dataset.
-    internal static CsvParseResult PrepareUnpublished(CsvParseResult data, AnalyzerConfig config)
-    {
-        string signature = config.TestMode + ":" + string.Join(",", config.UuidTestNumbers) + ":" +
-            string.Join(",", config.MissingTokens.Concat(config.NotApplicableTokens));
-        if (config.TestMode == TestAnalysisMode.CP && data.Records.All(r => !r.IsFtIdentity))
-        { data.RetestIdentitySignature = signature; return data; }
-        Reader? reader = config.TestMode == TestAnalysisMode.FT ? new(data.Items, config) : null;
-        int missing = 0;
-        foreach (var record in data.Records)
-        {
-            AnalysisOperation.CheckCancellation();
-            record.IsFtIdentity = reader != null;
-            record.RetestUuid = reader != null ? reader.Read(record) : record.RetestUuid;
-            record.UuidTestNumbers = reader?.Recipe ?? record.UuidTestNumbers;
-            if (record.IsFtIdentity && record.RetestUuid == "") missing++;
-        }
-        data.Records.Flush(); data.Devices = DatasetService.BuildDevices(data.Records);
-        data.RetestIdentitySignature = signature; data.MissingUuidCount = missing;
-        if (missing > 0)
-            data.RetestIdentityNotice = $"FT UUID：{missing:N0} / {data.Records.Count:N0} 条记录未读全指定值，已独立保留，不使用序列号或坐标合并。" +
-                (reader!.MissingTests.Length > 0 ? "\n源数据未找到 Test Num：" + string.Join(", ", reader.MissingTests) : "");
-        return data;
     }
 }

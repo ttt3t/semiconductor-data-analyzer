@@ -1,7 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <StartupObject>SemiconductorCsvAnalyzer.Program</StartupObject>
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -15,7 +14,6 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="ClosedXML" Version="0.105.1" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.32" />
     <Resource Include="app.ico" Condition="Exists('app.ico')" />
     <EmbeddedResource Include="Docs\UserGuide.md" LogicalName="SemiconductorCsvAnalyzer.Docs.UserGuide.md" />
     <None Update="config.ini">

@@ -29,7 +29,6 @@ public sealed class UiPreferencesService
                 ? JsonSerializer.Deserialize<UiPreferences>(File.ReadAllText(_path), JsonOptions) ?? new()
                 : new();
             if (!Enum.IsDefined(_value.DefaultStdfMode)) _value = new();
-            if (_value.DataMemoryMiB is not (256 or 512)) _value.DataMemoryMiB = 256;
             if (!Enum.IsDefined(_value.RunSelection)) _value.RunSelection = RunSelectionMode.SerialNumber;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -59,7 +58,6 @@ public sealed class UiPreferencesService
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
         }
-        DiskStorage.ConfigureBudget(next.DataMemoryMiB);
         _value = next;
         Changed?.Invoke(this, EventArgs.Empty);
     }

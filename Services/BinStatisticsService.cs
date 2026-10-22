@@ -35,18 +35,13 @@ public static class BinStatisticsService
         AnalysisOperation.CheckCancellation();
         if (mode != RetestMode.First && mode != RetestMode.Last) throw new ArgumentOutOfRangeException(nameof(mode));
         // Bin is a whole-chip result: never mix a partial retest's item values to determine its Bin.
-        IReadOnlyList<CsvRecord> chosen;
-        if (records is RecordList { Store: { } store })
-            chosen = store.Query("SELECT " + (mode == RetestMode.First ? "MIN(slot)" : "MAX(slot)") + " FROM records GROUP BY chip ORDER BY MIN(slot)").ToRecordList();
-        else
+        var chosen = new Dictionary<(string Wafer, int? X, int? Y, string Fallback), CsvRecord>();
+        foreach (var record in records)
         {
-            var selected = new Dictionary<(string Wafer, int? X, int? Y, string Fallback), CsvRecord>();
-            foreach (var record in records)
-            {
-                AnalysisOperation.CheckCancellation(); var key = DatasetService.ChipKey(record);
-                if (mode == RetestMode.First) selected.TryAdd(key, record); else selected[key] = record;
-            }
-            chosen = selected.Values.ToArray();
+            AnalysisOperation.CheckCancellation();
+            var key = DatasetService.ChipKey(record);
+            if (mode == RetestMode.First) chosen.TryAdd(key, record);
+            else chosen[key] = record;
         }
         var hbinClassifier = new HBinClassifier(config);
         var classification = config.SBinCategories.SelectMany(c => c.Value.Select(b => (Bin: NormalizeBin(b), Category: c.Key)))
@@ -59,7 +54,7 @@ public static class BinStatisticsService
         var sites = records.Select(Site).Distinct().OrderBy(NumericText.SortKey).ThenBy(s => s, StringComparer.Ordinal).ToList();
         var siteTotals = new Dictionary<string, int>();
         var siteBins = new Dictionary<(string Site, string Bin), int>();
-        foreach (var record in chosen)
+        foreach (var record in chosen.Values)
         {
             AnalysisOperation.CheckCancellation();
             if (!string.IsNullOrWhiteSpace(record.SBin))
@@ -89,8 +84,8 @@ public static class BinStatisticsService
             categoryCounts.Select(p => new BinCategoryRow(p.Key, p.Value, Percent(p.Value, sTotal))).ToList())
         {
             Sites = sites,
-            PassCount = chosen.Count(r => hbinClassifier.Classify(r.HBin) == OriginalDisposition.Pass),
-            PartialPassCount = chosen.Count(r => hbinClassifier.Classify(r.HBin) == OriginalDisposition.PartialPass),
+            PassCount = chosen.Values.Count(r => hbinClassifier.Classify(r.HBin) == OriginalDisposition.Pass),
+            PartialPassCount = chosen.Values.Count(r => hbinClassifier.Classify(r.HBin) == OriginalDisposition.PartialPass),
             SiteRows = sRows.Select(r => new BinSiteRow(r.Category, r.Bin, sites.Select(s =>
                 siteTotals.GetValueOrDefault(s) == 0 ? (double?)null : Percent(siteBins.GetValueOrDefault((s, r.Bin)), siteTotals[s])).ToArray())
                 { Description = r.Description }).ToList()

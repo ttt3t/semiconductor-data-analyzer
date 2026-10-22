@@ -18,7 +18,6 @@ public static partial class DatasetService
         AnalysisOperation.CheckCancellation();
         if (mode == RetestMode.All) return data;
         var records = SelectRetestRecords(data.Records, mode);
-        if (!ReferenceEquals(records, data.Records)) records.ScopeKey = data.Records.ScopeKey + ":retest:" + mode;
         if (ReferenceEquals(records, data.Records)) return data;
         var result = CreateView(data, records);
         result.SourceDescription = data.SourceDescription;
@@ -38,9 +37,8 @@ public static partial class DatasetService
     }
 
     // Export needs raw record selection only, without rebuilding every numeric column.
-    public static RecordList SelectRetestRecords(RecordList source, RetestMode mode)
+    public static List<CsvRecord> SelectRetestRecords(List<CsvRecord> source, RetestMode mode)
     {
-        if (source.IsOnDisk && mode != RetestMode.All) return SelectDiskRetests(source, mode);
         if (mode == RetestMode.All) return source;
         if (mode != RetestMode.First && mode != RetestMode.Last && mode != RetestMode.OnlyRetests)
             throw new ArgumentOutOfRangeException(nameof(mode));
@@ -53,7 +51,7 @@ public static partial class DatasetService
             group.Add(row);
         }
         if (groups.Count == source.Count)
-            return mode == RetestMode.OnlyRetests ? new RecordList() : source;
+            return mode == RetestMode.OnlyRetests ? new List<CsvRecord>() : source;
         // Resolve one chip at a time. Only compact presence masks survive the group;
         // never retain a string HashSet for every selected record.
         var selected = new MeasurementCollection?[source.Count];
@@ -79,7 +77,7 @@ public static partial class DatasetService
                 if (measurements.Count > 0) selected[row] = measurements;
             }
         }
-        var records = new RecordList();
+        var records = new List<CsvRecord>();
         for (int row = 0; row < source.Count; row++)
         {
             if ((row & 1023) == 0) AnalysisOperation.CheckCancellation();
@@ -95,36 +93,13 @@ public static partial class DatasetService
         return records;
     }
 
-    private static RecordList SelectDiskRetests(RecordList source, RetestMode mode)
-    {
-        if (mode is not (RetestMode.First or RetestMode.Last or RetestMode.OnlyRetests)) throw new ArgumentOutOfRangeException(nameof(mode));
-        // Match the in-memory path: a dataset without repeated chips needs no
-        // copied identity table or per-test projection for First/Last mode.
-        if (!source.Store!.HasRetests()) return mode == RetestMode.OnlyRetests ? new RecordList() : source;
-        var selected = new RecordList(0, disk: true);
-        using var order = source.Store!.GroupRows(mode == RetestMode.Last);
-        string? previous = null; var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var group in order)
-        {
-            AnalysisOperation.CheckCancellation(); var record = source[group.Slot];
-            string chip = RecordList.RecordStore.Key(ChipKey(record));
-            if (chip != previous) { seen.Clear(); previous = chip; }
-            var measurements = group.Count == 1 && mode != RetestMode.OnlyRetests ? record.Measurements : record.Measurements.SelectKeys(key =>
-            { bool first = seen.Add(key); return mode == RetestMode.OnlyRetests ? !first : first; });
-            if (group.Count == 1 && mode == RetestMode.OnlyRetests || group.Count > 1 && measurements.Count == 0) continue;
-            var copy = CloneRecord(record); copy.Measurements = measurements; copy.StorageOrder = group.Slot; selected.Add(copy);
-        }
-        var result = selected.Store!.Query("SELECT slot FROM records ORDER BY ord,slot").ToRecordList();
-        result.Inherit(source); return result;
-    }
-
     public static bool TryValue(string text, out double value) =>
         TryValue(text.AsSpan(), out value);
 
     public static bool TryValue(ReadOnlySpan<char> text, out double value) =>
         double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value) && double.IsFinite(value);
 
-    public static CsvParseResult Build(List<TestItemData> items, RecordList records)
+    public static CsvParseResult Build(List<TestItemData> items, List<CsvRecord> records)
     {
         AnalysisOperation.CheckCancellation();
         var byId = new Dictionary<string, TestItemData>(items.Count, StringComparer.Ordinal);
@@ -152,15 +127,8 @@ public static partial class DatasetService
         }
         catch { rawStore?.Dispose(); throw; }
 
-        DiskColumnStore? columns = records.IsOnDisk ? new DiskColumnStore(records.Count, items.Select(i => i.IsStdfMeasurement).ToArray()) : null;
-        if (columns != null) records.Resources.Add(columns);
-        for (int i = 0; i < items.Count; i++)
-        {
-            var item = items[i]; item.Errors.Clear();
-            if (columns == null) item.Values.Initialize(records, item.Id, item.IsStdfMeasurement);
-            else item.Values.InitializeDisk(records, item.Id, columns, i);
-        }
-        var devices = records is RecordList { IsOnDisk: true } ? null : new Dictionary<(string Wafer, int? X, int? Y, string Record), DeviceInfo>(records.Count);
+        foreach (var item in items) { item.Values.Initialize(records, item.Id, item.IsStdfMeasurement); item.Errors.Clear(); }
+        var devices = new Dictionary<(string Wafer, int? X, int? Y, string Record), DeviceInfo>(records.Count);
         TestItemData[]? defaultItemsArray = null;
         MeasurementSchema? lastSchema = null;
         TestItemData[]? lastSchemaItems = null;
@@ -235,8 +203,6 @@ public static partial class DatasetService
                     }
                 }
 
-                record.HasNonblankMeasurements = !rawBlank;
-                if (devices == null) continue;
                 // A completely blank CSV row is an error, not a physical device.
                 bool blank = rawBlank && !record.X.HasValue && !record.Y.HasValue &&
                     string.IsNullOrWhiteSpace(record.ChipSerialNumber) &&
@@ -258,17 +224,15 @@ public static partial class DatasetService
             if (rowBuffer != null) ArrayPool<byte>.Shared.Return(rowBuffer);
         }
 
-        columns?.Complete();
         foreach (var item in items) item.Values.Complete();
-        foreach (var item in items) records.Resources.UnionWith(item.Errors.Resources);
-        return new CsvParseResult { Items = items, Records = records, Devices = devices == null ? new DiskDeviceList(records) : devices.Values.ToList() };
+        return new CsvParseResult { Items = items, Records = records, Devices = devices.Values.ToList() };
     }
 
     public static CsvParseResult LoadSources(IReadOnlyList<CsvImportSource> sources, AnalyzerConfig config)
     {
         if (sources.Count == 0) throw new InvalidDataException("没有可重新读取的数据文件。");
         CsvParseResult result;
-        try { result = ParseSource(sources[0], config, deferColumns: sources.Count > 1); }
+        try { result = ParseSource(sources[0], config); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         { throw new InvalidDataException($"文件“{sources[0].Path}”导入失败：{ex.Message}", ex); }
         return sources.Count == 1 ? result : AppendSources(result, sources.Skip(1).ToArray(), config);
@@ -285,21 +249,20 @@ public static partial class DatasetService
             AnalysisOperation.CheckCancellation();
             try
             {
-                var incoming = ParseSource(source, config, deferColumns: true);
+                var incoming = ParseSource(source, config);
                 result = MergeDefinitions(result, incoming, source.Options ??
-                    throw new InvalidDataException("追加文件缺少导入选项。"), appendToUnpublished: !ReferenceEquals(result, existing));
+                    throw new InvalidDataException("追加文件缺少导入选项。"));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             { throw new InvalidDataException($"文件“{Path.GetFileName(source.Path)}”导入失败：{ex.Message}", ex); }
         }
-        return CompleteMerge(result, config);
+        return CompleteMerge(result);
     }
 
     public static CsvParseResult Merge(CsvParseResult existing, CsvParseResult incoming, ImportOptions options)
         => CompleteMerge(MergeDefinitions(existing, incoming, options));
 
-    private static CsvParseResult MergeDefinitions(CsvParseResult existing, CsvParseResult incoming, ImportOptions options,
-        bool appendToUnpublished = false)
+    private static CsvParseResult MergeDefinitions(CsvParseResult existing, CsvParseResult incoming, ImportOptions options)
     {
         if (options.AutoMatch)
         {
@@ -308,14 +271,13 @@ public static partial class DatasetService
             options = options with { MatchByNumber = uniqueNumbers };
         }
         if (incoming.Records.Count == 0) throw new InvalidDataException("新文件没有可导入的测试记录。");
-        var existingWafers = existing.Wafers;
         if (options.SameWafer && options.TargetWafer.Length == 0)
         {
-            if (existingWafers.Count != 1)
+            if (existing.Wafers.Count != 1)
                 throw new InvalidDataException("合并到首个文件时，首个文件必须仅包含一片晶圆；请改选不同 wafer。");
-            options = options with { TargetWafer = existingWafers[0] };
+            options = options with { TargetWafer = existing.Wafers[0] };
         }
-        if (options.SameWafer && (!existingWafers.Contains(options.TargetWafer) || incoming.Wafers.Count != 1))
+        if (options.SameWafer && (!existing.Wafers.Contains(options.TargetWafer) || incoming.Wafers.Count != 1))
             throw new InvalidDataException("同 wafer 导入需要选择已有 wafer，且新文件只能包含一个 wafer。");
         string Key(TestItemData item)
         {
@@ -351,7 +313,7 @@ public static partial class DatasetService
             itemMap.Add(source.Id, target.Id);
         }
         var waferMap = new Dictionary<string, string>(StringComparer.Ordinal);
-        var taken = existingWafers.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var taken = existing.Wafers.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (string wafer in incoming.Wafers)
         {
             string name = options.SameWafer ? options.TargetWafer : wafer;
@@ -363,10 +325,7 @@ public static partial class DatasetService
             waferMap.Add(wafer, name);
         }
         // A subsequent serial normalization must never edit records held by the active dataset.
-        // Detach from the active dataset once. Further batch inputs can append to
-        // this private accumulator instead of rewriting every previous input.
-        var records = appendToUnpublished ? existing.Records : existing.Records.Select(CloneRecord).ToRecordList();
-        int reassigned = appendToUnpublished ? existing.ReassignedSerialNumberCount : records.Count(r => r.OriginalSerialNumber != null);
+        var records = existing.Records.Select(CloneRecord).ToList();
         var schemas = new Dictionary<MeasurementSchema, MeasurementSchema>();
         MeasurementCollection Remap(MeasurementCollection raw)
         {
@@ -376,8 +335,6 @@ public static partial class DatasetService
             return raw.Remap(mapped);
         }
         foreach (var record in incoming.Records)
-        {
-            AnalysisOperation.CheckCancellation();
             records.Add(new CsvRecord
             {
                 WaferId = waferMap[record.WaferId], SerialNumber = record.SerialNumber, X = record.X, Y = record.Y,
@@ -386,22 +343,18 @@ public static partial class DatasetService
                 Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
                 Product = record.Product, Program = record.Program, Lot = record.Lot,
                 StdfTestTime = record.StdfTestTime,
-                Measurements = Remap(record.Measurements), HasNonblankMeasurements = record.HasNonblankMeasurements
+                Measurements = Remap(record.Measurements)
             });
-            if (record.OriginalSerialNumber != null) reassigned++;
-        }
-        var result = new CsvParseResult
+        return new CsvParseResult
         {
             Items = items, Records = records,
             SerialNumberNotice = string.Join("\n\n", new[] { existing.SerialNumberNotice, incoming.SerialNumberNotice }
                 .Where(notice => notice.Length > 0)),
-            ReassignedSerialNumberCount = reassigned
+            ReassignedSerialNumberCount = records.Count(r => r.OriginalSerialNumber != null)
         };
-        result.SetKnownWafers(existingWafers.Concat(waferMap.Values).Distinct(StringComparer.Ordinal).ToArray());
-        return result;
     }
 
-    private static CsvParseResult CompleteMerge(CsvParseResult definitions, AnalyzerConfig? config = null)
+    private static CsvParseResult CompleteMerge(CsvParseResult definitions)
     {
         var merged = Build(definitions.Items, definitions.Records);
         MeasurementDisplay.Configure(merged.Items);
@@ -411,10 +364,10 @@ public static partial class DatasetService
             merged.SerialNumberNotice = "整合数据：" + merged.SerialNumberNotice;
         if (priorNotice.Length > 0)
             merged.SerialNumberNotice = priorNotice + (merged.SerialNumberNotice.Length > 0 ? "\n\n" + merged.SerialNumberNotice : "");
-        return config == null ? merged : RetestIdentityService.PrepareUnpublished(merged, config);
+        return merged;
     }
 
-    private static CsvParseResult ParseSource(CsvImportSource source, AnalyzerConfig config, bool deferColumns = false)
+    private static CsvParseResult ParseSource(CsvImportSource source, AnalyzerConfig config)
     {
         var layout = source.ConfigText.Length > 0 ? ConfigLoader.Parse(source.ConfigText) : config;
         if (source.ConfigText.Length > 0)
@@ -423,8 +376,7 @@ public static partial class DatasetService
             layout.PassHBins = config.PassHBins; layout.PartialPassHBins = config.PartialPassHBins;
             layout.MissingTokens = config.MissingTokens; layout.NotApplicableTokens = config.NotApplicableTokens;
         }
-        var data = deferColumns ? DataFileService.ReadForMerge(source.Path, layout, source.StdfMode)
-            : DataFileService.Parse(source.Path, layout, cancellationToken: AnalysisOperation.Token, stdfMode: source.StdfMode);
+        var data = DataFileService.Parse(source.Path, layout, cancellationToken: AnalysisOperation.Token, stdfMode: source.StdfMode);
         if (source.WaferOverride is { Length: > 0 } && data.Devices.Select(d => d.WaferId).Distinct().Skip(1).Any())
             throw new InvalidDataException("含多晶圆的文件不能整体覆盖为一个片号，请在登记中清空晶圆覆盖值。");
         if (source.WaferOverride != null || source.LotOverride != null || source.ShowLotInWafer)
@@ -435,7 +387,7 @@ public static partial class DatasetService
                 if (source.WaferOverride is { Length: > 0 }) record.WaferId = source.WaferOverride;
                 if (source.ShowLotInWafer) record.WaferId = record.Lot + " / " + record.WaferId;
             }
-            data.Records = data.Records.ToRecordList(); // Invalidate any previously materialized wafer-name cache.
+            data.Records = data.Records.ToList(); // Invalidate any previously materialized wafer-name cache.
             data.Devices = BuildDevices(data.Records);
         }
         return data;
@@ -449,12 +401,11 @@ public static partial class DatasetService
         X = record.X, Y = record.Y, Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
         Product = record.Product, Program = record.Program, Lot = record.Lot,
         StdfTestTime = record.StdfTestTime,
-        Measurements = record.Measurements, HasNonblankMeasurements = record.HasNonblankMeasurements
+        Measurements = record.Measurements
     };
 
-    internal static IReadOnlyList<DeviceInfo> BuildDevices(IReadOnlyList<CsvRecord> records)
+    internal static List<DeviceInfo> BuildDevices(IReadOnlyList<CsvRecord> records)
     {
-        if (records is RecordList { IsOnDisk: true } paged) return new DiskDeviceList(paged);
         var devices = new Dictionary<(string Wafer, int? X, int? Y, string Record), DeviceInfo>(records.Count);
         byte[]? rowBuffer = null;
         try

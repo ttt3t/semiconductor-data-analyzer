@@ -23,8 +23,8 @@ public sealed class HeatmapScale
 
     public static HeatmapScale? Create(IEnumerable<double> values)
     {
-        var samples = values.Where(double.IsFinite);
-        if (!samples.Any()) return null;
+        var samples = values.Where(double.IsFinite).ToArray();
+        if (samples.Length == 0) return null;
         double min = samples.Min(), max = samples.Max(), scale = Math.Max(Math.Abs(min), Math.Abs(max));
         // Normalize first so finite, very large values do not overflow the mean/variance.
         double mean = scale == 0 ? 0 : samples.Average(v => v / scale);
