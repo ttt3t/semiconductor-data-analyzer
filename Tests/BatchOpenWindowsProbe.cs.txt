@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -10,6 +11,9 @@ using SemiconductorCsvAnalyzer.Services;
 
 static class Probe
 {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern nint FindWindow(string className, string title);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(nint window, out uint process);
+    [DllImport("user32.dll")] static extern bool PostMessage(nint window, uint message, nint value, nint extra);
     static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame); }
     [STAThread] static int Main(string[] args)
     {
@@ -28,13 +32,26 @@ static class Probe
             typeof(MainWindow).GetField("_config", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, config);
             typeof(MainWindow).GetField("_managedConfigLoaded", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, true);
             window.Show(); Pump();
+            // Each CSV starts its SN at 1. A real batch correctly displays the
+            // existing renumbering notice; acknowledge only that expected dialog
+            // in this probe's process so the integration test can continue.
+            int notices = 0;
+            var acknowledge = new DispatcherTimer(DispatcherPriority.Send) { Interval = TimeSpan.FromMilliseconds(50) };
+            acknowledge.Tick += (_, _) =>
+            {
+                nint dialog = FindWindow("#32770", "Run 序列号已自动生成");
+                if (dialog == 0) return;
+                GetWindowThreadProcessId(dialog, out uint process);
+                if (process == Environment.ProcessId) { notices++; PostMessage(dialog, 0x0111, 1, 0); }
+            };
+            acknowledge.Start();
             var clock = Stopwatch.StartNew();
             var task = (Task)typeof(MainWindow).GetMethod("OpenBatchAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, new object[] { sources })!;
             while (!task.IsCompleted) { if (clock.Elapsed.TotalSeconds > 180) throw new TimeoutException("Batch UI did not finish."); Pump(); Thread.Sleep(2); }
-            task.GetAwaiter().GetResult(); Pump();
+            task.GetAwaiter().GetResult(); Pump(); acknowledge.Stop();
             var data = (CsvParseResult)typeof(MainWindow).GetField("_data", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
             var grid = (DataGrid)window.FindName("DgTestItems");
-            if (data.Records.Count != 50000 || data.Items.Count != 120 || grid.Items.Count != 12000 || failures.Count != 0) throw new Exception("Incomplete batch UI results.");
+            if (data.Records.Count != 50000 || data.Items.Count != 120 || grid.Items.Count != 12000 || failures.Count != 0 || notices == 0) throw new Exception("Incomplete batch UI results or missing serial-number notice.");
             Console.WriteLine($"PASS actual OpenBatchAsync: 25 CSV / 50000 rows / 120 tests / 12000 grouped summaries, {clock.Elapsed.TotalSeconds:F3}s");
             typeof(MainWindow).GetField("_retestMode", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, RetestMode.Last);
             clock.Restart();
