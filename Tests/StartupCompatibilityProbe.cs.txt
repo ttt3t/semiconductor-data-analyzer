@@ -83,6 +83,18 @@ static class Probe
             Check(!loaded.CompactTable && !loaded.AlternateRows && loaded.RunSelection == RunSelectionMode.WaferCoordinates && loaded.DataMemoryMiB == 256 && File.ReadAllText(preferences) == original, "legacy preferences retain values without a cache-budget field or rewrite");
             Check(failures.Count == 0, "no deferred dispatcher exceptions after restoring old user state");
             Check(!expectBug, "baseline must reproduce a startup dispatcher failure, not only a refresh contract violation");
+            Exception captured;
+            try { throw new InvalidOperationException("startup-report-outer", new IOException("startup-report-inner")); }
+            catch (Exception exception) { captured = exception; }
+            string report = (string)typeof(App).Assembly.GetType("SemiconductorCsvAnalyzer.Services.CrashReport")!
+                .GetMethod("Describe", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, new object[] { captured })!;
+            string log = report.Split('\n')[^1];
+            try
+            {
+                string details = File.ReadAllText(log);
+                Check(report.Contains("startup-report-inner") && details.Contains("startup-report-outer") && details.Contains("startup-report-inner") && details.Contains("Probe.Main") && details.Contains("Version:"), "startup error report persists the version, full stack and inner cause at the displayed path");
+            }
+            finally { File.Delete(log); }
             Console.WriteLine($"ALL {checks} STARTUP COMPATIBILITY CHECKS PASSED"); app.Shutdown(); return 0;
         }
         catch (Exception e)
