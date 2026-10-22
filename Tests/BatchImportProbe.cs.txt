@@ -36,6 +36,7 @@ static class BatchImportProbe
         Check(a.Values.Count == 3225 && b.Values.Count == 24 * 127 && b.Errors.Count == 48 && a.HighLimit == 9, "batch remaps reordered/missing tests, invalid cells and last-file limits");
         Check(data.Records[0].Measurements[a.Id] == "0007" && data.Records[0].Measurements[b.Id] == "" && data.Records[129 + 1].Measurements[b.Id] == "bad" && !data.Records[3 * 129].Measurements.ContainsKey(b.Id), "batch preserves exact raw text, blank cells and absent measurements");
         Check(data.Records.Select(r => r.SerialNumber).SequenceEqual(Enumerable.Range(1, 3225).Select(i => i.ToString())) && data.Records[129].OriginalSerialNumber == "1", "batch normalizes display serials without changing original identities");
+        Check(ReferenceEquals(DatasetService.SelectRetests(data, RetestMode.First), data) && ReferenceEquals(DatasetService.SelectRetests(data, RetestMode.Last), data) && DatasetService.SelectRetests(data, RetestMode.OnlyRetests).Records.Count == 0, "unique chips reuse disk data for First/Last and produce no retest-only records");
         var summaries = SummaryService.Build(data.Items, new[] { "1", "2" }, data.Wafers, false, false, config);
         Check(summaries.Sum(s => s.Count) == a.Values.Count + b.Values.Count && summaries.Sum(s => s.Eorr) == 48, "default grouped batch statistics include each finite value and error exactly once");
         Check(sources.Select((s, i) => File.ReadAllText(s.Path) == originals[i]).All(v => v), "batch import never changes source CSV bytes");

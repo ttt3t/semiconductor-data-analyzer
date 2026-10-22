@@ -98,6 +98,9 @@ public static partial class DatasetService
     private static RecordList SelectDiskRetests(RecordList source, RetestMode mode)
     {
         if (mode is not (RetestMode.First or RetestMode.Last or RetestMode.OnlyRetests)) throw new ArgumentOutOfRangeException(nameof(mode));
+        // Match the in-memory path: a dataset without repeated chips needs no
+        // copied identity table or per-test projection for First/Last mode.
+        if (!source.Store!.HasRetests()) return mode == RetestMode.OnlyRetests ? new RecordList() : source;
         var selected = new RecordList(0, disk: true);
         using var order = source.Store!.GroupRows(mode == RetestMode.Last);
         string? previous = null; var seen = new HashSet<string>(StringComparer.Ordinal);

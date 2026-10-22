@@ -230,6 +230,16 @@ public sealed class RecordList : IList<CsvRecord>, IReadOnlyList<CsvRecord>
             catch { slots.Dispose(); throw; }
         }
         internal readonly record struct GroupRow(int Slot, int Count);
+        internal bool HasRetests()
+        {
+            Flush();
+            lock (DiskStorage.Sync)
+            {
+                using var command = Connection.CreateCommand();
+                command.CommandText = "SELECT 1 FROM records GROUP BY chip HAVING COUNT(*)>1 LIMIT 1";
+                return command.ExecuteScalar() != null;
+            }
+        }
         internal PagedVector<GroupRow> GroupRows(bool reverse = false)
         {
             Flush(); var rows = new PagedVector<GroupRow>();

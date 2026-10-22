@@ -36,6 +36,13 @@ static class Probe
             var grid = (DataGrid)window.FindName("DgTestItems");
             if (data.Records.Count != 50000 || data.Items.Count != 120 || grid.Items.Count != 12000 || failures.Count != 0) throw new Exception("Incomplete batch UI results.");
             Console.WriteLine($"PASS actual OpenBatchAsync: 25 CSV / 50000 rows / 120 tests / 12000 grouped summaries, {clock.Elapsed.TotalSeconds:F3}s");
+            typeof(MainWindow).GetField("_retestMode", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(window, RetestMode.Last);
+            clock.Restart();
+            task = (Task)typeof(MainWindow).GetMethod("RefreshTestItemList", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null)!;
+            while (!task.IsCompleted) { if (clock.Elapsed.TotalSeconds > 180) throw new TimeoutException("Retest refresh did not finish."); Pump(); Thread.Sleep(2); }
+            task.GetAwaiter().GetResult(); Pump();
+            if (!ReferenceEquals(typeof(MainWindow).GetField("_allItems", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window), data.Items) || grid.Items.Count != 12000 || failures.Count != 0) throw new Exception("Unique-chip Last mode rebuilt its columns.");
+            Console.WriteLine($"PASS unique-chip Last mode reuses source columns and restores 12000 summary rows, {clock.Elapsed.TotalSeconds:F3}s");
             window.Close(); Pump(); if (failures.Count != 0) throw new Exception("Batch close raised dispatcher errors.");
             app.Shutdown(); return 0;
         }
