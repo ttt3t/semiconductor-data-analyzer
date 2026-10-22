@@ -11,7 +11,7 @@ using SemiconductorCsvAnalyzer.Services;
 
 static class Probe
 {
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern nint FindWindow(string className, string title);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern nint FindWindow(string? className, string title);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(nint window, out uint process);
     [DllImport("user32.dll")] static extern bool PostMessage(nint window, uint message, nint value, nint extra);
     static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame); }
@@ -36,19 +36,23 @@ static class Probe
             // existing renumbering notice; acknowledge only that expected dialog
             // in this probe's process so the integration test can continue.
             int notices = 0;
-            var acknowledge = new DispatcherTimer(DispatcherPriority.Send) { Interval = TimeSpan.FromMilliseconds(50) };
-            acknowledge.Tick += (_, _) =>
+            int ticks = 0;
+            using var acknowledge = new System.Threading.Timer(_ =>
             {
-                nint dialog = FindWindow("#32770", "Run 序列号已自动生成");
+                if (Interlocked.Increment(ref ticks) % 40 == 0)
+                {
+                    var current = (CsvParseResult)typeof(MainWindow).GetField("_data", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+                    Console.WriteLine($"UI batch pending: {current.Records.Count} committed records, notices={Volatile.Read(ref notices)}");
+                }
+                nint dialog = FindWindow(null, "Run 序列号已自动生成");
                 if (dialog == 0) return;
                 GetWindowThreadProcessId(dialog, out uint process);
-                if (process == Environment.ProcessId) { notices++; PostMessage(dialog, 0x0111, 1, 0); }
-            };
-            acknowledge.Start();
+                if (process == Environment.ProcessId) { Interlocked.Increment(ref notices); Console.WriteLine("ACK expected serial renumbering notice"); PostMessage(dialog, 0x0111, 1, 0); }
+            }, null, 50, 50);
             var clock = Stopwatch.StartNew();
             var task = (Task)typeof(MainWindow).GetMethod("OpenBatchAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, new object[] { sources })!;
             while (!task.IsCompleted) { if (clock.Elapsed.TotalSeconds > 180) throw new TimeoutException("Batch UI did not finish."); Pump(); Thread.Sleep(2); }
-            task.GetAwaiter().GetResult(); Pump(); acknowledge.Stop();
+            task.GetAwaiter().GetResult(); Pump(); acknowledge.Change(Timeout.Infinite, Timeout.Infinite);
             var data = (CsvParseResult)typeof(MainWindow).GetField("_data", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
             var grid = (DataGrid)window.FindName("DgTestItems");
             if (data.Records.Count != 50000 || data.Items.Count != 120 || grid.Items.Count != 12000 || failures.Count != 0 || notices == 0) throw new Exception("Incomplete batch UI results or missing serial-number notice.");
