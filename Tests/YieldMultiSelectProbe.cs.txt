@@ -37,7 +37,7 @@ static class Probe
                 SBinColumn = 5, HBinColumn = 6, WaferColumn = 7, SBinRow = 0, HBinRow = 0 };
             var cold = new ProductTestStage { Id = "cold", Kind = "CP", Name = "常温" };
             var hot = new ProductTestStage { Id = "hot", Kind = "CP", Name = "高温", Temperature = 85 };
-            var product = new ManagedProduct { Name = "multi-row", ConfigText = ConfigLoader.Serialize(config), Flow = new() { cold, hot }, RetestMode = RetestMode.All };
+            var product = new ManagedProduct { Name = "multi-row", ConfigText = ConfigLoader.Serialize(config), Flow = new() { cold, hot }, RetestMode = RetestMode.Last };
             for (int i = 1; i <= 3; i++)
             {
                 string path = Path.Combine(folder, "file" + i + ".csv");
