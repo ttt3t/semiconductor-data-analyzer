@@ -5,16 +5,25 @@ namespace SemiconductorCsvAnalyzer.Services;
 
 public static class ManagedAnalysisService
 {
-    public static ManagedDataFile[] YieldFiles(ManagedProduct product, ManagedYieldRow row)
+    public static ManagedDataFile[] YieldFiles(ManagedProduct product, ManagedYieldRow row) => YieldFiles(product, new[] { row });
+
+    public static ManagedDataFile[] YieldFiles(ManagedProduct product, IEnumerable<ManagedYieldRow> rows)
     {
-        var files = product.Files.Where(f => row.SourceFileIds.Contains(f.Id) && !string.IsNullOrWhiteSpace(f.FilePath)).ToArray();
-        if (files.Length == 0)
-            throw new InvalidDataException("该行没有关联的原始数据文件；仅登记指定良率时无法打开原文件。");
+        var selected = rows.ToArray();
+        if (selected.Length == 0) throw new InvalidDataException("请选择需要打开的良率明细行。");
+        var ids = selected.SelectMany(r => r.SourceFileIds).ToHashSet(StringComparer.Ordinal);
+        var files = product.Files.Where(f => ids.Contains(f.Id) && !string.IsNullOrWhiteSpace(f.FilePath)).ToArray();
+        var available = files.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
+        if (selected.Any(r => !r.SourceFileIds.Overlaps(available)))
+            throw new InvalidDataException("选中行没有关联的原始数据文件；仅登记指定良率时无法打开原文件。");
         return files;
     }
 
     public static CsvImportSource[][] YieldSources(ManagedProduct product, ManagedYieldRow row) =>
-        YieldFiles(product, row).GroupBy(f => f.StageId)
+        YieldSources(product, new[] { row });
+
+    public static CsvImportSource[][] YieldSources(ManagedProduct product, IEnumerable<ManagedYieldRow> rows) =>
+        YieldFiles(product, rows).GroupBy(f => f.StageId)
             .Select(group => Sources(product, group.Select(f => f.Id))).ToArray();
 
     public static CsvImportSource[] Sources(ManagedProduct product, IEnumerable<string> selectedIds)

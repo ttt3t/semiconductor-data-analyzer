@@ -115,7 +115,7 @@ public class ScatterPlotControl : CachedPlotControl
     private static readonly Pen LabelBorder = Freeze(new Pen(Freeze(new SolidColorBrush(Color.FromRgb(180, 180, 180))), 0.8));
     private static readonly Typeface UiTypeface = new("Segoe UI");
     private const double PointRadius = 1.35;
-    private const string InteractionHelp = "滚轮缩放 · 左键平移 · 长按右键 0.4 秒框选 · 双击/短按右键重置";
+    private const string InteractionHelp = "滚轮缩放 · 左键平移 · 右键拖动框选 · 双击左键重置";
     private double Dpi => VisualTreeHelper.GetDpi(this).PixelsPerDip;
     public string Unit { get; private set; } = "";
     public string HorizontalAxisTitle => _series.Order switch
@@ -129,22 +129,23 @@ public class ScatterPlotControl : CachedPlotControl
 
     private readonly OverlayLayer _overlayLayer;
     private readonly DispatcherTimer _hoverTimer;
-    private readonly DispatcherTimer _selectionTimer;
     private readonly ScatterChipMarks _chipMarks = new();
     private bool[] _markedPoints = Array.Empty<bool>();
     private Point? _rightStart;
     private Point _rightPosition;
     private bool _selecting;
+    private long _markRevision;
     public int ChipMarkCount => _chipMarks.Count;
     public event EventHandler? ChipMarksChanged;
 
     public void ClearChipMarks()
     {
+        _markRevision++;
         CancelRightGesture();
         _chipMarks.Clear();
         _markedPoints = Array.Empty<bool>();
-        _markedCoords.Clear();
-        _markedCoords.Capacity = 256;
+        // Raster scratch belongs to the renderer. It is reset at the next frame;
+        // clearing marks must not change a buffer an in-progress frame enumerates.
         InvalidatePlot();
         ChipMarksChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -205,14 +206,6 @@ public class ScatterPlotControl : CachedPlotControl
             _hoverTimer.Stop();
             _overlayLayer.InvalidateVisual();
         };
-        _selectionTimer = new DispatcherTimer(DispatcherPriority.Input, Dispatcher)
-            { Interval = TimeSpan.FromMilliseconds(400) };
-        _selectionTimer.Tick += (_, _) =>
-        {
-            _selectionTimer.Stop();
-            if (IsMouseCaptured && Mouse.RightButton == MouseButtonState.Pressed) BeginBoxSelection();
-            else CancelRightGesture();
-        };
         LostMouseCapture += (_, _) => { _dragStart = null; CancelRightGesture(); };
         PreviewKeyDown += (_, e) =>
         {
@@ -220,6 +213,7 @@ public class ScatterPlotControl : CachedPlotControl
         };
         Unloaded += (_, _) =>
         {
+            _markRevision++;
             CancelRightGesture();
             _hoverTimer.Stop();
             _hover = null;
@@ -380,7 +374,7 @@ public class ScatterPlotControl : CachedPlotControl
         if (!IsInPlot(start)) return;
         Focus();
         _rightStart = _rightPosition = start;
-        if (CaptureMouse()) _selectionTimer.Start();
+        if (CaptureMouse()) BeginBoxSelection();
         else CancelRightGesture();
         e.Handled = true;
     }
@@ -401,7 +395,6 @@ public class ScatterPlotControl : CachedPlotControl
 
     private void CancelRightGesture()
     {
-        _selectionTimer.Stop();
         bool release = _rightStart.HasValue;
         _rightStart = null;
         _selecting = false;
@@ -415,21 +408,24 @@ public class ScatterPlotControl : CachedPlotControl
         _rightPosition = end;
         var rectangle = SelectionRectangle();
         bool select = _selecting;
+        long revision = _markRevision;
+        var series = _series;
         CancelRightGesture();
+        // Releasing capture can reenter ClearChipMarks, SetSeries or Unloaded.
+        // Never commit a selection that was cleared/replaced during that event.
+        if (revision != _markRevision || !ReferenceEquals(series, _series)) return;
         if (select)
         {
             if (rectangle.Width < 2 || rectangle.Height < 2) return;
             if (TryScreenToData(rectangle.TopLeft, out double x1, out double y1) &&
                 TryScreenToData(rectangle.BottomRight, out double x2, out double y2) &&
-                _chipMarks.AddRectangle(_series, x1, x2, y1, y2))
+                _chipMarks.AddRectangle(series, x1, x2, y1, y2))
             {
-                _markedPoints = _chipMarks.CreateMask(_series);
+                _markedPoints = _chipMarks.CreateMask(series);
                 InvalidatePlot();
                 ChipMarksChanged?.Invoke(this, EventArgs.Empty);
             }
         }
-        else if (Math.Abs(end.X - start.X) <= SystemParameters.MinimumHorizontalDragDistance &&
-                 Math.Abs(end.Y - start.Y) <= SystemParameters.MinimumVerticalDragDistance) ResetZoom();
     }
 
     private void OnMouseRightButtonUp(object sender, MouseButtonEventArgs e)
@@ -530,6 +526,7 @@ public class ScatterPlotControl : CachedPlotControl
 
     private void ApplySeries(ScatterSeries series)
     {
+        _markRevision++;
         CancelRightGesture();
         _series = series;
         _markedPoints = _chipMarks.CreateMask(series);
@@ -692,6 +689,7 @@ public class ScatterPlotControl : CachedPlotControl
     private void RenderPointsBitmap(DrawingContext dc, Rect plotRect, double visMinX, double visMaxX, bool grouped)
     {
         var points = _series.Points;
+        var markedPoints = _markedPoints;
         if (points.Length == 0 || _plotW < 1 || _plotH < 1) return;
 
         // Offscreen report export renders at 144 DPI (1.5x); match it so exported scatter plots stay crisp.
@@ -772,7 +770,7 @@ public class ScatterPlotControl : CachedPlotControl
             bool centerInside = (uint)ix < (uint)bmpW && (uint)iy < (uint)bmpH;
             int centerIdx = centerInside ? iy * bmpW + ix : -1;
 
-            if (_markedPoints.Length > 0 && _markedPoints[i])
+            if (i < markedPoints.Length && markedPoints[i])
             {
                 bool light = grouped && groupIndex % 2 != 0;
                 if (!centerInside || _occupancy[centerIdx] < 4)

@@ -22,7 +22,10 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 
 只启动独立分析器可使用 `SemiconductorCsvAnalyzer.exe --analyzer`。详细口径见 [使用手册](Docs/UserGuide.md)。
 
-## V2.0.7 修复
+## V2.0.7 修复与更新
+
+散点图右键按下后即可拖动框选，短按右键不再重置缩放，仅双击左键重置；标记按同一次测试记录跨测项显示，不再连带其他复测记录。清空会取消未完成的选区，防止捕获释放时重新提交旧选择，并复用原绘图缓冲。良率明细支持 Ctrl / Shift 多选，右键“合并打开所选行”，关联文件去重后按登记顺序、同测试步骤合并。
+
 
 修复原始值表、BIN / P/F Map 图例及热力图色标复制时，剪贴板被 Excel、远程桌面或其他程序占用引发的异常。复制失败会显示“剪贴板正忙，请重试”，释放剪贴板后可再次复制。
 

@@ -535,7 +535,7 @@
                         <DockPanel DockPanel.Dock="Top" Margin="8,1,0,0">
                             <Button x:Name="BtnClearScatterMarks" DockPanel.Dock="Right" Content="清空标记" IsEnabled="False"
                                     Padding="8,3" Margin="6,0,2,0" VerticalAlignment="Top" Click="ClearScatterMarks_Click"
-                                    ToolTip="清空所有测试项中的芯片标记。长按右键 0.4 秒后拖动框选，松开右键累计标记；Esc 取消。"/>
+                                    ToolTip="清空所有测试项中的测试记录标记。右键按下后直接拖动框选，松开右键累计标记；Esc 取消。"/>
                             <WrapPanel>
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
                                     <controls:ActionIcon Kind="Scatter" Width="14" Height="14" Stroke="#64748B" Margin="0,0,6,0"/>

@@ -1,0 +1,90 @@
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Threading;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static object? Field(object target, string name) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target);
+    static object? Call(object target, string name, params object[] args) => target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(target, args);
+    static void Check(bool condition, string message) { if (!condition) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
+    static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame); }
+    static void Until(Func<bool> ready) { var clock = Stopwatch.StartNew(); while (!ready()) { if (clock.Elapsed.TotalSeconds > 45) throw new TimeoutException(); Pump(); Thread.Sleep(2); } Pump(); }
+    static T Wait<T>(Task<T> task) { Until(() => task.IsCompleted); return task.GetAwaiter().GetResult(); }
+    static DataGridRow Row(DataGrid grid, object item) { grid.ScrollIntoView(item); grid.UpdateLayout(); Pump(); return (DataGridRow)grid.ItemContainerGenerator.ContainerFromItem(item); }
+    static void RightClick(DataGridRow row) => row.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Right) { RoutedEvent = Mouse.PreviewMouseDownEvent });
+    static MenuItem Menu(DataGridRow row)
+    {
+        var menu = row.ContextMenu; menu.PlacementTarget = row; menu.IsOpen = true; Pump(); return (MenuItem)menu.Items[0];
+    }
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            string folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            var app = new App(); app.InitializeComponent(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            var failures = new List<Exception>(); app.DispatcherUnhandledException += (_, e) => { failures.Add(e.Exception); Console.Error.WriteLine(e.Exception); e.Handled = true; };
+            var config = new AnalyzerConfig { TestItemRow = 1, LowLimitRow = 2, HighLimitRow = 3, UnitRow = 4, TestNumberRow = 5,
+                DataStartRow = 6, TestItemStartColumn = 8, SerialNumberColumn = 1, XColumn = 2, YColumn = 3, SiteColumn = 4,
+                SBinColumn = 5, HBinColumn = 6, WaferColumn = 7, SBinRow = 0, HBinRow = 0 };
+            var cold = new ProductTestStage { Id = "cold", Kind = "CP", Name = "常温" };
+            var hot = new ProductTestStage { Id = "hot", Kind = "CP", Name = "高温", Temperature = 85 };
+            var product = new ManagedProduct { Name = "multi-row", ConfigText = ConfigLoader.Serialize(config), Flow = new() { cold, hot }, RetestMode = RetestMode.All };
+            for (int i = 1; i <= 3; i++)
+            {
+                string path = Path.Combine(folder, "file" + i + ".csv");
+                File.WriteAllText(path, "SN,X,Y,Site,SBIN,HBIN,Wafer,A\nLSL,,,,,,,0\nUSL,,,,,,,10\nUnit,,,,,,,V\nTest Num,,,,,,,101\n" + $"{i},{i},0,1,1,1,W{i},{i}\n");
+                product.Files.Add(new() { Id = "F" + i, StageId = i == 3 ? hot.Id : cold.Id, Lot = "L" + (i == 3 ? 1 : i), FilePath = path, TestTime = new DateTime(2026, 10, 25) });
+            }
+            product.Snapshot = ProductYieldService.Calculate(product);
+            var store = new ProductCatalogStore(Path.Combine(folder, "catalog.json")); store.Save(new ProductCatalog { Products = new() { product } });
+            var window = new ProductManagementWindow(store); window.Show(); ((TabControl)window.FindName("MainTabs")).SelectedIndex = 1; Pump();
+            var grid = (DataGrid)window.FindName("DgYields");
+            Check(grid.SelectionMode == DataGridSelectionMode.Extended, "yield details allow Ctrl/Shift multi-row selection");
+            var coldRows = grid.Items.OfType<ManagedYieldRow>().Where(r => r.StageId == "cold").ToArray();
+            var hotRow = grid.Items.OfType<ManagedYieldRow>().Single(r => r.StageId == "hot");
+            grid.SelectedItems.Clear(); foreach (var row in coldRows.Reverse()) grid.SelectedItems.Add(row);
+            var first = Row(grid, coldRows[0]); RightClick(first); Pump();
+            Check(grid.SelectedItems.Count == 2, "right-click on a selected row preserves the entire selection");
+            var open = Menu(first);
+            Check(open.Header.ToString() == "合并打开所选行", "multi-row context menu describes merged opening");
+            var resolved = Wait((Task<ManagedYieldRow[]?>)Call(window, "CurrentYieldRowsAsync", open)!);
+            Check(resolved?.Length == 2 && ManagedAnalysisService.YieldFiles((ManagedProduct)Field(window, "_product")!, resolved).Select(f => f.Id).SequenceEqual(new[] { "F1", "F2" }), "current selection resolves the union in original registration order");
+            Call(window, "OpenYield_Click", open, new RoutedEventArgs());
+            first.ContextMenu.IsOpen = false;
+            Until(() => !(bool)Field(window, "_busy")! && window.OwnedWindows.OfType<MainWindow>().Count() == 1);
+            var analysis = window.OwnedWindows.OfType<MainWindow>().Single(); var data = (CsvParseResult)Field(analysis, "_data")!;
+            Check(data.Records.Select(r => r.SerialNumber).SequenceEqual(new[] { "1", "2" }) && ((IReadOnlyList<CsvImportSource>)Field(analysis, "_sources")!).Count == 2,
+                "actual context action opens both selected rows as one analyzer with ordered source records");
+            analysis.Close(); Pump();
+
+            RightClick(Row(grid, hotRow)); Pump();
+            Check(grid.SelectedItems.Count == 1 && ReferenceEquals(grid.SelectedItem, hotRow), "right-click on an unselected row replaces the previous selection");
+            grid.SelectedItems.Clear(); grid.SelectedItems.Add(coldRows[0]); grid.SelectedItems.Add(hotRow);
+            var mixedContainer = Row(grid, coldRows[0]); open = Menu(mixedContainer);
+            Call(window, "OpenYield_Click", open, new RoutedEventArgs());
+            mixedContainer.ContextMenu.IsOpen = false;
+            Until(() => !(bool)Field(window, "_busy")! && window.OwnedWindows.OfType<MainWindow>().Count() == 2);
+            Check(window.OwnedWindows.OfType<MainWindow>().All(w => ((CsvParseResult)Field(w, "_data")!).Records.Count == 1), "different temperatures open as separate valid merged groups");
+            foreach (var child in window.OwnedWindows.OfType<MainWindow>().ToArray()) child.Close(); Pump();
+
+            grid.SelectedItems.Clear(); foreach (var row in coldRows) grid.SelectedItems.Add(row);
+            first = Row(grid, coldRows[0]); open = Menu(first);
+            ((ManagedProduct)Field(window, "_product")!).Snapshot!.DefinitionSignature = "old-snapshot";
+            resolved = Wait((Task<ManagedYieldRow[]?>)Call(window, "CurrentYieldRowsAsync", open)!);
+            Check(resolved?.Length == 2 && resolved.SelectMany(r => r.SourceFileIds).ToHashSet().SetEquals(new[] { "F1", "F2" }), "recomputing an old snapshot remaps every selected row instead of losing multi-selection");
+            first.ContextMenu.IsOpen = false; window.Close(); Pump();
+            Check(failures.Count == 0, "multi-row selection, opening, recalculation and closing have no dispatcher errors");
+            Console.WriteLine($"ALL {checks} YIELD MULTI-SELECT CHECKS PASSED"); app.Shutdown(); return 0;
+        }
+        catch (Exception exception) { Console.Error.WriteLine(exception); return 1; }
+    }
+}

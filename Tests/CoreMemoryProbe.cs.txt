@@ -342,6 +342,14 @@ static class Probe
         var monthSources = ManagedAnalysisService.YieldSources(product, january);
         Check(monthSources.Length == 1 && monthSources[0].Length == 4 && monthSources[0].All(s => s.ShowLotInWafer),
             "same-step month merges all lots with separate wafer identity");
+        var lotRows = ManagementTrendService.DetailYieldRows(product, period: ManagementPeriod.Lot).Where(r => r.StageId == cold.Id).Reverse().ToArray();
+        var multi = ManagedAnalysisService.YieldSources(product, lotRows.Concat(lotRows));
+        Check(multi.Length == 1 && multi[0].Select(s => s.Path).SequenceEqual(new[] { old.FilePath, latest.FilePath, otherWafer.FilePath, otherLot.FilePath, undated.FilePath }),
+            "multi-row source union deduplicates overlap and follows registration order, not selection order");
+        var mixed = ManagedAnalysisService.YieldSources(product, new[] { february, january });
+        Check(mixed.Length == 2 && mixed[0].Length == 4 && mixed[1].Single().Path == hotFile.FilePath,
+            "multi-row open merges each step once and keeps temperature groups separate");
+        Reject<InvalidDataException>(() => ManagedAnalysisService.YieldFiles(product, Array.Empty<ManagedYieldRow>()), "empty multi-row source selection is rejected");
         Check(ProductCatalogStore.Clone(february).SourceFileIds.SetEquals(february.SourceFileIds), "source links survive catalog serialization");
         product.RetestMode = RetestMode.First;
         product.Snapshot = ProductYieldService.Calculate(product);
@@ -365,6 +373,7 @@ static class Probe
         var manual = ManagementTrendService.DetailYieldRows(product).Single(r => r.StageId == cold.Id);
         Check(manual.SourceFileIds.SetEquals(new[] { specified.Id }), "specified row retains its registration link");
         Reject<InvalidDataException>(() => ManagedAnalysisService.YieldFiles(product, manual), "specified row without source reports no original file");
+        Reject<InvalidDataException>(() => ManagedAnalysisService.YieldFiles(product, new[] { manual, january }), "multi-row selection does not silently ignore rows without an original file");
         var unknown = product.Snapshot.Yields.Single(r => r.IsCombined);
         Check(unknown.SourceFileIds.SetEquals(new[] { specified.Id }), "unavailable combined row retains underlying source registration");
         product.Snapshot.DefinitionSignature = "old-version";
@@ -386,8 +395,8 @@ static class Probe
         var first = ScatterSeries.Build(values, 0, 11, trackChips: true);
         Check(!marks.AddRectangle(first, double.NaN, 5, 0, 20), "nonfinite selection rejected");
         Check(!marks.AddRectangle(ScatterSeries.Build(values, null, null), 1, 5, 0, 20), "noninteractive series does not retain chip identities");
-        Check(marks.AddRectangle(first, 1, 1, 10, 10) && marks.Count == 1, "inclusive rectangle selects original physical chip");
-        Check(marks.CreateMask(first).SequenceEqual(new[] { true, false, false, true }), "retest is marked while other wafer/lot coordinates stay separate");
+        Check(marks.AddRectangle(first, 1, 1, 10, 10) && marks.Count == 1, "inclusive rectangle selects the original acquisition record");
+        Check(marks.CreateMask(first).SequenceEqual(new[] { true, false, false, false }), "same-chip retest and other wafer/lot records stay unmarked");
         Check(!marks.AddRectangle(first, 1, 1, 10, 10) && marks.Count == 1, "repeated marking is idempotent");
         Check(!marks.AddRectangle(first, 2, 2, -100, 100), "NaN gap retains its serial index without selecting adjacent chip");
         Check(!marks.AddRectangle(first, 1.01, 1.99, 0, 20), "selection uses point centers and precise bounds");
@@ -396,12 +405,12 @@ static class Probe
         {
             var next = ScatterSeries.BuildSorted(nextValues, null, null, order, trackChips: true);
             var mask = marks.CreateMask(next);
-            Check(Enumerable.Range(0, mask.Length).All(i => mask[i] == (next.RecordAtPoint(i)!.Id is "a" or "retest")),
-                "chip marking follows different test values and " + order + " ordering");
+            Check(Enumerable.Range(0, mask.Length).All(i => mask[i] == (next.RecordAtPoint(i)!.Id == "a")),
+                "record marking follows different test values and " + order + " ordering");
             Check(marks.CreateMask(next.Scale(1000)).SequenceEqual(mask), "unit scaling preserves marked identities " + order);
         }
         var filtered = ScatterSeries.Build(new[] { new TestValue(records[4], 999) }, null, null, trackChips: true);
-        Check(marks.CreateMask(filtered).Single(), "marks survive a filtered/retest-only series");
+        Check(!marks.CreateMask(filtered).Single(), "retest-only series does not inherit another acquisition's mark");
         Check(marks.CreateMask(ScatterSeries.Empty).Length == 0 && marks.Count == 1, "temporary empty series preserves chip marks");
         Check(marks.AddRectangle(first, 4, 3, 100, 0) && marks.Count == 3, "reverse rectangle accumulates across wafer and lot");
         marks.Clear();
@@ -420,23 +429,29 @@ static class Probe
         };
         var ftSeries = ScatterSeries.Build(ft.Select(r => new TestValue(r, 0)).ToArray(), null, null, trackChips: true);
         marks.AddRectangle(ftSeries, 1, 1, 0, 0);
-        Check(marks.CreateMask(ftSeries).SequenceEqual(new[] { true, true, false, false, false, false, false, false, false }),
-            "FT UUID crosses site/wafer while remaining isolated by lot");
+        Check(marks.CreateMask(ftSeries).SequenceEqual(new[] { true, false, false, false, false, false, false, false, false }),
+            "same FT UUID in another test record does not inherit a mark");
         marks.AddRectangle(ftSeries, 4, 4, 0, 0);
         Check(marks.CreateMask(ftSeries)[3] && !marks.CreateMask(ftSeries)[4], "missing FT UUID uses unique record identity");
         marks.AddRectangle(ftSeries, 6, 6, 0, 0);
-        Check(marks.CreateMask(ftSeries)[6], "CP without XY retains source serial across reassigned Run serials");
+        Check(!marks.CreateMask(ftSeries)[6], "same source SN in a different acquisition does not inherit a mark");
+        var clone = DatasetService.CloneRecord(ft[5]); clone.SerialNumber = "1000";
+        Check(marks.CreateMask(ScatterSeries.Build(new[] { new TestValue(clone, 5) }, null, null, trackChips: true)).Single(), "cloned views preserve acquisition marking after display SN changes");
         marks.AddRectangle(ftSeries, 8, 8, 0, 0);
         Check(marks.CreateMask(ftSeries)[7] && !marks.CreateMask(ftSeries)[8], "missing CP identity does not merge unrelated records");
         // Exercise the optimized column/view paths, rather than only materialized TestValue arrays.
         var data = Fixture();
         var columnSeries = ScatterSeries.BuildSorted(data.Items[0].Values, 0, 2, ScatterOrder.Site, trackChips: true);
-        marks.Clear(); marks.AddRectangle(columnSeries, 1, 1, -100, 100);
+        marks.Clear();
+        int markedAt = Enumerable.Range(0, columnSeries.Points.Length).Single(i => columnSeries.RecordAtPoint(i)!.Id == "r2");
+        marks.AddRectangle(columnSeries, columnSeries.Points[markedAt].Index, columnSeries.Points[markedAt].Index, -100, 100);
         var sparse = ScatterSeries.Build(data.Items[1].Values, null, null, trackChips: true);
         Check(marks.CreateMask(sparse).Single(), "marked CP identity crosses sparse numeric columns");
         var indexed = new IndexedTestValues(data.Items[0].Values, new[] { 2, 3 });
         Check(marks.CreateMask(ScatterSeries.Build(indexed, null, null, trackChips: true)).SequenceEqual(new[] { true, false }),
             "indexed view resolves original row identity");
+        var otherRetest = ScatterSeries.Build(new[] { new TestValue(data.Records[0], 3) }, null, null, trackChips: true);
+        Check(!marks.CreateMask(otherRetest).Single(), "sparse-column marking excludes a different partial-retest record");
     }
     static void CompactFailExport()
     {

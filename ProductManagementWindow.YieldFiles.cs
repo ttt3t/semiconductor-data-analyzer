@@ -19,6 +19,7 @@ public partial class ProductManagementWindow
         explore.Click += ExploreYield_Click;
         menu.Items.Add(open);
         menu.Items.Add(explore);
+        menu.Opened += (_, _) => open.Header = DgYields.SelectedItems.Count > 1 ? "合并打开所选行" : "打开";
         e.Row.ContextMenu = menu;
     }
 
@@ -27,16 +28,23 @@ public partial class ProductManagementWindow
         if (e.OriginalSource is DependencyObject target &&
             ItemsControl.ContainerFromElement(DgYields, target) is DataGridRow row)
         {
-            DgYields.SelectedItem = row.Item;
-            row.Focus();
+            if (!row.IsSelected)
+            {
+                DgYields.SelectedItems.Clear();
+                row.IsSelected = true;
+                row.Focus();
+            }
+            e.Handled = true;
         }
     }
 
-    private async Task<ManagedYieldRow?> CurrentYieldRowAsync(object sender)
+    private async Task<ManagedYieldRow[]?> CurrentYieldRowsAsync(object sender)
     {
         if (_product == null || _busy || _closed || sender is not MenuItem item ||
             ItemsControl.ItemsControlFromItemContainer(item) is not ContextMenu menu ||
-            menu.PlacementTarget is not DataGridRow container || container.Item is not ManagedYieldRow selected) return null;
+            menu.PlacementTarget is not DataGridRow container || container.Item is not ManagedYieldRow clicked) return null;
+        var selected = DgYields.SelectedItems.OfType<ManagedYieldRow>().ToArray();
+        if (!selected.Contains(clicked)) selected = new[] { clicked };
         var productId = _product.Id;
         var period = Period;
         var filter = TxtFilter.Text.Trim();
@@ -45,17 +53,24 @@ public partial class ProductManagementWindow
         // never guess a month's files from the registration timestamp.
         if (!await CalculateAsync(productId) || _closed || _product?.Id != productId) return null;
         if (Period != period || TxtFilter.Text.Trim() != filter) return null;
-        var current = ManagementTrendService.DetailYieldRows(_product, filter, period).FirstOrDefault(row =>
-            row.Kind == selected.Kind && row.StageId == selected.StageId && row.Lot == selected.Lot &&
-            row.Wafer == selected.Wafer && row.Period == selected.Period);
-        if (current == null) TxtStatus.Text = "重算后该行已变化，请重新选择良率明细。";
-        return current;
+        static (string, string, string, string, string, bool) Key(ManagedYieldRow row) =>
+            (row.Kind, row.StageId, row.Lot, row.Wafer, row.Period, row.IsCombined);
+        var current = ManagementTrendService.DetailYieldRows(_product, filter, period).ToLookup(Key);
+        var resolved = new List<ManagedYieldRow>(selected.Length);
+        foreach (var row in selected)
+        {
+            var matches = current[Key(row)].ToArray();
+            if (matches.Length != 1)
+            { TxtStatus.Text = "重算后部分行已变化，请重新选择良率明细。"; return null; }
+            resolved.Add(matches[0]);
+        }
+        return resolved.ToArray();
     }
 
     private async void OpenYield_Click(object sender, RoutedEventArgs e)
     {
-        var row = await CurrentYieldRowAsync(sender);
-        if (row == null || _product == null || _busy || _closed) return;
+        var rows = await CurrentYieldRowsAsync(sender);
+        if (rows == null || _product == null || _busy || _closed) return;
         var product = _product;
         long version = _version;
         MainWindow? opening = null;
@@ -63,8 +78,8 @@ public partial class ProductManagementWindow
         SetBusy(true);
         try
         {
-            paths = ManagedAnalysisService.YieldFiles(product, row).Select(f => f.FilePath).ToArray();
-            var groups = ManagedAnalysisService.YieldSources(product, row);
+            paths = ManagedAnalysisService.YieldFiles(product, rows).Select(f => f.FilePath).ToArray();
+            var groups = ManagedAnalysisService.YieldSources(product, rows);
             foreach (var sources in groups)
             {
                 if (_closed || version != _version || _product?.Id != product.Id) break;
@@ -74,7 +89,7 @@ public partial class ProductManagementWindow
                 await opening.OpenManagedFilesAsync(sources, config, product.RetestMode);
                 opening = null;
             }
-            if (!_closed && version == _version) TxtStatus.Text = $"已打开 {paths.Length} 条源文件登记，共 {groups.Length} 个分析窗口（同一步骤内合并）。";
+            if (!_closed && version == _version) TxtStatus.Text = $"已打开所选 {rows.Length} 行关联的 {paths.Length} 条源文件登记，共 {groups.Length} 个分析窗口（同一步骤内合并）。";
         }
         catch (OperationCanceledException) { opening?.Close(); if (!_closed && version == _version) TxtStatus.Text = "已取消打开。"; }
         catch (Exception ex)
@@ -91,11 +106,11 @@ public partial class ProductManagementWindow
 
     private async void ExploreYield_Click(object sender, RoutedEventArgs e)
     {
-        var row = await CurrentYieldRowAsync(sender);
-        if (row == null || _product == null || _busy || _closed) return;
+        var rows = await CurrentYieldRowsAsync(sender);
+        if (rows == null || _product == null || _busy || _closed) return;
         try
         {
-            var files = ManagedAnalysisService.YieldFiles(_product, row).DistinctBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase);
+            var files = ManagedAnalysisService.YieldFiles(_product, rows).DistinctBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase);
             int opened = 0;
             var errors = new List<string>();
             foreach (var file in files)

@@ -1,5 +1,6 @@
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -13,6 +14,7 @@ using SemiconductorCsvAnalyzer.Services;
 
 static class Probe
 {
+    [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
     static int checks;
     static string folder = "";
     static void Check(bool condition, string message)
@@ -83,7 +85,11 @@ static class Probe
             var window = new Window { Content = plot, SizeToContent = SizeToContent.WidthAndHeight }; window.Show(); Pump();
             Save(plot, "before.png");
             Check(!plot.UseBitmapCache && VisualTreeHelper.GetChildrenCount(plot) == 1, "original raster renderer and single overlay retained");
-            Check(((DispatcherTimer)Field(plot, "_selectionTimer")!).Interval.TotalMilliseconds == 400, "right-button hold threshold is 400 ms");
+            Point screen = plot.PointToScreen(At(plot, 2, 2));
+            Check(SetCursorPos((int)screen.X, (int)screen.Y), "mouse is positioned in the real plot"); Mouse.Synchronize(); Pump();
+            plot.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Right) { RoutedEvent = UIElement.MouseRightButtonDownEvent });
+            Check((bool)Field(plot, "_selecting")! && Field(plot, "_rightStart") != null && plot.IsMouseCaptured, "right-button down starts selection immediately without waiting or pumping");
+            Call(plot, "CancelRightGesture"); Pump();
             Check(PointPixel(plot, 1, 1) == 0xff1f5fa5 && PointPixel(plot, 3, 3) == 0xffdc3c3c, "normal grouped points stay blue and unmarked failures red");
             var a = At(plot, .8, .8); var b = At(plot, 3.2, 3.2);
             long renders = (long)Field(plot, "_renderCount")!;
@@ -114,19 +120,68 @@ static class Probe
             Mark(plot, 2, 20); Check(plot.ChipMarkCount == 3, "rectangle uses current zoom and locked-Y coordinates");
             plot.ClearChipMarks(); Pump();
             Check(plot.ChipMarkCount == 0 && ((bool[])Field(plot, "_markedPoints")!).Length == 0 && PointPixel(plot, 3, 30) == 0xffdc3c3c, "clear restores red/blue colors and releases mask");
-            // A short right click resets zoom; a short drag does not unexpectedly reset it.
+            // Right clicks/drags only select. Only a double left click resets zoom.
             Call(plot, "ZoomAt", At(plot, 2, 20), 120); double scale = (double)Field(plot, "_scaleX")!;
             Set(plot, "_rightStart", new Point(200, 100)); Call(plot, "CompleteRightGesture", new Point(220, 120));
             Check((double)Field(plot, "_scaleX")! == scale, "short right drag does not reset zoom");
             Set(plot, "_rightStart", new Point(200, 100)); Call(plot, "CompleteRightGesture", new Point(200, 100));
-            Check((double)Field(plot, "_scaleX")! == 1, "short right click still resets zoom");
+            Check((double)Field(plot, "_scaleX")! == scale, "short right click never resets zoom");
+            var doubleLeft = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonDownEvent };
+            typeof(MouseButtonEventArgs).GetProperty(nameof(MouseButtonEventArgs.ClickCount))!.SetValue(doubleLeft, 2);
+            plot.RaiseEvent(doubleLeft);
+            Check((double)Field(plot, "_scaleX")! == 1, "double left click retains zoom reset");
             var left = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonDownEvent };
             plot.RaiseEvent(left);
-            Check(Field(plot, "_dragStart") != null && Field(plot, "_rightStart") == null && !((DispatcherTimer)Field(plot, "_selectionTimer")!).IsEnabled, "left button starts existing pan without starting marking");
+            Check(Field(plot, "_dragStart") != null && Field(plot, "_rightStart") == null && !(bool)Field(plot, "_selecting")!, "left button starts existing pan without starting marking");
             plot.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonUpEvent });
             Check(Field(plot, "_dragStart") == null, "left release ends existing pan");
             Begin(plot, a, b); plot.SetSeries(series, 0, 2.5, "V");
             Check(!(bool)Field(plot, "_selecting")! && Field(plot, "_rightStart") == null, "changing series cancels an unfinished rectangle");
+
+            var repeated = new[] {
+                new TestValue(new CsvRecord { Id = "first", SerialNumber = "1", Lot = "L", WaferId = "W", X = 1, Y = 0, Site = "1" }, 10),
+                new TestValue(new CsvRecord { Id = "again", SerialNumber = "2", Lot = "L", WaferId = "W", X = 1, Y = 0, Site = "2" }, 30)
+            };
+            plot.IsYAxisLocked = false;
+            plot.ClearChipMarks();
+            var retests = ScatterSeries.BuildSorted(repeated, 0, 25, ScatterOrder.Site, trackChips: true);
+            plot.SetSeries(retests, 0, 25, "V"); Pump(); Mark(plot, 1, 10);
+            Check(((bool[])Field(plot, "_markedPoints")!).SequenceEqual(new[] { true, false }) && PointPixel(plot, 2, 30) == 0xffdc3c3c,
+                "CP same-XY retest outside rectangle stays unmarked and red");
+            var secondTest = repeated.Reverse().Select(v => { v.Value *= 10; return v; }).ToArray();
+            plot.SetSeries(ScatterSeries.BuildSorted(secondTest, 0, 250, ScatterOrder.SerialNumber, trackChips: true), 0, 250, "mV"); Pump();
+            Check(((bool[])Field(plot, "_markedPoints")!).SequenceEqual(new[] { true, false }), "cross-test record mark excludes a different partial-retest acquisition");
+            Mark(plot, 2, 300); Check(plot.ChipMarkCount == 2, "explicitly selecting both acquisitions counts two records");
+            var ft = repeated.Select((v, i) => new TestValue(new CsvRecord { Id = "FT" + i, SerialNumber = (i + 1).ToString(),
+                IsFtIdentity = true, Lot = "L", RetestUuid = "same-uuid", Site = (i + 1).ToString(), WaferId = "W" + i }, v.Value)).ToArray();
+            plot.ClearChipMarks(); plot.SetSeries(ScatterSeries.BuildSorted(ft, 0, 25, ScatterOrder.Wafer, trackChips: true), 0, 25, "V"); Pump(); Mark(plot, 1, 10);
+            Check(((bool[])Field(plot, "_markedPoints")!).SequenceEqual(new[] { true, false }), "FT same-UUID retest remains unmarked across wafers");
+
+            plot.ClearChipMarks(); plot.SetSeries(retests, 0, 25, "V"); Pump();
+            Point firstPoint = At(plot, 1, 10);
+            Begin(plot, new(firstPoint.X - 4, firstPoint.Y - 4), new(firstPoint.X + 4, firstPoint.Y + 4));
+            Check(plot.CaptureMouse(), "selection test captures real mouse input");
+            MouseEventHandler clearOnRelease = (_, _) => plot.ClearChipMarks();
+            plot.LostMouseCapture += clearOnRelease;
+            Call(plot, "CompleteRightGesture", new Point(firstPoint.X + 4, firstPoint.Y + 4));
+            plot.LostMouseCapture -= clearOnRelease; Pump();
+            Check(plot.ChipMarkCount == 0 && ((bool[])Field(plot, "_markedPoints")!).Length == 0, "clear during capture release cannot commit a stale selection");
+
+            var dense = Enumerable.Range(0, 6000).Select(i => new TestValue(new CsvRecord { Id = "dense" + i, SerialNumber = (i + 1).ToString(),
+                WaferId = "W", X = i / 2, Y = 0, Site = (i % 2 + 1).ToString() }, i % 101)).ToArray();
+            var denseSeries = ScatterSeries.BuildSorted(dense, 0, 80, ScatterOrder.SerialNumber, trackChips: true);
+            plot.SetSeries(denseSeries, 0, 80, "V"); Pump();
+            var reusableRaster = Field(plot, "_pixelBuffer");
+            for (int i = 0; i < 50; i++)
+            {
+                Point p1 = At(plot, 1, 100), p2 = At(plot, 6000, 0);
+                Begin(plot, p1, p2); Call(plot, "CompleteRightGesture", p2);
+                if (plot.ChipMarkCount < 5900) throw new Exception("Dense selection did not mark the visible records.");
+                if (i % 2 == 0) Pump(); // Clear both before first paint and immediately after drawing many marks.
+                plot.ClearChipMarks(); plot.ClearChipMarks(); Pump();
+                if (plot.ChipMarkCount != 0 || ((bool[])Field(plot, "_markedPoints")!).Length != 0) throw new Exception("Rapid clear resurrected marks.");
+            }
+            Check(ReferenceEquals(reusableRaster, Field(plot, "_pixelBuffer")), "50 rapid mark/double-clear cycles keep original reusable raster and never resurrect marks");
             window.Close();
 
             // Verify the actual analyzer button and dataset lifecycle, including async detail updates.
