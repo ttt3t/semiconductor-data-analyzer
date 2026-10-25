@@ -107,8 +107,11 @@
             </StackPanel>
             </ScrollViewer>
 
-            <Button Grid.Row="6" Content="复制图例"
-                    Click="BtnCopyLegend_Click" Margin="0,0,0,8" Padding="8,4"/>
+            <StackPanel Grid.Row="6">
+                <Button Content="复制图例"
+                        Click="BtnCopyLegend_Click" Margin="0,0,0,8" Padding="8,4"/>
+                <TextBlock x:Name="TxtCopyStatus" Foreground="DimGray" TextWrapping="Wrap"/>
+            </StackPanel>
 
             <DataGrid x:Name="DgLegend" Grid.Row="5"
                       AutoGenerateColumns="False"

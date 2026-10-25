@@ -1,4 +1,5 @@
 using System.Text;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Data;
 using SemiconductorCsvAnalyzer.Models;
@@ -68,7 +69,11 @@ public partial class ValuesWindow : Window
               .AppendLine();
         }
 
-        Clipboard.SetText(sb.ToString());
-        TxtCount.Text = $"共 {_values.Count} 行 | 已复制到剪贴板";
+        try
+        {
+            Clipboard.SetText(sb.ToString());
+            TxtCount.Text = $"共 {_values.Count} 行 | 已复制到剪贴板";
+        }
+        catch (COMException) { TxtCount.Text = $"共 {_values.Count} 行 | 剪贴板正忙，请重试"; }
     }
 }

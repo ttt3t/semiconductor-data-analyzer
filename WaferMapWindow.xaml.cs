@@ -309,7 +309,7 @@ public partial class WaferMapWindow : Window
     {
         if (HeatMode.IsChecked == true && _heatmapScale != null)
         {
-            Clipboard.SetText("热力图色标\n" + HeatRangeText());
+            CopyLegendText("热力图色标\n" + HeatRangeText());
             return;
         }
         if (_legend.Count == 0)
@@ -328,7 +328,13 @@ public partial class WaferMapWindow : Window
               .AppendLine();
         }
 
-        Clipboard.SetText(sb.ToString());
+        CopyLegendText(sb.ToString());
+    }
+
+    private void CopyLegendText(string text)
+    {
+        try { Clipboard.SetText(text); TxtCopyStatus.Text = "已复制"; }
+        catch (System.Runtime.InteropServices.COMException) { TxtCopyStatus.Text = "剪贴板正忙，请重试"; }
     }
 
     public static Brush ColorForCategory(string category)
