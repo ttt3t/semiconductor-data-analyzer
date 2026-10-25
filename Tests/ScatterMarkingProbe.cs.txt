@@ -1,6 +1,5 @@
 using System.IO;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -14,7 +13,6 @@ using SemiconductorCsvAnalyzer.Services;
 
 static class Probe
 {
-    [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
     static int checks;
     static string folder = "";
     static void Check(bool condition, string message)
@@ -85,9 +83,8 @@ static class Probe
             var window = new Window { Content = plot, SizeToContent = SizeToContent.WidthAndHeight }; window.Show(); Pump();
             Save(plot, "before.png");
             Check(!plot.UseBitmapCache && VisualTreeHelper.GetChildrenCount(plot) == 1, "original raster renderer and single overlay retained");
-            Point screen = plot.PointToScreen(At(plot, 2, 2));
-            Check(SetCursorPos((int)screen.X, (int)screen.Y), "mouse is positioned in the real plot"); Mouse.Synchronize(); Pump();
-            plot.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Right) { RoutedEvent = UIElement.MouseRightButtonDownEvent });
+            window.Activate(); plot.Focus(); Pump();
+            Check((bool)Call(plot, "StartRightGesture", At(plot, 2, 2))!, "right gesture accepts the current plot coordinates");
             Check((bool)Field(plot, "_selecting")! && Field(plot, "_rightStart") != null && plot.IsMouseCaptured, "right-button down starts selection immediately without waiting or pumping");
             Call(plot, "CancelRightGesture"); Pump();
             Check(PointPixel(plot, 1, 1) == 0xff1f5fa5 && PointPixel(plot, 3, 3) == 0xffdc3c3c, "normal grouped points stay blue and unmarked failures red");

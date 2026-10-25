@@ -368,15 +368,19 @@ public class ScatterPlotControl : CachedPlotControl
 
     private void OnMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
+        if (StartRightGesture(e.GetPosition(this))) e.Handled = true;
+    }
+
+    private bool StartRightGesture(Point start)
+    {
         CancelRightGesture();
         _dragStart = null;
-        var start = e.GetPosition(this);
-        if (!IsInPlot(start)) return;
+        if (!IsInPlot(start)) return false;
         Focus();
         _rightStart = _rightPosition = start;
         if (CaptureMouse()) BeginBoxSelection();
         else CancelRightGesture();
-        e.Handled = true;
+        return true;
     }
 
     private void BeginBoxSelection()
