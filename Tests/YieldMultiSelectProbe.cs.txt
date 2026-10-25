@@ -49,8 +49,9 @@ static class Probe
             var window = new ProductManagementWindow(store); window.Show(); ((TabControl)window.FindName("MainTabs")).SelectedIndex = 1; Pump();
             var grid = (DataGrid)window.FindName("DgYields");
             Check(grid.SelectionMode == DataGridSelectionMode.Extended, "yield details allow Ctrl/Shift multi-row selection");
-            var coldRows = grid.Items.OfType<ManagedYieldRow>().Where(r => r.StageId == "cold").ToArray();
-            var hotRow = grid.Items.OfType<ManagedYieldRow>().Single(r => r.StageId == "hot");
+            var coldRows = grid.Items.OfType<ManagedYieldRow>().Where(r => r.StageId == "cold" && r.SourceFileIds.Count > 0).ToArray();
+            var hotRow = grid.Items.OfType<ManagedYieldRow>().Single(r => r.StageId == "hot" && r.SourceFileIds.Count > 0);
+            Check(coldRows.Length == 2, "fixture exposes two populated cold rows independently of missing-temperature rows");
             grid.SelectedItems.Clear(); foreach (var row in coldRows.Reverse()) grid.SelectedItems.Add(row);
             var first = Row(grid, coldRows[0]); RightClick(first); Pump();
             Check(grid.SelectedItems.Count == 2, "right-click on a selected row preserves the entire selection");
