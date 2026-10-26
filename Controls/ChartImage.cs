@@ -40,8 +40,9 @@ public static class ChartImage
             dc.DrawRectangle(Brushes.White, null, bounds);
             // Rendering a child visual directly includes its DockPanel layout offset and
             // crops the bottom. Sample its local coordinates, without touching live layout.
-            var brush = new VisualBrush(chart) { ViewboxUnits = BrushMappingMode.Absolute, Viewbox = bounds,
-                ViewportUnits = BrushMappingMode.Absolute, Viewport = bounds, Stretch = Stretch.Fill };
+            // Relative viewbox follows the visual's own bounds, including its layout offset.
+            // An absolute (0,0) viewbox would still include the parent's header space.
+            var brush = new VisualBrush(chart) { Stretch = Stretch.Fill };
             dc.DrawRectangle(brush, null, bounds);
         }
         bitmap.Render(drawing);
@@ -61,6 +62,7 @@ public static class ChartImage
 
     public static void Copy(FrameworkElement chart)
     {
+        chart.UpdateLayout();
         var bitmap = Capture(chart, SizeOf(chart));
         using var png = Png(bitmap);
         var data = new DataObject();
