@@ -26,6 +26,9 @@ public partial class ExportDataWindow : Window
     public double? OutlierSigma { get; private set; }
     public int HistogramMode => ReportHistogramMode.SelectedIndex;
     public event Action<int>? HistogramModeChanged;
+    public ScatterOrder ScatterOrder => (ScatterOrder)ReportScatterMode.SelectedIndex;
+    public bool ScatterUseLimitRange => ReportScatterLimit.IsChecked == true;
+    public event Action<ScatterOrder>? ScatterModeChanged;
     public bool CombineSites => ReportCombineSites.IsChecked == true;
     public bool CombineWafers => ReportCombineWafers.IsChecked == true;
     public bool ShowBinNumbers => ReportBinNumbers.IsChecked == true;
@@ -34,7 +37,8 @@ public partial class ExportDataWindow : Window
     public RetestMode Mode => KeepFirst.IsChecked == true ? RetestMode.First : KeepLast.IsChecked == true ? RetestMode.Last
         : KeepRetests.IsChecked == true ? RetestMode.OnlyRetests : RetestMode.All;
     public ExportDataWindow(IEnumerable<string> wafers, double defaultOutlierSigma = 6,
-        bool report = false, int histogramMode = 0, bool combineSites = false, int focusedCount = 0, bool combineWafers = true)
+        bool report = false, int histogramMode = 0, bool combineSites = false, int focusedCount = 0, bool combineWafers = true,
+        ScatterOrder scatterOrder = ScatterOrder.SerialNumber, bool scatterUseLimitRange = false)
     {
         InitializeComponent();
         TxtOutlierSigma.Text = (double.IsFinite(defaultOutlierSigma) && defaultOutlierSigma > 0
@@ -45,22 +49,29 @@ public partial class ExportDataWindow : Window
             Title = "导出 XLSX 报告";
             Width = 870; MinWidth = 810;
             Height = 740; MinHeight = 700;
-            DockPanel.SetDock(ExportOptions, Dock.Right);
-            ExportOptions.Width = 410; ExportOptions.Margin = new Thickness(14, 0, 0, 0);
+            DockPanel.SetDock(OptionsScroll, Dock.Right);
+            OptionsScroll.Width = 430; OptionsScroll.Margin = new Thickness(14, 0, 0, 0);
             ReportSettings.Visibility = Visibility.Visible;
             ReportHistogramMode.SelectedIndex = Math.Clamp(histogramMode, 0, 2);
+            ReportScatterMode.SelectedIndex = Math.Clamp((int)scatterOrder, 0, 2);
+            ReportScatterLimit.IsChecked = scatterUseLimitRange;
             ReportCombineSites.IsChecked = combineSites;
             ReportCombineWafers.IsChecked = combineWafers;
             ReportFocusInfo.Text = $"已关注 {focusedCount} 个测项";
         }
         _wafers = wafers.Select(w => new WaferChoice(w)).ToList();
         WaferList.ItemsSource = new ListCollectionView(_wafers);
-        Closed += (_, _) => { WaferList.ItemsSource = null; _wafers.Clear(); HistogramModeChanged = null; };
+        Closed += (_, _) => { WaferList.ItemsSource = null; _wafers.Clear(); HistogramModeChanged = null; ScatterModeChanged = null; };
     }
     private void ReportHistogramMode_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (ReportHistogramMode?.SelectedIndex is >= 0 and <= 2)
             HistogramModeChanged?.Invoke(ReportHistogramMode.SelectedIndex);
+    }
+    private void ReportScatterMode_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (ReportScatterMode?.SelectedIndex is >= 0 and <= 2)
+            ScatterModeChanged?.Invoke((ScatterOrder)ReportScatterMode.SelectedIndex);
     }
     private void SelectAll_Click(object sender, RoutedEventArgs e) { foreach (var w in _wafers) w.IsSelected = true; TxtError.Text = ""; }
     private void SelectNone_Click(object sender, RoutedEventArgs e) { foreach (var w in _wafers) w.IsSelected = false; }

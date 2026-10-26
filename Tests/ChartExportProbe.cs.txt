@@ -1,0 +1,135 @@
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+using ClosedXML.Excel;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Controls;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    [DllImport("user32.dll", SetLastError = true)] static extern bool OpenClipboard(nint window);
+    [DllImport("user32.dll")] static extern bool CloseClipboard();
+    static int checks;
+    static void Check(bool ok, string message) { if (!ok) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
+    static object? Field(object target, string name) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target);
+    static void Set(object target, string name, object value) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, value);
+    static object? Call(object target, string name, params object[] args) => target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(target, args);
+    static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame); }
+    static void Wait(Task task) { var watch = Stopwatch.StartNew(); while (!task.IsCompleted) { if (watch.Elapsed.TotalSeconds > 60) throw new TimeoutException(); Pump(); Thread.Sleep(2); } task.GetAwaiter().GetResult(); Pump(); }
+    static BitmapSource Png(Stream stream) { stream.Position = 0; return BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0]; }
+    static byte[] Pixels(BitmapSource bitmap) { var b = new FormatConvertedBitmap(bitmap, PixelFormats.Bgra32, null, 0); byte[] result = new byte[b.PixelWidth * b.PixelHeight * 4]; b.CopyPixels(result, b.PixelWidth * 4, 0); return result; }
+    static bool Same(BitmapSource a, BitmapSource b) => a.PixelWidth == b.PixelWidth && a.PixelHeight == b.PixelHeight && Pixels(a).SequenceEqual(Pixels(b));
+    static void Copy(MainWindow main, string method) => Call(main, method, main, new RoutedEventArgs());
+    static string Status(MainWindow main) => ((TextBlock)main.FindName("TxtStatus")).Text;
+
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            if (args.Length == 3 && args[0] == "--hold-clipboard")
+            {
+                using var childReady = EventWaitHandle.OpenExisting(args[1]); using var childRelease = EventWaitHandle.OpenExisting(args[2]);
+                bool opened = false;
+                for (int i = 0; i < 100 && !(opened = OpenClipboard(0)); i++) Thread.Sleep(20);
+                if (!opened) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+                try { childReady.Set(); if (!childRelease.WaitOne(TimeSpan.FromSeconds(60))) throw new TimeoutException(); }
+                finally { CloseClipboard(); }
+                return 0;
+            }
+            string folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            var app = new App(); app.InitializeComponent(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            var failures = new List<Exception>(); app.DispatcherUnhandledException += (_, e) => { failures.Add(e.Exception); e.Handled = true; };
+            typeof(AppSettings).GetField("_userDirectory", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, folder);
+            var main = new MainWindow(new LayoutSettings(Path.Combine(folder, "layout.json")), new RecentFilesService(Path.Combine(folder, "recent.json")), new UiPreferencesService(Path.Combine(folder, "ui.json")));
+            main.Show(); Pump();
+            var histogram = (HistogramControl)main.FindName("Histogram"); var scatter = (ScatterPlotControl)main.FindName("ScatterPlot");
+            Check(((Button)main.FindName("BtnCopyHistogram")).IsVisible && ((Button)main.FindName("BtnCopyScatter")).IsVisible, "both chart headers expose copy buttons");
+            var items = new List<TestItemData> { new() { Id = "a", Name = "A", DisplayName = "A", Unit = "V", LowLimit = 1, HighLimit = 3 }, new() { Id = "b", Name = "B", DisplayName = "B", Unit = "V", LowLimit = 1, HighLimit = 3 } };
+            var records = Enumerable.Range(0, 6).Select(i => new CsvRecord { Id = "r" + i, SerialNumber = (6 - i).ToString(), WaferId = i % 2 == 0 ? "W2" : "W1", Site = i % 3 == 0 ? "2" : "1", X = i, Y = 0, HBin = "1", SBin = "1", Measurements = new() { ["a"] = (i + 1).ToString(), ["b"] = (i + 2).ToString() } }).ToList();
+            var data = DatasetService.Build(items, records); using var lease = new DatasetLease(records); var config = new AnalyzerConfig();
+            var detail = DetailCalculator.Calculate(new(items[0], null, 0, config.BinCount, config.IncludeOutOfLimitData, config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma), default);
+            histogram.Apply(detail.Bins, 1, 3, detail.Mean, detail.Sigma, config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, "V");
+            scatter.SetSeries(ScatterSeries.BuildSorted(items[0].Values, 1, 3, ScatterOrder.SerialNumber, trackChips: true), 1, 3, "V"); Pump();
+            Point At(double x, double y) => new((double)Call(scatter, "MapX", x)!, (double)Call(scatter, "MapY", y)!);
+            var p = At(3, 4); Set(scatter, "_rightStart", new Point(p.X - 4, p.Y - 4)); Set(scatter, "_rightPosition", new Point(p.X + 4, p.Y + 4)); Call(scatter, "BeginBoxSelection"); Call(scatter, "CompleteRightGesture", new Point(p.X + 4, p.Y + 4)); Pump();
+            Check(scatter.ChipMarkCount == 1, "fixture marks one acquisition before copying");
+            Call(scatter, "ZoomAt", At(3, 4), 120); Pump();
+            var pixelBuffer = Field(scatter, "_pixelBuffer"); double scale = (double)Field(scatter, "_scaleX")!;
+            var sizes = new[] { (FrameworkElement)histogram, scatter };
+            var methods = new[] { "CopyHistogram_Click", "CopyScatter_Click" };
+            for (int i = 0; i < 2; i++)
+            {
+                Copy(main, methods[i]);
+                Check(Status(main).Contains("已复制") && Clipboard.ContainsData("PNG") && Clipboard.ContainsImage(), "clipboard contains persistent PNG and compatible bitmap: " + i);
+                using var png = (MemoryStream)Clipboard.GetData("PNG"); var bytes = png.ToArray();
+                Check(bytes.Take(8).SequenceEqual(new byte[] {137,80,78,71,13,10,26,10}), "clipboard payload is a real PNG file: " + i);
+                var copied = Png(png); var size = ChartImage.SizeOf(sizes[i]);
+                Check(copied.PixelWidth == size.PixelWidth && copied.PixelHeight == size.PixelHeight && Same(copied, ChartImage.Capture(sizes[i], size)), "copied pixels and dimensions match the live chart including current viewport and marks: " + i);
+                File.WriteAllBytes(Path.Combine(folder, i == 0 ? "copied-histogram.png" : "copied-scatter.png"), bytes);
+            }
+            using (var image = ChartImage.Png(ChartImage.Capture((FrameworkElement)main.Content, ChartImage.SizeOf((FrameworkElement)main.Content)))) File.WriteAllBytes(Path.Combine(folder, "copy-buttons.png"), image.ToArray());
+            Check(scatter.ChipMarkCount == 1 && (double)Field(scatter, "_scaleX")! == scale && ReferenceEquals(pixelBuffer, Field(scatter, "_pixelBuffer")), "copy preserves marking, zoom and the existing raster buffer");
+            main.Width = 1100; main.Height = 780; Pump(); main.UpdateLayout(); Pump();
+            Copy(main, "CopyHistogram_Click"); using (var png = (MemoryStream)Clipboard.GetData("PNG")) Check(Png(png).PixelWidth == ChartImage.SizeOf(histogram).PixelWidth, "copy follows resized chart dimensions");
+            var visibleSize = ChartImage.SizeOf(histogram); Call(main, "SetPlotView", "Scatter"); main.UpdateLayout(); Pump();
+            var hiddenSize = (ChartImageSize)Call(main, "ReportChartSize", histogram, Field(main, "_histogramImageSize")!)!;
+            Check(hiddenSize.Width == visibleSize.Width && hiddenSize.Height == visibleSize.Height, "hidden chart retains its last displayed report dimensions");
+            Call(main, "SetPlotView", "Both"); main.UpdateLayout(); Pump();
+            string token = Guid.NewGuid().ToString("N"); string readyName = "Local\\Chart-ready-" + token, releaseName = "Local\\Chart-release-" + token;
+            using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, readyName); using var release = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName);
+            var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false };
+            if (string.Equals(Path.GetFileNameWithoutExtension(Environment.ProcessPath), "dotnet", StringComparison.OrdinalIgnoreCase)) start.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
+            start.ArgumentList.Add("--hold-clipboard"); start.ArgumentList.Add(readyName); start.ArgumentList.Add(releaseName);
+            using (var holder = Process.Start(start)!)
+            {
+                try { Check(ready.WaitOne(TimeSpan.FromSeconds(15)), "independent process holds real Windows clipboard"); foreach (string method in methods) { Copy(main, method); Check(Status(main).Contains("剪贴板正忙，请重试") && main.IsVisible, "busy clipboard is handled safely: " + method); } }
+                finally { release.Set(); if (!holder.WaitForExit(10000)) { holder.Kill(); holder.WaitForExit(); } }
+                Check(holder.ExitCode == 0, "clipboard holder exits normally");
+            }
+            Copy(main, "CopyScatter_Click"); Check(Status(main).Contains("已复制"), "PNG copy succeeds after releasing clipboard");
+            var options = new ExportDataWindow(data.Wafers, report: true, scatterOrder: ScatterOrder.Wafer, scatterUseLimitRange: true) { Owner = main };
+            options.Show(); Pump(); Check(options.ScatterOrder == ScatterOrder.Wafer && options.ScatterUseLimitRange, "report dialog initializes scatter mode and range from caller");
+            options.ScatterModeChanged += order => ((ListBox)main.FindName("ScatterSortMode")).SelectedIndex = (int)order;
+            ((ListBox)options.FindName("ReportScatterMode")).SelectedIndex = 1;
+            Check(options.ScatterOrder == ScatterOrder.Site && (ScatterOrder)Field(main, "_scatterOrder")! == ScatterOrder.Site, "report scatter choice synchronizes with the main window");
+            var scroll = (ScrollViewer)options.FindName("OptionsScroll"); scroll.ScrollToEnd(); Pump(); Check(scroll.ScrollableHeight > 0 && scroll.VerticalOffset > 0, "expanded export settings remain accessible in a scrollable panel"); using (var image = ChartImage.Png(ChartImage.Capture((FrameworkElement)options.Content, ChartImage.SizeOf((FrameworkElement)options.Content)))) File.WriteAllBytes(Path.Combine(folder, "report-options.png"), image.ToArray()); options.Close();
+            var histSize = new ChartImageSize(673, 217, 144, 144); var scatterSize = new ChartImageSize(831, 563, 144, 144);
+            var modePixels = new List<byte[]>();
+            foreach (var order in Enum.GetValues<ScatterOrder>())
+            {
+                string path = Path.Combine(folder, "report-" + order + ".xlsx");
+                Wait(XlsxReportService.SaveAsync(path, data, config, new(data.Wafers.ToArray(), RetestMode.All, null, 0, true, new[] { "a", "b" }, ScatterOrder: order, HistogramSize: histSize, ScatterSize: scatterSize, ScatterUseLimitRange: true), "chart-size-test"));
+                using var workbook = new XLWorkbook(path); var sheet = workbook.Worksheet("关注测项"); var pictures = sheet.Pictures.ToArray();
+                Check(workbook.Worksheets.Count == 4 && pictures.Length == 4, "report preserves four sheets and both images per focused test: " + order);
+                for (int i = 0; i < pictures.Length; i++)
+                {
+                    var expected = i % 2 == 0 ? histSize : scatterSize; var picture = pictures[i]; var image = Png(picture.ImageStream);
+                    Check(picture.Width == (int)expected.Width && picture.Height == (int)expected.Height && image.PixelWidth == expected.PixelWidth && image.PixelHeight == expected.PixelHeight && Math.Abs(image.DpiX - expected.DpiX) < .1, "Excel display size and 150 percent DPI PNG retain separate chart dimensions: " + order + "/" + i);
+                    if (i > 0) { var previous = pictures[i - 1]; double gap = (picture.TopLeftCell.Address.RowNumber - previous.TopLeftCell.Address.RowNumber) * 24; Check(gap >= previous.Height, "variable-height chart does not overlap following content: " + order + "/" + i); }
+                }
+                var expectedPlot = new ScatterPlotControl { Width = scatterSize.Width, Height = scatterSize.Height, UseLimitRange = true };
+                expectedPlot.SetSeries(ScatterSeries.BuildSorted(items[0].Values, 1, 3, order, waferOrder: data.Wafers), 1, 3, "V");
+                expectedPlot.Measure(new Size(scatterSize.Width, scatterSize.Height)); expectedPlot.Arrange(new Rect(0,0,scatterSize.Width,scatterSize.Height));
+                var reportImage = Png(pictures[1].ImageStream);
+                Check(Same(reportImage, ChartImage.Capture(expectedPlot, scatterSize)), "embedded scatter actually renders the chosen grouping and Zoom limit: " + order);
+                modePixels.Add(Pixels(reportImage));
+            }
+            Check(!modePixels[0].SequenceEqual(modePixels[1]) && !modePixels[1].SequenceEqual(modePixels[2]), "SN, Site and Wafer reports contain different chart renderings");
+            string allPath = Path.Combine(folder, "report-zoom-all.xlsx"); Wait(XlsxReportService.SaveAsync(allPath, data, config, new(data.Wafers.ToArray(), RetestMode.All, null, 0, true, new[] { "a" }, HistogramSize: new(600, 240), ScatterSize: new(600, 240)), "zoom-all"));
+            using (var book = new XLWorkbook(allPath)) { var image = Png(book.Worksheet("关注测项").Pictures.Last().ImageStream); Check(image.PixelWidth == 600 && image.PixelHeight == 240, "100 percent DPI and Zoom all export are supported"); }
+            bool invalid = false; try { new ChartImageSize(double.NaN, 400).Validate(); } catch (ArgumentOutOfRangeException) { invalid = true; } Check(invalid, "invalid image dimensions fail safely");
+            main.Close(); Pump(); Check(failures.Count == 0, "copy, resize, export and close cause no dispatcher exceptions"); app.Shutdown();
+            Console.WriteLine($"ALL {checks} CHART EXPORT CHECKS PASSED"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

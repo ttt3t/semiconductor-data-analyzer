@@ -2,7 +2,6 @@ using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using ClosedXML.Excel;
 using SemiconductorCsvAnalyzer.Controls;
@@ -13,7 +12,8 @@ namespace SemiconductorCsvAnalyzer.Services;
 public sealed record XlsxReportOptions(IReadOnlyCollection<string> Wafers, RetestMode RetestMode,
     double? OutlierSigma, int HistogramMode, bool CombineSites, IReadOnlyCollection<string> FocusedItemIds,
     bool ShowBinNumbers = false, bool ShowSiteBorders = false, bool CombineWafers = true,
-    ScatterOrder ScatterOrder = ScatterOrder.SerialNumber);
+    ScatterOrder ScatterOrder = ScatterOrder.SerialNumber,
+    ChartImageSize? HistogramSize = null, ChartImageSize? ScatterSize = null, bool ScatterUseLimitRange = false);
 
 public static class XlsxReportService
 {
@@ -62,6 +62,16 @@ public static class XlsxReportService
             throw new InvalidOperationException("报告绘图需要 STA 线程，请调用 SaveAsync。");
         if (data.Records.Count == 0) throw new InvalidDataException("没有可导出的测试记录。");
         if (options.HistogramMode is < 0 or > 2) throw new ArgumentOutOfRangeException(nameof(options.HistogramMode));
+        if (!Enum.IsDefined(options.ScatterOrder)) throw new ArgumentOutOfRangeException(nameof(options.ScatterOrder));
+        var histogramSize = options.HistogramSize ?? new ChartImageSize(1440, 400);
+        var scatterSize = options.ScatterSize ?? new ChartImageSize(1440, 400);
+        histogramSize.Validate(); scatterSize.Validate();
+        // Default worksheet rows are 18 pt = 24 logical pixels. Reserve the full image height plus a gap.
+        int histogramRows = (int)Math.Ceiling(histogramSize.Height / 24) + 1;
+        int scatterRows = (int)Math.Ceiling(scatterSize.Height / 24) + 1;
+        int focusRows = 3 + histogramRows + scatterRows + 2;
+        if (7L + options.FocusedItemIds.Distinct().Count() * (long)focusRows > 1_048_576)
+            throw new InvalidDataException("关注图表高度超过 Excel 工作表上限，请减少关注测项或缩小图表。");
         if (options.OutlierSigma is double n && (!double.IsFinite(n) || n <= 0))
             throw new ArgumentOutOfRangeException(nameof(options.OutlierSigma));
         var records = IntegratedCsvService.SelectRecords(data, options.Wafers, options.RetestMode);
@@ -90,7 +100,8 @@ public static class XlsxReportService
                 var hbins = Sheet(workbook, "HBIN Map", "HBIN 分布与统计", sourceName, BinContext(options));
                 var favorites = Sheet(workbook, "关注测项", "关注测试项", sourceName,
                     Context(options) + "；关注图表合并 Site 和 Wafer；直方图：" + HistogramName(options.HistogramMode) +
-                    "；散点排序：" + (options.ScatterOrder == ScatterOrder.Site ? "Site → SN" : options.ScatterOrder == ScatterOrder.Wafer ? "晶圆 → SN" : "SN"));
+                    "；散点排序：" + (options.ScatterOrder == ScatterOrder.Site ? "Site → SN" : options.ScatterOrder == ScatterOrder.Wafer ? "晶圆 → SN" : "SN") +
+                    (options.ScatterUseLimitRange ? "；Zoom limit" : "；Zoom all"));
                 SummaryColumns(summaries); SummaryColumns(favorites);
                 WriteHeader(summaries, 7, 2, SummaryHeaders);
                 int summaryRow = 8, focusRow = 7;
@@ -112,13 +123,13 @@ public static class XlsxReportService
                     var histogram = new HistogramControl();
                     histogram.Apply(detail.Bins, item.DisplayLowLimit, item.DisplayHighLimit, detail.Mean, detail.Sigma,
                         config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, item.ShownUnit);
-                    Plot(favorites, focusRow + 3, 2, histogram, "Histogram_" + i, 1440, 400);
-                    var scatter = new ScatterPlotControl();
+                    Plot(favorites, focusRow + 3, 2, histogram, "Histogram_" + i, histogramSize);
+                    var scatter = new ScatterPlotControl { UseLimitRange = options.ScatterUseLimitRange };
                     scatter.SetSeries(detail.Scatter, item.DisplayLowLimit, item.DisplayHighLimit, item.ShownUnit);
-                    Plot(favorites, focusRow + 21, 2, scatter, "Scatter_" + i, 1440, 400);
+                    Plot(favorites, focusRow + 3 + histogramRows, 2, scatter, "Scatter_" + i, scatterSize);
                     histogram.Bins = null; scatter.SetSeries(ScatterSeries.Empty, null, null, "");
-                    favorites.PageSetup.AddHorizontalPageBreak(focusRow + 39);
-                    focusRow += 41;
+                    favorites.PageSetup.AddHorizontalPageBreak(focusRow + focusRows - 2);
+                    focusRow += focusRows;
                 }
                 if (summaryRow > 8) summaries.Range(7, 2, summaryRow - 1, SummaryLastColumn).SetAutoFilter();
                 if (data.Items.Count == 0) summaries.Cell(8, 2).Value = "源文件仅包含芯片/BIN 信息，没有逐项测试结果。";
@@ -345,16 +356,17 @@ public static class XlsxReportService
     }
 
     private static void Plot(IXLWorksheet sheet, int row, int col, FrameworkElement control, string name, int width, int height)
+        => Plot(sheet, row, col, control, name, new ChartImageSize(width, height, 144, 144));
+
+    private static void Plot(IXLWorksheet sheet, int row, int col, FrameworkElement control, string name, ChartImageSize size)
     {
         if (control is CachedPlotControl cached) cached.UseBitmapCache = false;
-        control.Width = width; control.Height = height;
-        control.Measure(new Size(width, height)); control.Arrange(new Rect(0, 0, width, height)); control.UpdateLayout();
-        var bitmap = new RenderTargetBitmap(width * 3 / 2, height * 3 / 2, 144, 144, PixelFormats.Pbgra32);
-        bitmap.Render(control);
-        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
-        using var stream = new MemoryStream(); encoder.Save(stream); stream.Position = 0;
+        control.Width = size.Width; control.Height = size.Height;
+        control.Measure(new Size(size.Width, size.Height));
+        control.Arrange(new Rect(0, 0, size.Width, size.Height));
+        using var stream = ChartImage.Png(ChartImage.Capture(control, size));
         var picture = sheet.AddPicture(stream);
         picture.Name = name;
-        picture.MoveTo(sheet.Cell(row, col)).WithSize(width, height);
+        picture.MoveTo(sheet.Cell(row, col)).WithSize((int)Math.Ceiling(size.Width), (int)Math.Ceiling(size.Height));
     }
 }

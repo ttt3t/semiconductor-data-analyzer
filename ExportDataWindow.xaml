@@ -4,6 +4,7 @@
         Title="导出数据" Width="570" Height="740" MinWidth="490" MinHeight="650"
         WindowStartupLocation="CenterOwner">
     <DockPanel Margin="20">
+        <ScrollViewer x:Name="OptionsScroll" DockPanel.Dock="Bottom" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <StackPanel x:Name="ExportOptions" DockPanel.Dock="Bottom" Margin="0,12,0,0">
             <GroupBox x:Name="DataFormatSettings" Header="导出类型" Margin="0,0,0,10">
                 <CheckBox x:Name="ChkFailChips" Content="Fail / 复测良品芯片（XLSX，两个工作表）" Margin="12"
@@ -42,6 +43,15 @@
                         <ListBoxItem Content="规格区间"/>
                         <ListBoxItem Content="中位数中心"/>
                     </ListBox>
+                    <TextBlock Text="散点图模式（同步主窗口）"/>
+                    <ListBox x:Name="ReportScatterMode" SelectedIndex="0" Margin="0,6,0,8"
+                             BorderThickness="0" Background="Transparent" SelectionChanged="ReportScatterMode_Changed">
+                        <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
+                        <ListBoxItem Content="按 SN"/><ListBoxItem Content="按 Site"/><ListBoxItem Content="按晶圆"/>
+                    </ListBox>
+                    <CheckBox x:Name="ReportScatterLimit" Content="散点图使用 Zoom limit 范围" Margin="0,0,0,8"
+                              ToolTip="不勾选时使用 Zoom all；无有效双侧限值时自动显示全部数据。"/>
+                    <TextBlock Text="图表尺寸沿用当前界面；隐藏的图表沿用最近显示尺寸。" TextWrapping="Wrap" Foreground="DimGray" Margin="0,0,0,8"/>
                     <WrapPanel>
                         <CheckBox x:Name="ReportCombineSites" Content="合并 Site" Margin="0,0,18,0"/>
                         <CheckBox x:Name="ReportCombineWafers" Content="合并 Wafer"/>
@@ -60,6 +70,7 @@
                 <Button Content="选择保存位置…" Click="BtnExport_Click" Padding="12,5" Margin="8,0,0,0" IsDefault="True"/>
             </StackPanel>
         </StackPanel>
+        </ScrollViewer>
         <GroupBox Header="1. 勾选需要导出的晶圆">
             <DockPanel Margin="10">
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Top" Margin="0,0,0,8">

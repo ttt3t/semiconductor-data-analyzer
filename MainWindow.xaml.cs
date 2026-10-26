@@ -271,7 +271,7 @@ public partial class MainWindow : Window
     private void UpdateWindowTitle()
     {
         string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
-        Title = $"CSV Analyzer · V2.0.7 | 当前数据：{_currentDataName} | 配置：{configName}";
+        Title = $"CSV Analyzer · V2.0.8 | 当前数据：{_currentDataName} | 配置：{configName}";
     }
 
     private void UpdateConfigInfo()
@@ -504,15 +504,19 @@ public partial class MainWindow : Window
         var focused = _data.Items.Where(i => i.Focus.IsFocused).Select(i => i.Id).ToArray();
         var options = new ExportDataWindow(ActiveData.Wafers, _config.OutlierSigma, report: true,
             histogramMode: _binMode, combineSites: _combineSites, focusedCount: focused.Length,
-            combineWafers: _combineWafers) { Owner = this };
+            combineWafers: _combineWafers, scatterOrder: _scatterOrder,
+            scatterUseLimitRange: ScatterPlot.UseLimitRange) { Owner = this };
         options.HistogramModeChanged += mode => CmbBinMode.SelectedIndex = mode;
+        options.ScatterModeChanged += order => ScatterSortMode.SelectedIndex = (int)order;
         if (options.ShowDialog() != true) return;
         var file = new SaveFileDialog { Filter = "Excel 报告 (*.xlsx)|*.xlsx", DefaultExt = ".xlsx", AddExtension = true,
             FileName = "测试分析报告.xlsx", Title = "导出 XLSX 报告" };
         if (file.ShowDialog(this) != true) return;
         var report = new XlsxReportOptions(options.SelectedWafers, options.Mode, options.OutlierSigma,
             options.HistogramMode, options.CombineSites, focused, options.ShowBinNumbers, options.ShowSiteBorders,
-            options.CombineWafers, _scatterOrder);
+            options.CombineWafers, options.ScatterOrder,
+            ReportChartSize(Histogram, _histogramImageSize), ReportChartSize(ScatterPlot, _scatterImageSize),
+            options.ScatterUseLimitRange);
         try
         {
             await RunBusyAsync(async () =>

@@ -19,7 +19,7 @@
         </Border>
         <DockPanel Margin="0,0,0,14">
             <Border DockPanel.Dock="Right" Background="#EFF6FF" CornerRadius="5" Padding="9,4" VerticalAlignment="Center">
-                <TextBlock Text="V2.0.7" Foreground="#2563EB" FontWeight="SemiBold"/>
+                <TextBlock Text="V2.0.8" Foreground="#2563EB" FontWeight="SemiBold"/>
             </Border>
             <TextBlock Text="CSV Analyzer" FontSize="26" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
         </DockPanel>
