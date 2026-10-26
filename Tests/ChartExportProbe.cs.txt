@@ -85,6 +85,7 @@ static class Probe
                             int offset = (py * copied.PixelWidth + px) * 4;
                             if (pixels[offset + 1] > pixels[offset + 2] + 40 && pixels[offset + 1] > pixels[offset] + 40) found = true;
                         }
+                    File.WriteAllBytes(Path.Combine(folder, "copied-scatter.png"), bytes);
                     Check(found, "copied green point lands at its actual chart coordinates without parent layout offset or cropping");
                 }
                 File.WriteAllBytes(Path.Combine(folder, i == 0 ? "copied-histogram.png" : "copied-scatter.png"), bytes);

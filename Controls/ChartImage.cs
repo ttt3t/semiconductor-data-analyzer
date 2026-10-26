@@ -33,10 +33,18 @@ public static class ChartImage
         size.Validate();
         chart.UpdateLayout();
         var bitmap = new RenderTargetBitmap(size.PixelWidth, size.PixelHeight, size.DpiX, size.DpiY, PixelFormats.Pbgra32);
-        var background = new DrawingVisual();
-        using (var dc = background.RenderOpen()) dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, size.Width, size.Height));
-        bitmap.Render(background);
-        bitmap.Render(chart);
+        var drawing = new DrawingVisual();
+        var bounds = new Rect(0, 0, size.Width, size.Height);
+        using (var dc = drawing.RenderOpen())
+        {
+            dc.DrawRectangle(Brushes.White, null, bounds);
+            // Rendering a child visual directly includes its DockPanel layout offset and
+            // crops the bottom. Sample its local coordinates, without touching live layout.
+            var brush = new VisualBrush(chart) { ViewboxUnits = BrushMappingMode.Absolute, Viewbox = bounds,
+                ViewportUnits = BrushMappingMode.Absolute, Viewport = bounds, Stretch = Stretch.Fill };
+            dc.DrawRectangle(brush, null, bounds);
+        }
+        bitmap.Render(drawing);
         bitmap.Freeze();
         return bitmap;
     }
