@@ -18,7 +18,8 @@ static class Probe
     [DllImport("user32.dll", SetLastError = true)] static extern bool OpenClipboard(nint window);
     [DllImport("user32.dll")] static extern bool CloseClipboard();
     static int checks;
-    static void Check(bool ok, string message) { if (!ok) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
+    static readonly List<string> checkFailures = new();
+    static void Check(bool ok, string message) { checks++; if (!ok) checkFailures.Add(message); Console.WriteLine((ok ? "PASS " : "FAIL ") + message); }
     static object? Field(object target, string name) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target);
     static void Set(object target, string name, object value) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, value);
     static object? Call(object target, string name, params object[] args) => target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(target, args);
@@ -115,7 +116,11 @@ static class Probe
             options.ScatterModeChanged += order => ((ListBox)main.FindName("ScatterSortMode")).SelectedIndex = (int)order;
             ((ListBox)options.FindName("ReportScatterMode")).SelectedIndex = 1;
             Check(options.ScatterOrder == ScatterOrder.Site && (ScatterOrder)Field(main, "_scatterOrder")! == ScatterOrder.Site, "report scatter choice synchronizes with the main window");
-            var scroll = (ScrollViewer)options.FindName("OptionsScroll"); scroll.ScrollToEnd(); Pump(); Check(scroll.ScrollableHeight > 0 && scroll.VerticalOffset > 0, "expanded export settings remain accessible in a scrollable panel"); using (var image = ChartImage.Png(ChartImage.Capture((FrameworkElement)options.Content, ChartImage.SizeOf((FrameworkElement)options.Content)))) File.WriteAllBytes(Path.Combine(folder, "report-options.png"), image.ToArray()); options.Close();
+            using (var image = ChartImage.Png(ChartImage.Capture((FrameworkElement)options.Content, ChartImage.SizeOf((FrameworkElement)options.Content)))) File.WriteAllBytes(Path.Combine(folder, "report-options.png"), image.ToArray());
+            // Force constrained space instead of assuming the runner's default fonts overflow.
+            options.MinHeight = 400; options.Height = 440; options.UpdateLayout(); Pump();
+            var scroll = (ScrollViewer)options.FindName("OptionsScroll"); scroll.ScrollToEnd(); Pump();
+            Check(scroll.ScrollableHeight > 0 && scroll.VerticalOffset > 0, "expanded export settings remain accessible in a scrollable panel"); options.Close();
             var histSize = new ChartImageSize(673, 217, 144, 144); var scatterSize = new ChartImageSize(831, 563, 144, 144);
             var modePixels = new List<byte[]>();
             foreach (var order in Enum.GetValues<ScatterOrder>())
@@ -142,6 +147,7 @@ static class Probe
             using (var book = new XLWorkbook(allPath)) { var image = Png(book.Worksheet("关注测项").Pictures.Last().ImageStream); Check(image.PixelWidth == 600 && image.PixelHeight == 240, "100 percent DPI and Zoom all export are supported"); }
             bool invalid = false; try { new ChartImageSize(double.NaN, 400).Validate(); } catch (ArgumentOutOfRangeException) { invalid = true; } Check(invalid, "invalid image dimensions fail safely");
             main.Close(); Pump(); Check(failures.Count == 0, "copy, resize, export and close cause no dispatcher exceptions"); app.Shutdown();
+            if (checkFailures.Count > 0) throw new Exception(string.Join(Environment.NewLine, checkFailures));
             Console.WriteLine($"ALL {checks} CHART EXPORT CHECKS PASSED"); return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
