@@ -74,6 +74,19 @@ static class Probe
                 Check(bytes.Take(8).SequenceEqual(new byte[] {137,80,78,71,13,10,26,10}), "clipboard payload is a real PNG file: " + i);
                 var copied = Png(png); var size = ChartImage.SizeOf(sizes[i]);
                 Check(copied.PixelWidth == size.PixelWidth && copied.PixelHeight == size.PixelHeight && Same(copied, ChartImage.Capture(sizes[i], size)), "copied pixels and dimensions match the live chart including current viewport and marks: " + i);
+                if (i == 1)
+                {
+                    var green = At(3, 4); var pixels = Pixels(copied);
+                    int x = (int)Math.Round(green.X * size.DpiX / 96), y = (int)Math.Round(green.Y * size.DpiY / 96);
+                    bool found = false;
+                    for (int py = Math.Max(0, y - 4); py <= Math.Min(copied.PixelHeight - 1, y + 4); py++)
+                        for (int px = Math.Max(0, x - 4); px <= Math.Min(copied.PixelWidth - 1, x + 4); px++)
+                        {
+                            int offset = (py * copied.PixelWidth + px) * 4;
+                            if (pixels[offset + 1] > pixels[offset + 2] + 40 && pixels[offset + 1] > pixels[offset] + 40) found = true;
+                        }
+                    Check(found, "copied green point lands at its actual chart coordinates without parent layout offset or cropping");
+                }
                 File.WriteAllBytes(Path.Combine(folder, i == 0 ? "copied-histogram.png" : "copied-scatter.png"), bytes);
             }
             using (var image = ChartImage.Png(ChartImage.Capture((FrameworkElement)main.Content, ChartImage.SizeOf((FrameworkElement)main.Content)))) File.WriteAllBytes(Path.Combine(folder, "copy-buttons.png"), image.ToArray());

@@ -1,5 +1,6 @@
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -13,6 +14,8 @@ using SemiconductorCsvAnalyzer.Services;
 
 static class Probe
 {
+    [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint x, uint y, uint data, nuint extra);
     static int checks;
     static string folder = "";
     static void Check(bool condition, string message)
@@ -84,9 +87,20 @@ static class Probe
             Save(plot, "before.png");
             Check(!plot.UseBitmapCache && VisualTreeHelper.GetChildrenCount(plot) == 1, "original raster renderer and single overlay retained");
             window.Activate(); plot.Focus(); Pump();
-            Check((bool)Call(plot, "StartRightGesture", At(plot, 2, 2))!, "right gesture accepts the current plot coordinates");
-            Check((bool)Field(plot, "_selecting")! && Field(plot, "_rightStart") != null && plot.IsMouseCaptured, "right-button down starts selection immediately without waiting or pumping");
-            Call(plot, "CancelRightGesture"); Pump();
+            // A real held right button prevents capture-generated MouseMove from correctly
+            // canceling this synthetic gesture as a released button in unattended Windows.
+            var screen = plot.PointToScreen(At(plot, 2, 2)); SetCursorPos((int)screen.X, (int)screen.Y);
+            mouse_event(0x0008, 0, 0, 0, 0);
+            try
+            {
+                Pump();
+                Check((bool)Call(plot, "StartRightGesture", At(plot, 2, 2))!, "right gesture accepts the current plot coordinates");
+                Console.WriteLine($"Gesture state: selecting={Field(plot, "_selecting")}, start={Field(plot, "_rightStart")}, captured={plot.IsMouseCaptured}, active={window.IsActive}, right={Mouse.RightButton}, hasPlot={Field(plot, "_hasPlot")}");
+                Check((bool)Field(plot, "_selecting")! && Field(plot, "_rightStart") != null && plot.IsMouseCaptured, "right-button down starts selection immediately without waiting or pumping");
+                Call(plot, "CancelRightGesture");
+            }
+            finally { mouse_event(0x0010, 0, 0, 0, 0); }
+            Pump();
             Check(PointPixel(plot, 1, 1) == 0xff1f5fa5 && PointPixel(plot, 3, 3) == 0xffdc3c3c, "normal grouped points stay blue and unmarked failures red");
             var a = At(plot, .8, .8); var b = At(plot, 3.2, 3.2);
             long renders = (long)Field(plot, "_renderCount")!;
