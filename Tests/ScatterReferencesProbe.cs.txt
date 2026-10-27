@@ -125,12 +125,17 @@ static class Probe
             var source = Field(main, "_data"); var summary = (TestItemSummary)grid.SelectedItem;
             var activePlot = (ScatterPlotControl)main.FindName("ScatterPlot"); var hist = (HistogramControl)main.FindName("Histogram");
             var apply = new SettingsWindow(config, c => (Task)Call(main, "ApplySettings", c)!) { Owner = main };
-            ((CheckBox)apply.FindName("ChkScatterShowLowLimit")).IsChecked = false;
-            ((CheckBox)apply.FindName("ChkScatterShowHighLimit")).IsChecked = false;
-            ((CheckBox)apply.FindName("ChkScatterShowMean")).IsChecked = true;
-            ((CheckBox)apply.FindName("ChkScatterShowThreeSigma")).IsChecked = true;
+            apply.Loaded += (_, _) => Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+            {
+                // User input occurs after the initial tab template/selection has loaded.
+                ((CheckBox)apply.FindName("ChkScatterShowLowLimit")).IsChecked = false;
+                ((CheckBox)apply.FindName("ChkScatterShowHighLimit")).IsChecked = false;
+                ((CheckBox)apply.FindName("ChkScatterShowMean")).IsChecked = true;
+                ((CheckBox)apply.FindName("ChkScatterShowThreeSigma")).IsChecked = true;
+                Call(apply, "BtnApply_Click", apply, new RoutedEventArgs());
+            }));
             var timeout = new DispatcherTimer { Interval = TimeSpan.FromSeconds(25) }; timeout.Tick += (_, _) => { timeout.Stop(); apply.Close(); };
-            Dispatcher.CurrentDispatcher.BeginInvoke(new Action(() => Call(apply, "BtnApply_Click", apply, new RoutedEventArgs()))); timeout.Start(); bool? applied = apply.ShowDialog(); timeout.Stop(); Ready(main);
+            timeout.Start(); bool? applied = apply.ShowDialog(); timeout.Stop(); Ready(main);
             Check(applied == true && ReferenceEquals(source, Field(main, "_data")), "settings apply persists scatter flags without reparsing the loaded data");
             var saved = ConfigLoader.Load(AppSettings.LastConfigCopyPath);
             Check(!saved.ScatterShowLowLimit && !saved.ScatterShowHighLimit && saved.ScatterShowMean && saved.ScatterShowThreeSigma, "scatter switches survive the saved default INI");
