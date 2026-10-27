@@ -140,7 +140,10 @@ static class Probe
                 expectedPlot.SetSeries(ScatterSeries.BuildSorted(items[0].Values, 1, 3, order, waferOrder: data.Wafers), 1, 3, "V");
                 expectedPlot.Measure(new Size(scatterSize.Width, scatterSize.Height)); expectedPlot.Arrange(new Rect(0,0,scatterSize.Width,scatterSize.Height));
                 var reportImage = Png(pictures[1].ImageStream);
-                Check(Same(reportImage, ChartImage.Capture(expectedPlot, scatterSize)), "embedded scatter actually renders the chosen grouping and Zoom limit: " + order);
+                var expectedBitmap = ChartImage.Capture(expectedPlot, scatterSize);
+                using (var png = ChartImage.Png(expectedBitmap)) File.WriteAllBytes(Path.Combine(folder, "expected-scatter-" + order + ".png"), png.ToArray());
+                using (var png = ChartImage.Png(reportImage)) File.WriteAllBytes(Path.Combine(folder, "report-scatter-" + order + ".png"), png.ToArray());
+                Check(Same(reportImage, expectedBitmap), "embedded scatter actually renders the chosen grouping and Zoom limit: " + order);
                 modePixels.Add(Pixels(reportImage));
             }
             Check(!modePixels[0].SequenceEqual(modePixels[1]) && !modePixels[1].SequenceEqual(modePixels[2]), "SN, Site and Wafer reports contain different chart renderings");
