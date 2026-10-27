@@ -55,6 +55,12 @@ public sealed class AnalyzerConfig
     public bool ShowThreeSigma { get; set; } = true;
     public bool IncludeOutOfLimitData { get; set; } = true;
 
+    // Scatter references are independent of the histogram. Legacy files keep their existing appearance.
+    public bool ScatterShowLowLimit { get; set; } = true;
+    public bool ScatterShowHighLimit { get; set; } = true;
+    public bool ScatterShowMean { get; set; }
+    public bool ScatterShowThreeSigma { get; set; }
+
     // Display
     public int DecimalPlaces { get; set; } = 6;
     public int MaxTableRows { get; set; } = 10000;

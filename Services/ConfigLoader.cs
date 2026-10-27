@@ -123,6 +123,10 @@ public static class ConfigLoader
             case "SHOWHIGHLIMIT": c.ShowHighLimit = ParseBool(value); break;
             case "SHOWMEAN": c.ShowMean = ParseBool(value); break;
             case "SHOWTHREESIGMA": c.ShowThreeSigma = ParseBool(value); break;
+            case "SCATTERSHOWLOWLIMIT": c.ScatterShowLowLimit = ParseBool(value); break;
+            case "SCATTERSHOWHIGHLIMIT": c.ScatterShowHighLimit = ParseBool(value); break;
+            case "SCATTERSHOWMEAN": c.ScatterShowMean = ParseBool(value); break;
+            case "SCATTERSHOWTHREESIGMA": c.ScatterShowThreeSigma = ParseBool(value); break;
             case "INCLUDEOUTOFLIMITDATA": c.IncludeOutOfLimitData = ParseBool(value); break;
 
             case "DECIMALPLACES": c.DecimalPlaces = ParseNonNegativeInt(key, value); break;
@@ -276,6 +280,12 @@ public static class ConfigLoader
             ShowMean={c.ShowMean}
             ShowThreeSigma={c.ShowThreeSigma}
             IncludeOutOfLimitData={c.IncludeOutOfLimitData}
+
+            [Scatter]
+            ScatterShowLowLimit={c.ScatterShowLowLimit}
+            ScatterShowHighLimit={c.ScatterShowHighLimit}
+            ScatterShowMean={c.ScatterShowMean}
+            ScatterShowThreeSigma={c.ScatterShowThreeSigma}
 
             [Display]
             DecimalPlaces={c.DecimalPlaces}

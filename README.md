@@ -1,6 +1,6 @@
 # Semiconductor Data Analyzer
 
-**CSV Analyzer V2.0.8 · GYF**
+**CSV Analyzer V2.0.9 · GYF**
 
 A Windows desktop application for semiconductor CSV / STDF test-data analysis, built with .NET 8 and WPF.
 
@@ -21,6 +21,10 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 - 产品目录和统计摘要存于本机用户目录 `SemiconductorCsvAnalyzer/ProductLibrary`；保存时保留上一份备份，不保存完整测量矩阵。
 
 只启动独立分析器可使用 `SemiconductorCsvAnalyzer.exe --analyzer`。详细口径见 [使用手册](Docs/UserGuide.md)。
+
+## V2.0.9 更新
+
+“设置 → 统计与绘图”新增独立的散点图 LSL、USL、均值、±3σ 参考线开关，并保存到 INI。复制 PNG 和 XLSX 报告沿用这些开关；参考线使用当前范围的有效测量值统计，不改变超限判断、缩放或芯片标记。旧配置默认显示 LSL / USL，均值与 ±3σ 默认关闭。
 
 ## V2.0.8 更新
 
@@ -53,7 +57,7 @@ Fail 芯片 XLSX 拆为“Fail 芯片”和“复测良品芯片”两个工作�
 - **BIN Map**：图例单项勾选或点击列头全选 / 取消；未勾选以灰色显示，统计不变。仅 SBIN 1 / HBIN 1 使用绿色，其他 BIN 的 50 色配色避开灰色和绿色系，报告颜色一致。
 - **热力图与 Run**：自定义蓝 / 绿 / 红色标，多晶圆统一范围；Run 可按序列号或晶圆 + X/Y 定位。
 
-当前源码版本为 V2.0.8；已发布的运行包版本以 Releases 页面为准。详细操作和统计口径见 [使用手册](Docs/UserGuide.md)。
+当前源码版本为 V2.0.9；已发布的运行包版本以 Releases 页面为准。详细操作和统计口径见 [使用手册](Docs/UserGuide.md)。
 ## 功能
 
 - **CSV / STDF 导入**：首次即可多选文件，并选择晶圆关系、测项匹配及限值来源；设置中可按按钮手动识别 CSV 格式、预览 / 编辑并另存 INI，支持多行名称、重复表头和引号内换行，旧配置兼容。读取 STDF V4 的 PTR、MPR、FTR，支持大小端及 `.std.gz` / `.stdf.gz`；93k 模式优先使用 TSR 的完整测项名称。详见 [CSV 格式说明](Docs/CSVFormats.md)。
@@ -72,7 +76,7 @@ Fail 芯片 XLSX 拆为“Fail 芯片”和“复测良品芯片”两个工作�
 
 ## 下载运行
 
-从 [GitHub Releases](https://github.com/ttt3t/semiconductor-data-analyzer/releases/latest) 下载 Windows x64 单 EXE。本次 V2.0.8 发布为依赖框架版本，需要先安装 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0)，再双击 EXE；不需要安装 Excel。旧版本的包类型请查看对应发布说明。CSV 导入前请在“设置”加载或调整布局配置；STDF 可直接打开。
+从 [GitHub Releases](https://github.com/ttt3t/semiconductor-data-analyzer/releases/latest) 下载 Windows x64 单 EXE。本次 V2.0.9 发布为依赖框架版本，需要先安装 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0)，再双击 EXE；不需要安装 Excel。旧版本的包类型请查看对应发布说明。CSV 导入前请在“设置”加载或调整布局配置；STDF 可直接打开。
 
 ## 开发与运行
 
@@ -138,7 +142,7 @@ STDF 支持范围以手册为准；不支持的版本或部分记录会明确报
 第三方依赖保留各自许可证；本项目的 MIT 许可证不替代其许可证。
 
 
-V2.0.8 的依赖框架单 EXE 可用以下命令生成（Linux 交叉编译时另加 `-p:EnableWindowsTargeting=true`）：
+V2.0.9 的依赖框架单 EXE 可用以下命令生成（Linux 交叉编译时另加 `-p:EnableWindowsTargeting=true`）：
 
 ```powershell
 dotnet publish SemiconductorCsvAnalyzer.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=false -p:DebugType=None -p:DebugSymbols=false -o artifacts/win-x64-framework-dependent

@@ -560,12 +560,33 @@ static class Probe
             Reject<OperationCanceledException>(() => FailChipXlsxService.Save(P("compact-cancelled.xlsx"), data, config, new[] { "W" }, RetestMode.All), "two-sheet export respects cancellation");
         Check(!File.Exists(P("compact-cancelled.xlsx")) && !Directory.GetFiles(folder, "compact-*.tmp").Any(), "cancelled/failed exports leave no partial output or temp files");
     }
+    static void ScatterReferenceConfig()
+    {
+        var baseline = new AnalyzerConfig();
+        string legacy = System.Text.RegularExpressions.Regex.Replace(ConfigLoader.Serialize(baseline), @"(?ms)^\[Scatter\]\r?\n.*?(?=^\[)", "");
+        var old = ConfigLoader.Parse(legacy);
+        Check(old.ScatterShowLowLimit && old.ScatterShowHighLimit && !old.ScatterShowMean && !old.ScatterShowThreeSigma,
+            "legacy INI retains limit lines and defaults new scatter references off");
+        for (int mask = 0; mask < 16; mask++)
+        {
+            var config = new AnalyzerConfig { ScatterShowLowLimit = (mask & 1) != 0, ScatterShowHighLimit = (mask & 2) != 0,
+                ScatterShowMean = (mask & 4) != 0, ScatterShowThreeSigma = (mask & 8) != 0,
+                ShowLowLimit = (mask & 1) == 0, ShowHighLimit = (mask & 2) == 0, ShowMean = (mask & 4) == 0, ShowThreeSigma = (mask & 8) == 0 };
+            var read = ConfigLoader.Parse(ConfigLoader.Serialize(config));
+            Check((read.ScatterShowLowLimit, read.ScatterShowHighLimit, read.ScatterShowMean, read.ScatterShowThreeSigma) ==
+                (config.ScatterShowLowLimit, config.ScatterShowHighLimit, config.ScatterShowMean, config.ScatterShowThreeSigma) &&
+                read.ShowLowLimit != read.ScatterShowLowLimit && read.ShowHighLimit != read.ScatterShowHighLimit &&
+                read.ShowMean != read.ScatterShowMean && read.ShowThreeSigma != read.ScatterShowThreeSigma &&
+                !ConfigLoader.CsvDefinitionChanged(baseline, read), "independent histogram/scatter switches round trip without CSV reload: " + mask);
+        }
+        Reject<InvalidDataException>(() => ConfigLoader.Parse(legacy + "\n[Scatter]\nScatterShowMean=maybe"), "invalid scatter boolean is rejected");
+    }
     static int Main(string[] args)
     {
         try
         {
             folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
-            Views(); SelectionMatrix(); Projections(); ProductYield(); YieldRowSources(); ScatterMarking(); CompactFailExport();
+            ScatterReferenceConfig(); Views(); SelectionMatrix(); Projections(); ProductYield(); YieldRowSources(); ScatterMarking(); CompactFailExport();
             Console.WriteLine($"ALL {checks} CORE MEMORY CHECKS PASSED"); return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }

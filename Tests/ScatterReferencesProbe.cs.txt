@@ -1,0 +1,165 @@
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+using ClosedXML.Excel;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Controls;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static readonly List<string> failures = new();
+    static string folder = "";
+    static string P(string name) => Path.Combine(folder, name);
+    static void Check(bool ok, string message) { checks++; if (!ok) failures.Add(message); Console.WriteLine((ok ? "PASS " : "FAIL ") + message); }
+    static object? Field(object target, string name) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target);
+    static void Set(object target, string name, object value) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(target, value);
+    static object? Call(object target, string name, params object[] args) => target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(target, args);
+    static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame); }
+    static void Wait(Task task) { var watch = Stopwatch.StartNew(); while (!task.IsCompleted) { if (watch.Elapsed.TotalSeconds > 60) throw new TimeoutException(); Pump(); Thread.Sleep(2); } task.GetAwaiter().GetResult(); Pump(); }
+    static void Ready(MainWindow main) { var watch = Stopwatch.StartNew(); do { Pump(); Thread.Sleep(5); if (watch.Elapsed.TotalSeconds > 20) throw new TimeoutException("detail calculation"); } while ((bool)Field(main, "_detailPending")!); main.UpdateLayout(); Pump(); }
+    static void Save(FrameworkElement chart, string name) { using var image = ChartImage.Png(ChartImage.Capture(chart, ChartImage.SizeOf(chart))); File.WriteAllBytes(P(name), image.ToArray()); }
+    static BitmapSource Decode(Stream stream) { stream.Position = 0; return BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0]; }
+    static byte[] Pixels(BitmapSource image) { var b = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0); var bytes = new byte[b.PixelWidth * b.PixelHeight * 4]; b.CopyPixels(bytes, b.PixelWidth * 4, 0); return bytes; }
+    static bool Same(BitmapSource a, BitmapSource b) => a.PixelWidth == b.PixelWidth && a.PixelHeight == b.PixelHeight && Pixels(a).SequenceEqual(Pixels(b));
+    static int ColoredRow(ScatterPlotControl plot, BitmapSource image, double value, int color)
+    {
+        var bytes = Pixels(image); var size = ChartImage.SizeOf(plot);
+        int y = (int)Math.Round((double)Call(plot, "MapY", value)! * size.DpiY / 96);
+        int start = (int)(((double)Field(plot, "_left")! + 8) * size.DpiX / 96);
+        int end = Math.Min(image.PixelWidth, (int)(((double)Field(plot, "_left")! + (double)Field(plot, "_plotW")! - 8) * size.DpiX / 96));
+        int count = 0;
+        for (int x = start; x < end; x++)
+        {
+            bool found = false;
+            for (int row = Math.Max(0, y - 2); row <= Math.Min(image.PixelHeight - 1, y + 2); row++)
+            {
+                int p = (row * image.PixelWidth + x) * 4; int b = bytes[p], g = bytes[p + 1], r = bytes[p + 2];
+                found |= color switch { 0 => r > 180 && g < 100 && b < 100, 1 => g > 60 && g > r + 30 && g > b + 30,
+                    _ => r > 200 && g > 80 && g < 220 && b < 80 };
+            }
+            if (found) count++;
+        }
+        return count;
+    }
+    static void Configure(ScatterPlotControl plot, StatisticsResult stats, double factor, AnalyzerConfig config) =>
+        plot.SetReferenceLines(stats.Mean * factor, stats.StdDev * factor, config.ScatterShowLowLimit, config.ScatterShowHighLimit, config.ScatterShowMean, config.ScatterShowThreeSigma);
+
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            var app = new App(); app.InitializeComponent(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            var unhandled = new List<Exception>(); app.DispatcherUnhandledException += (_, e) => { unhandled.Add(e.Exception); Console.Error.WriteLine(e.Exception); e.Handled = true; };
+            typeof(AppSettings).GetField("_userDirectory", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, P("user"));
+            var config = new AnalyzerConfig(); string text = ConfigLoader.Serialize(config) + "\n; preserve user comment\n";
+            var settings = new SettingsWindow(config, _ => Task.CompletedTask); settings.Show(); Pump();
+            var tabs = (TabControl)settings.FindName("SettingsTabs"); tabs.SelectedItem = settings.FindName("IniTab");
+            ((TextBox)settings.FindName("TxtConfig")).Text = text; tabs.SelectedItem = settings.FindName("AnalysisTab"); Pump();
+            Check(((CheckBox)settings.FindName("ChkScatterShowLowLimit")).IsChecked == true && ((CheckBox)settings.FindName("ChkScatterShowMean")).IsChecked == false, "settings initializes legacy-compatible scatter defaults");
+            ((CheckBox)settings.FindName("ChkScatterShowLowLimit")).IsChecked = false;
+            ((CheckBox)settings.FindName("ChkScatterShowHighLimit")).IsChecked = false;
+            ((CheckBox)settings.FindName("ChkScatterShowMean")).IsChecked = true;
+            ((CheckBox)settings.FindName("ChkScatterShowThreeSigma")).IsChecked = true;
+            var edited = (AnalyzerConfig)Call(settings, "ReadConfig")!;
+            Check(!edited.ScatterShowLowLimit && !edited.ScatterShowHighLimit && edited.ScatterShowMean && edited.ScatterShowThreeSigma && edited.ShowLowLimit && edited.ShowHighLimit && edited.ShowMean && edited.ShowThreeSigma, "four independent scatter switches edit INI without changing histogram switches");
+            Check(((TextBox)settings.FindName("TxtConfig")).Text.Contains("; preserve user comment") && ((TextBox)settings.FindName("TxtConfig")).Text.Contains("[Scatter]"), "scatter edits preserve INI comments and use their own section");
+            tabs.SelectedItem = settings.FindName("IniTab");
+            ((TextBox)settings.FindName("TxtConfig")).Text = ConfigLoader.Serialize(config);
+            tabs.SelectedItem = settings.FindName("AnalysisTab");
+            Check(((CheckBox)settings.FindName("ChkScatterShowLowLimit")).IsChecked == true && ((CheckBox)settings.FindName("ChkScatterShowMean")).IsChecked == false, "INI edits reload scatter controls instead of being overwritten by stale checkboxes");
+            Save((FrameworkElement)settings.Content, "scatter-settings.png"); settings.Close();
+
+            var item = new TestItemData { Id = "a", Name = "Reference", DisplayName = "Reference", Unit = "V", LowLimit = 20, HighLimit = 80 };
+            var records = Enumerable.Range(0, 25).Select(i => new CsvRecord { Id = "r" + i, SerialNumber = (i + 1).ToString(), WaferId = "W", Site = i % 2 == 0 ? "1" : "2", X = i, Y = 0, HBin = "1", SBin = "1", Measurements = new() { ["a"] = (i == 0 ? 0 : i == 24 ? 100 : 50).ToString() } }).ToList();
+            var data = DatasetService.Build(new() { item }, records); using var lease = new DatasetLease(records);
+            var plot = new ScatterPlotControl { Width = 900, Height = 460 };
+            var series = ScatterSeries.BuildSorted(item.Values, 20, 80, ScatterOrder.SerialNumber, trackChips: true);
+            plot.SetSeries(series, 20, 80, "V"); var window = new Window { Content = plot, SizeToContent = SizeToContent.WidthAndHeight }; window.Show(); Pump();
+            for (int mask = 0; mask < 16; mask++)
+            {
+                plot.SetReferenceLines(50, 10, (mask & 1) != 0, (mask & 2) != 0, (mask & 4) != 0, (mask & 8) != 0); Pump();
+                var image = ChartImage.Capture(plot, ChartImage.SizeOf(plot));
+                var counts = new[] { ColoredRow(plot, image, 20, 0), ColoredRow(plot, image, 80, 0), ColoredRow(plot, image, 50, 1), ColoredRow(plot, image, 20, 2), ColoredRow(plot, image, 80, 2) };
+                // The sigma lines share LSL/USL positions here; orange is drawn on top as dashed strokes.
+                bool lsl = (mask & 1) != 0 ? counts[0] > 100 : counts[0] < 10;
+                bool usl = (mask & 2) != 0 ? counts[1] > 100 : counts[1] < 10;
+                bool mean = (mask & 4) != 0 ? counts[2] > 500 : counts[2] < 10;
+                bool sigma = (mask & 8) != 0 ? counts[3] > 100 && counts[4] > 100 : counts[3] < 10 && counts[4] < 10;
+                Check(lsl && usl && mean && sigma, "rendered line colors follow all four switch combinations: " + mask + " / " + string.Join(",", counts));
+            }
+            Save(plot, "all-lines.png");
+            plot.SetReferenceLines(50, 10, false, false, false, false); Pump(); Save(plot, "no-lines.png");
+            Call(plot, "ZoomAt", new Point(400, 200), 120); Pump(); double zoom = (double)Field(plot, "_scaleX")!;
+            var buffer = Field(plot, "_pixelBuffer");
+            plot.SetReferenceLines(50, 10, true, true, true, true); Pump();
+            Check((double)Field(plot, "_scaleX")! == zoom && ReferenceEquals(buffer, Field(plot, "_pixelBuffer")) && ReferenceEquals(series, Field(plot, "_series")) && series.Points.Count(p => p.OutOfSpec) == 2, "reference switches preserve zoom, raster buffers, series and failure classification");
+            long renders = (long)Field(plot, "_renderCount")!; plot.SetReferenceLines(50, 10, true, true, true, true); Pump();
+            Check((long)Field(plot, "_renderCount")! == renders, "unchanged references do not request another render");
+            plot.UseLimitRange = true; plot.SetReferenceLines(50, 10, false, false, false, false); Pump();
+            Check((double)Field(plot, "_dataMinY")! == -10 && (double)Field(plot, "_dataMaxY")! == 110, "hidden limit lines still retain Zoom limit calculations");
+            plot.SetReferenceLines(double.NaN, double.PositiveInfinity, true, true, true, true); Pump(); Check(plot.Mean == null && plot.Sigma == null, "nonfinite reference statistics are safely omitted");
+            plot.SetReferenceLines(50, -1, true, true, true, true); Check(plot.Sigma == null, "invalid negative sigma is omitted");
+            plot.SetSeries(ScatterSeries.Empty, null, null, ""); Check(plot.Mean == null && plot.Sigma == null, "changing series discards old reference statistics");
+            var scaledStats = StatisticsService.Calculate(item.Values, 20, 80);
+            plot.SetSeries(series.Scale(1000), 20000, 80000, "mV");
+            Configure(plot, scaledStats, 1000, new AnalyzerConfig { ScatterShowMean = true, ScatterShowThreeSigma = true }); Pump();
+            Check(plot.Mean == scaledStats.Mean * 1000 && plot.Sigma == scaledStats.StdDev * 1000 && plot.Lsl == 20000 && plot.Usl == 80000, "all reference values follow the same display-unit factor as the points");
+            plot.SetReferenceLines(50, 0, false, false, true, true); Pump(); Check(plot.Sigma == 0, "zero sigma is a valid coincident reference range");
+            window.Close();
+
+            // Use the real settings apply pipeline and verify the selected Site's full statistics.
+            var main = new MainWindow(new LayoutSettings(P("layout.json")), new RecentFilesService(P("recent.json")), new UiPreferencesService(P("ui.json")));
+            main.Show(); string csv = P("references.csv"); IntegratedCsvService.Save(csv, data, data.Wafers.ToArray(), RetestMode.All);
+            Wait(main.OpenManagedFilesAsync(new[] { new CsvImportSource(csv) }, config, RetestMode.All)); Ready(main);
+            var grid = (DataGrid)main.FindName("DgTestItems"); grid.SelectedIndex = 0; Ready(main);
+            var source = Field(main, "_data"); var summary = (TestItemSummary)grid.SelectedItem;
+            var activePlot = (ScatterPlotControl)main.FindName("ScatterPlot"); var hist = (HistogramControl)main.FindName("Histogram");
+            var apply = new SettingsWindow(config, c => (Task)Call(main, "ApplySettings", c)!) { Owner = main };
+            ((CheckBox)apply.FindName("ChkScatterShowLowLimit")).IsChecked = false;
+            ((CheckBox)apply.FindName("ChkScatterShowHighLimit")).IsChecked = false;
+            ((CheckBox)apply.FindName("ChkScatterShowMean")).IsChecked = true;
+            ((CheckBox)apply.FindName("ChkScatterShowThreeSigma")).IsChecked = true;
+            var timeout = new DispatcherTimer { Interval = TimeSpan.FromSeconds(25) }; timeout.Tick += (_, _) => { timeout.Stop(); apply.Close(); };
+            Dispatcher.CurrentDispatcher.BeginInvoke(new Action(() => Call(apply, "BtnApply_Click", apply, new RoutedEventArgs()))); timeout.Start(); bool? applied = apply.ShowDialog(); timeout.Stop(); Ready(main);
+            Check(applied == true && ReferenceEquals(source, Field(main, "_data")), "settings apply persists scatter flags without reparsing the loaded data");
+            var saved = ConfigLoader.Load(AppSettings.LastConfigCopyPath);
+            Check(!saved.ScatterShowLowLimit && !saved.ScatterShowHighLimit && saved.ScatterShowMean && saved.ScatterShowThreeSigma, "scatter switches survive the saved default INI");
+            summary = (TestItemSummary)grid.SelectedItem;
+            Check(!activePlot.ShowLsl && !activePlot.ShowUsl && activePlot.ShowMean && activePlot.ShowThreeSigma && hist.ShowLsl && hist.ShowUsl && hist.ShowMean && hist.ShowThreeSigma, "main chart applies independent scatter and histogram switches");
+            Check(Math.Abs(activePlot.Mean!.Value - summary.Mean) < 1e-10 && Math.Abs(activePlot.Sigma!.Value - summary.Sigma) < 1e-10, "scatter references match selected Site and wafer statistics");
+            activePlot.UseLimitRange = false; Save(activePlot, "main-selected-site.png");
+            // The main window's clipboard command must carry the configured lines unchanged.
+            Call(main, "CopyScatter_Click", main, new RoutedEventArgs()); using (var png = (MemoryStream)Clipboard.GetData("PNG")) Check(Same(Decode(png), ChartImage.Capture(activePlot, ChartImage.SizeOf(activePlot))), "copied PNG includes the configured references");
+            main.Close();
+
+            var stats = StatisticsService.Calculate(item.Values, 20, 80); var size = new ChartImageSize(900, 460);
+            // Export uses all selected Sites, with the same unit-scaled statistics and flags.
+            foreach (bool enabled in new[] { false, true })
+            {
+                var reportConfig = new AnalyzerConfig { ScatterShowLowLimit = false, ScatterShowHighLimit = false, ScatterShowMean = enabled, ScatterShowThreeSigma = enabled };
+                string report = P(enabled ? "references-on.xlsx" : "references-off.xlsx");
+                Wait(XlsxReportService.SaveAsync(report, data, reportConfig, new(data.Wafers.ToArray(), RetestMode.All, null, 0, true, new[] { "a" }, HistogramSize: size, ScatterSize: size), "reference-test"));
+                using var book = new XLWorkbook(report); var pictures = book.Worksheet("关注测项").Pictures.ToArray();
+                var expected = new ScatterPlotControl { Width = size.Width, Height = size.Height }; expected.SetSeries(series, 20, 80, "V"); Configure(expected, stats, 1, reportConfig);
+                expected.Measure(new Size(size.Width, size.Height)); expected.Arrange(new Rect(0,0,size.Width,size.Height));
+                var image = Decode(pictures[1].ImageStream);
+                Check(Same(image, ChartImage.Capture(expected, size)), "XLSX scatter uses the configured lines and combined-Site statistics: " + enabled);
+                using var exported = File.Create(P(enabled ? "report-lines-on.png" : "report-lines-off.png")); pictures[1].ImageStream.Position = 0; pictures[1].ImageStream.CopyTo(exported);
+            }
+            Check(unhandled.Count == 0, "reference settings, rendering, clipboard, export and close have no dispatcher exceptions");
+            app.Shutdown(); if (failures.Count > 0) throw new Exception(string.Join(Environment.NewLine, failures));
+            Console.WriteLine($"ALL {checks} SCATTER REFERENCE CHECKS PASSED"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

@@ -106,7 +106,16 @@
                             <CheckBox x:Name="ChkShowMean" Content="均值" Margin="0,0,28,14" Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>
                             <CheckBox x:Name="ChkShowThreeSigma" Content="±3σ 参考线" Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>
                         </WrapPanel>
-                        
+                        <Border Height="1" Background="{StaticResource BorderSoft}" Margin="0,22"/>
+                        <TextBlock Text="散点图" Style="{StaticResource SectionTitle}"/>
+                        <WrapPanel>
+                            <CheckBox x:Name="ChkScatterShowLowLimit" Content="下限 LSL" Margin="0,0,28,14" Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>
+                            <CheckBox x:Name="ChkScatterShowHighLimit" Content="上限 USL" Margin="0,0,28,14" Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>
+                            <CheckBox x:Name="ChkScatterShowMean" Content="均值" Margin="0,0,28,14" Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>
+                            <CheckBox x:Name="ChkScatterShowThreeSigma" Content="±3σ 参考线" Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>
+                        </WrapPanel>
+                        <TextBlock Text="独立控制散点图参考线，并应用于复制图片和 XLSX 报告。均值和 σ 使用当前晶圆、Site 及复测范围内的全部有效测量值。"
+                                   TextWrapping="Wrap" Foreground="{StaticResource TextSecondary}"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

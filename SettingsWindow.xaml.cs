@@ -151,7 +151,11 @@ public partial class SettingsWindow : Window
             ["ShowLowLimit"] = (ChkShowLowLimit.IsChecked == true).ToString(),
             ["ShowHighLimit"] = (ChkShowHighLimit.IsChecked == true).ToString(),
             ["ShowMean"] = (ChkShowMean.IsChecked == true).ToString(),
-            ["ShowThreeSigma"] = (ChkShowThreeSigma.IsChecked == true).ToString()
+            ["ShowThreeSigma"] = (ChkShowThreeSigma.IsChecked == true).ToString(),
+            ["ScatterShowLowLimit"] = (ChkScatterShowLowLimit.IsChecked == true).ToString(),
+            ["ScatterShowHighLimit"] = (ChkScatterShowHighLimit.IsChecked == true).ToString(),
+            ["ScatterShowMean"] = (ChkScatterShowMean.IsChecked == true).ToString(),
+            ["ScatterShowThreeSigma"] = (ChkScatterShowThreeSigma.IsChecked == true).ToString()
         };
         string edited = UpdateAnalysisFields(TxtConfig.Text, fields);
         config = ConfigLoader.Parse(edited, _fileName);
@@ -179,9 +183,11 @@ public partial class SettingsWindow : Window
             if (fields.TryGetValue(key, out string? value)) { lines[i] = key + "=" + value; found.Add(key); }
         }
         string result = string.Join(Environment.NewLine, lines);
-        var histogram = fields.Where(p => !found.Contains(p.Key) && p.Key is not "RemoveOutliers" and not "OutlierSigma").ToList();
+        var scatter = fields.Where(p => !found.Contains(p.Key) && p.Key.StartsWith("Scatter", StringComparison.Ordinal)).ToList();
+        var histogram = fields.Where(p => !found.Contains(p.Key) && !p.Key.StartsWith("Scatter", StringComparison.Ordinal) && p.Key is not "RemoveOutliers" and not "OutlierSigma").ToList();
         var robust = fields.Where(p => !found.Contains(p.Key) && p.Key is "RemoveOutliers" or "OutlierSigma").ToList();
         if (histogram.Count > 0) result += Environment.NewLine + "[Histogram]" + Environment.NewLine + string.Join(Environment.NewLine, histogram.Select(p => p.Key + "=" + p.Value));
+        if (scatter.Count > 0) result += Environment.NewLine + "[Scatter]" + Environment.NewLine + string.Join(Environment.NewLine, scatter.Select(p => p.Key + "=" + p.Value));
         if (robust.Count > 0) result += Environment.NewLine + "[Robust]" + Environment.NewLine + string.Join(Environment.NewLine, robust.Select(p => p.Key + "=" + p.Value));
         return result;
     }
@@ -200,6 +206,10 @@ public partial class SettingsWindow : Window
             ChkShowHighLimit.IsChecked = config.ShowHighLimit;
             ChkShowMean.IsChecked = config.ShowMean;
             ChkShowThreeSigma.IsChecked = config.ShowThreeSigma;
+            ChkScatterShowLowLimit.IsChecked = config.ScatterShowLowLimit;
+            ChkScatterShowHighLimit.IsChecked = config.ScatterShowHighLimit;
+            ChkScatterShowMean.IsChecked = config.ScatterShowMean;
+            ChkScatterShowThreeSigma.IsChecked = config.ScatterShowThreeSigma;
             _analysisDirty = false;
         }
         finally { _syncing = wasSyncing; }

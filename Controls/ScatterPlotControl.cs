@@ -34,6 +34,25 @@ public class ScatterPlotControl : CachedPlotControl
     public double? Lsl { get => (double?)GetValue(LslProperty); set => SetValue(LslProperty, value); }
     public double? Usl { get => (double?)GetValue(UslProperty); set => SetValue(UslProperty, value); }
 
+    public double? Mean { get; private set; }
+    public double? Sigma { get; private set; }
+    public bool ShowLsl { get; private set; } = true;
+    public bool ShowUsl { get; private set; } = true;
+    public bool ShowMean { get; private set; }
+    public bool ShowThreeSigma { get; private set; }
+
+    // Reuse the detail worker's statistics. Drawing reference lines never scans the samples.
+    public void SetReferenceLines(double? mean, double? sigma, bool showLsl, bool showUsl, bool showMean, bool showThreeSigma)
+    {
+        if (mean is double m && !double.IsFinite(m)) mean = null;
+        if (sigma is double s && (!double.IsFinite(s) || s < 0)) sigma = null;
+        if ((Mean, Sigma, ShowLsl, ShowUsl, ShowMean, ShowThreeSigma) ==
+            (mean, sigma, showLsl, showUsl, showMean, showThreeSigma)) return;
+        (Mean, Sigma, ShowLsl, ShowUsl, ShowMean, ShowThreeSigma) =
+            (mean, sigma, showLsl, showUsl, showMean, showThreeSigma);
+        InvalidatePlot();
+    }
+
     public static readonly DependencyProperty IsYAxisLockedProperty =
         DependencyProperty.Register(nameof(IsYAxisLocked), typeof(bool), typeof(ScatterPlotControl),
             new FrameworkPropertyMetadata(false, (d, _) => ((ScatterPlotControl)d).UpdateYAxisLock()));
@@ -112,6 +131,8 @@ public class ScatterPlotControl : CachedPlotControl
     private static readonly Pen GroupPen = Freeze(new Pen(Freeze(new SolidColorBrush(Color.FromRgb(218, 223, 230))), 1));
     private static readonly Pen CrossPen = Freeze(new Pen(CrossBrush, 1));
     private static readonly Pen RedPen = Freeze(new Pen(Brushes.Red, 1.5));
+    private static readonly Pen MeanPen = Freeze(new Pen(Brushes.DarkGreen, 2));
+    private static readonly Pen SigmaPen = Freeze(new Pen(Brushes.Orange, 1.5) { DashStyle = DashStyles.Dash });
     private static readonly Pen LabelBorder = Freeze(new Pen(Freeze(new SolidColorBrush(Color.FromRgb(180, 180, 180))), 0.8));
     private static readonly Typeface UiTypeface = new("Segoe UI");
     private const double PointRadius = 1.35;
@@ -530,6 +551,7 @@ public class ScatterPlotControl : CachedPlotControl
 
     private void ApplySeries(ScatterSeries series)
     {
+        Mean = Sigma = null;
         _markRevision++;
         CancelRightGesture();
         _series = series;
@@ -605,15 +627,19 @@ public class ScatterPlotControl : CachedPlotControl
         }
         if (grouped) DrawGroupBoundaries(dc, visMinX, visMaxX);
 
-        if (Lsl.HasValue)
+        void ReferenceLine(bool show, double? value, Pen pen)
         {
-            double y = MapY(Lsl.Value);
-            dc.DrawLine(RedPen, new Point(_left, y), new Point(_left + _plotW, y));
+            if (!show || value is not double v || !double.IsFinite(v) || v < visMinY || v > visMaxY) return;
+            double y = MapY(v);
+            dc.DrawLine(pen, new Point(_left, y), new Point(_left + _plotW, y));
         }
-        if (Usl.HasValue)
+        ReferenceLine(ShowLsl, Lsl, RedPen);
+        ReferenceLine(ShowUsl, Usl, RedPen);
+        ReferenceLine(ShowMean, Mean, MeanPen);
+        if (ShowThreeSigma && Mean.HasValue && Sigma.HasValue)
         {
-            double y = MapY(Usl.Value);
-            dc.DrawLine(RedPen, new Point(_left, y), new Point(_left + _plotW, y));
+            ReferenceLine(true, Mean - 3 * Sigma, SigmaPen);
+            ReferenceLine(true, Mean + 3 * Sigma, SigmaPen);
         }
 
         RenderPointsBitmap(dc, plotRect, visMinX, visMaxX, grouped);

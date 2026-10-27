@@ -126,6 +126,9 @@ public static class XlsxReportService
                     Plot(favorites, focusRow + 3, 2, histogram, "Histogram_" + i, histogramSize);
                     var scatter = new ScatterPlotControl { UseLimitRange = options.ScatterUseLimitRange };
                     scatter.SetSeries(detail.Scatter, item.DisplayLowLimit, item.DisplayHighLimit, item.ShownUnit);
+                    scatter.SetReferenceLines(detail.Statistics.Count > 0 ? detail.Statistics.Mean * item.DisplayFactor : null,
+                        detail.Statistics.Count > 0 ? detail.Statistics.StdDev * item.DisplayFactor : null,
+                        config.ScatterShowLowLimit, config.ScatterShowHighLimit, config.ScatterShowMean, config.ScatterShowThreeSigma);
                     Plot(favorites, focusRow + 3 + histogramRows, 2, scatter, "Scatter_" + i, scatterSize);
                     histogram.Bins = null; scatter.SetSeries(ScatterSeries.Empty, null, null, "");
                     favorites.PageSetup.AddHorizontalPageBreak(focusRow + focusRows - 2);
