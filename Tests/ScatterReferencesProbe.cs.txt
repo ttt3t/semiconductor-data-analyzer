@@ -155,7 +155,7 @@ static class Probe
                 string report = P(enabled ? "references-on.xlsx" : "references-off.xlsx");
                 Wait(XlsxReportService.SaveAsync(report, data, reportConfig, new(data.Wafers.ToArray(), RetestMode.All, null, 0, true, new[] { "a" }, HistogramSize: size, ScatterSize: size), "reference-test"));
                 using var book = new XLWorkbook(report); var pictures = book.Worksheet("关注测项").Pictures.ToArray();
-                var expected = new ScatterPlotControl { Width = size.Width, Height = size.Height }; expected.SetSeries(series, 20, 80, "V"); Configure(expected, stats, 1, reportConfig);
+                var expected = new ScatterPlotControl { Title = item.DisplayName, Width = size.Width, Height = size.Height }; expected.SetSeries(series, 20, 80, "V"); Configure(expected, stats, 1, reportConfig);
                 expected.Measure(new Size(size.Width, size.Height)); expected.Arrange(new Rect(0,0,size.Width,size.Height));
                 var image = Decode(pictures[1].ImageStream);
                 Check(Same(image, ChartImage.Capture(expected, size)), "XLSX scatter uses the configured lines and combined-Site statistics: " + enabled);

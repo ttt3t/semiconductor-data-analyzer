@@ -58,8 +58,9 @@ static class Probe
             var records = Enumerable.Range(0, 6).Select(i => new CsvRecord { Id = "r" + i, SerialNumber = (6 - i).ToString(), WaferId = i % 2 == 0 ? "W2" : "W1", Site = i % 3 == 0 ? "2" : "1", X = i, Y = 0, HBin = "1", SBin = "1", Measurements = new() { ["a"] = (i + 1).ToString(), ["b"] = (i + 2).ToString() } }).ToList();
             var data = DatasetService.Build(items, records); using var lease = new DatasetLease(records); var config = new AnalyzerConfig();
             var detail = DetailCalculator.Calculate(new(items[0], null, 0, config.BinCount, config.IncludeOutOfLimitData, config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma), default);
-            histogram.Apply(detail.Bins, 1, 3, detail.Mean, detail.Sigma, config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, "V");
-            scatter.SetSeries(ScatterSeries.BuildSorted(items[0].Values, 1, 3, ScatterOrder.SerialNumber, trackChips: true), 1, 3, "V"); Pump();
+            histogram.Apply(detail.Bins, 1, 3, detail.Mean, detail.Sigma, config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, "");
+            scatter.SetSeries(ScatterSeries.BuildSorted(items[0].Values, 1, 3, ScatterOrder.SerialNumber, trackChips: true), 1, 3, "");
+            histogram.Title = scatter.Title = "125_D_SNR_B_Min_1"; Pump();
             Point At(double x, double y) => new((double)Call(scatter, "MapX", x)!, (double)Call(scatter, "MapY", y)!);
             var p = At(3, 4); Set(scatter, "_rightStart", new Point(p.X - 4, p.Y - 4)); Set(scatter, "_rightPosition", new Point(p.X + 4, p.Y + 4)); Call(scatter, "BeginBoxSelection"); Call(scatter, "CompleteRightGesture", new Point(p.X + 4, p.Y + 4)); Pump();
             Check(scatter.ChipMarkCount == 1, "fixture marks one acquisition before copying");
@@ -135,7 +136,7 @@ static class Probe
                     Check(picture.Width == (int)expected.Width && picture.Height == (int)expected.Height && image.PixelWidth == expected.PixelWidth && image.PixelHeight == expected.PixelHeight && Math.Abs(image.DpiX - expected.DpiX) < .1, "Excel display size and 150 percent DPI PNG retain separate chart dimensions: " + order + "/" + i);
                     if (i > 0) { var previous = pictures[i - 1]; double gap = (picture.TopLeftCell.Address.RowNumber - previous.TopLeftCell.Address.RowNumber) * 24; Check(gap >= previous.Height, "variable-height chart does not overlap following content: " + order + "/" + i); }
                 }
-                var expectedPlot = new ScatterPlotControl { Width = scatterSize.Width, Height = scatterSize.Height, UseLimitRange = true };
+                var expectedPlot = new ScatterPlotControl { Title = items[0].DisplayName, Width = scatterSize.Width, Height = scatterSize.Height, UseLimitRange = true };
                 expectedPlot.SetSeries(ScatterSeries.BuildSorted(items[0].Values, 1, 3, order, waferOrder: data.Wafers), 1, 3, "V");
                 expectedPlot.Measure(new Size(scatterSize.Width, scatterSize.Height)); expectedPlot.Arrange(new Rect(0,0,scatterSize.Width,scatterSize.Height));
                 var reportImage = Png(pictures[1].ImageStream);
@@ -146,6 +147,21 @@ static class Probe
             string allPath = Path.Combine(folder, "report-zoom-all.xlsx"); Wait(XlsxReportService.SaveAsync(allPath, data, config, new(data.Wafers.ToArray(), RetestMode.All, null, 0, true, new[] { "a" }, HistogramSize: new(600, 240), ScatterSize: new(600, 240)), "zoom-all"));
             using (var book = new XLWorkbook(allPath)) { var image = Png(book.Worksheet("关注测项").Pictures.Last().ImageStream); Check(image.PixelWidth == 600 && image.PixelHeight == 240, "100 percent DPI and Zoom all export are supported"); }
             bool invalid = false; try { new ChartImageSize(double.NaN, 400).Validate(); } catch (ArgumentOutOfRangeException) { invalid = true; } Check(invalid, "invalid image dimensions fail safely");
+            // Export visual evidence at narrow, normal and large sizes using the same live controls.
+            foreach (var previewSize in new[] { new Size(360, 200), new Size(900, 350), new Size(1600, 600) })
+            {
+                string previewTitle = previewSize.Width < 400 ? "125_D_SNR_B_Min_1_with_a_long_test_name_for_small_plots" : "125_D_SNR_B_Min_1";
+                var previewHistogram = new HistogramControl { Width = previewSize.Width, Height = previewSize.Height, Title = previewTitle };
+                previewHistogram.Apply(detail.Bins, 1, 3, detail.Mean, detail.Sigma, true, true, true, true, "");
+                var previewScatter = new ScatterPlotControl { Width = previewSize.Width, Height = previewSize.Height, Title = previewTitle };
+                previewScatter.SetSeries(detail.Scatter, 1, 3, "");
+                foreach (var preview in new CachedPlotControl[] { previewHistogram, previewScatter })
+                {
+                    preview.Measure(previewSize); preview.Arrange(new Rect(new Point(), previewSize));
+                    using var image = ChartImage.Png(ChartImage.Capture(preview, ChartImage.SizeOf(preview)));
+                    File.WriteAllBytes(Path.Combine(folder, $"style-{preview.GetType().Name}-{previewSize.Width}.png"), image.ToArray());
+                }
+            }
             main.Close(); Pump(); Check(failures.Count == 0, "copy, resize, export and close cause no dispatcher exceptions"); app.Shutdown();
             if (checkFailures.Count > 0) throw new Exception(string.Join(Environment.NewLine, checkFailures));
             Console.WriteLine($"ALL {checks} CHART EXPORT CHECKS PASSED"); return 0;

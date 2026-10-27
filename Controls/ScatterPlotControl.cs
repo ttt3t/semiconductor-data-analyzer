@@ -313,7 +313,8 @@ public class ScatterPlotControl : CachedPlotControl
 
     protected override Size ArrangeOverride(Size finalSize)
     {
-        const double left = ChartAxis.PlotLeft, right = ChartAxis.PlotRight, top = 32, bottom = 54;
+        const double left = ChartAxis.PlotLeft, right = ChartAxis.PlotRight, bottom = ChartAxis.PlotBottom;
+        double top = string.IsNullOrWhiteSpace(Title) ? 32 : Math.Max(32, ChartAxis.HeadingFontSize(finalSize) + 15);
         double nextW = Math.Max(0, finalSize.Width - left - right);
         double nextH = Math.Max(0, finalSize.Height - top - bottom);
         bool sizeChanged = _plotW != nextW || _plotH != nextH;
@@ -596,8 +597,15 @@ public class ScatterPlotControl : CachedPlotControl
 
         if (w >= 180 && h >= 120)
         {
-            ChartAxis.DrawTitle(dc, this, ChartAxis.ValueTitle(Unit), new Rect(8, 3, w - 16, 24));
-            ChartAxis.DrawTitle(dc, this, HorizontalAxisTitle, new Rect(Math.Max(4, (_left + w - 60) / 2), h - 22, 70, 21));
+            string valueTitle = ChartAxis.ValueTitle(Unit);
+            double captionWidth = Math.Min(140, (w - 32) / 3);
+            ChartAxis.DrawTitle(dc, this, valueTitle, new Rect(8, 3, captionWidth, 24));
+            double captionEnd = 8 + Math.Min(captionWidth, ChartAxis.Text(this, valueTitle).Width);
+            ChartAxis.DrawHeading(dc, this, Title, captionEnd + 12, w - ChartAxis.PlotRight);
+            var axisTitle = ChartAxis.Text(this, HorizontalAxisTitle);
+            ChartAxis.DrawTitle(dc, this, HorizontalAxisTitle,
+                new Rect(Math.Max(4, (_left + w - ChartAxis.PlotRight - axisTitle.Width) / 2),
+                    _top + _plotH + ChartAxis.AxisTitleGap, axisTitle.Width + 2, 17));
         }
 
         if (w < 40 || h < 40 || !_hasPlot)
@@ -665,7 +673,7 @@ public class ScatterPlotControl : CachedPlotControl
             var ft = ChartAxis.Text(this, ChartAxis.Format(tick));
             double tx = Math.Clamp(x - ft.Width / 2, 2, Math.Max(2, w - ft.Width - 2));
             if (tx < lastLabelRight + 8) continue;
-            dc.DrawText(ft, new Point(tx, _top + _plotH + 6));
+            dc.DrawText(ft, new Point(tx, _top + _plotH + ChartAxis.TickLabelGap));
             lastLabelRight = tx + ft.Width;
         }
         if (grouped) DrawGroupLabels(dc, visMinX, visMaxX);

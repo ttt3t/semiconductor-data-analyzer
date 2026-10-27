@@ -1007,6 +1007,7 @@ public partial class MainWindow : Window
             TxtUnit.Text = string.IsNullOrWhiteSpace(request.Item.ShownUnit)
                 ? $"Count={stats.Count}  InSpec%={stats.InSpecPercent:F1}"
                 : $"Unit：{request.Item.ShownUnit}    Count={stats.Count}  InSpec%={stats.InSpecPercent:F1}";
+            Histogram.Title = ScatterPlot.Title = request.Item.DisplayName;
             if (!ReferenceEquals(_displayedBins, result.Bins))
                 Histogram.Apply(result.Bins, request.Item.DisplayLowLimit, request.Item.DisplayHighLimit,
                     result.Mean, result.Sigma, request.ShowLsl, request.ShowUsl, request.ShowMean,
@@ -1052,6 +1053,8 @@ public partial class MainWindow : Window
         _detailCache = new DetailCache();
         if (TxtItemTitle != null) TxtItemTitle.Text = "选择测试项查看分布";
         if (TxtUnit != null) TxtUnit.Text = "";
+        if (Histogram != null) Histogram.Title = "";
+        if (ScatterPlot != null) ScatterPlot.Title = "";
         Histogram?.Apply(null, null, null, null, null, true, true, true, true);
         ScatterPlot?.SetSeries(ScatterSeries.Empty, null, null, "");
     }

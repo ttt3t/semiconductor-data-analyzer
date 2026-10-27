@@ -8,6 +8,11 @@ namespace SemiconductorCsvAnalyzer.Controls;
 /// <summary>One bitmap per current plot. Resize previews stretch it; viewport/data changes redraw from data.</summary>
 public abstract class CachedPlotControl : FrameworkElement
 {
+    public static readonly DependencyProperty TitleProperty = DependencyProperty.Register(nameof(Title), typeof(string),
+        typeof(CachedPlotControl), new FrameworkPropertyMetadata("", FrameworkPropertyMetadataOptions.AffectsArrange,
+            (d, _) => ((CachedPlotControl)d).InvalidatePlot()));
+    public string Title { get => (string)GetValue(TitleProperty); set => SetValue(TitleProperty, value); }
+
     private readonly DispatcherTimer _resizeTimer;
     private BitmapSource? _plotBitmap;
     private Size _bitmapSize, _previewSize;

@@ -9,6 +9,9 @@ public static class ChartAxis
     // Shared horizontal plotting bounds keep the charts aligned after splitter resizing.
     public const double PlotLeft = 52;
     public const double PlotRight = 16;
+    public const double PlotBottom = 38;
+    public const double TickLabelGap = 5;
+    public const double AxisTitleGap = 21;
     private static readonly Typeface Typeface = new("Segoe UI");
 
     public static void DrawAxes(DrawingContext dc, Pen pen, Rect plot)
@@ -58,7 +61,27 @@ public static class ChartAxis
             brush ?? Brushes.Black, VisualTreeHelper.GetDpi(owner).PixelsPerDip);
 
     public static string ValueTitle(string? unit) => string.IsNullOrWhiteSpace(unit)
-        ? "测量值（无单位）" : $"测量值（{unit.Trim()}）";
+        ? "测量值" : $"测量值（{unit.Trim()}）";
+
+    public static double HeadingFontSize(Size size) => Math.Clamp(Math.Min(size.Width / 64, size.Height / 24), 10, 18);
+
+    public static void DrawHeading(DrawingContext dc, FrameworkElement owner, string title, double left, double right)
+    {
+        if (string.IsNullOrWhiteSpace(title) || right <= left) return;
+        double center = (PlotLeft + owner.ActualWidth - PlotRight) / 2;
+        double half = Math.Min(center - left, right - center);
+        if (half <= 0) return;
+        double width = half * 2;
+        double size = HeadingFontSize(owner.RenderSize);
+        var text = Text(owner, title, size, Brushes.Gray);
+        if (text.WidthIncludingTrailingWhitespace > width)
+            text = Text(owner, title, Math.Max(9, size * width / text.WidthIncludingTrailingWhitespace), Brushes.Gray);
+        text.MaxTextWidth = width;
+        text.MaxLineCount = 1;
+        text.Trimming = TextTrimming.CharacterEllipsis;
+        text.TextAlignment = TextAlignment.Center;
+        dc.DrawText(text, new Point(center - half, 3));
+    }
 
     public static void DrawTitle(DrawingContext dc, Visual owner, string text, Rect area)
     {

@@ -119,18 +119,22 @@ public class HistogramControl : CachedPlotControl
         double w = ActualWidth, h = ActualHeight;
         dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, Math.Max(0, w), Math.Max(0, h)));
         if (w < 180 || h < 120) return;
-        ChartAxis.DrawTitle(dc, this, "频数（个）", new Rect(6, 3, 90, 20));
-        DrawLegend(dc, w);
+        // At narrow widths the heading gets its own row; otherwise all top captions share a row.
+        double headerOffset = !string.IsNullOrWhiteSpace(Title) && w < 440 ? ChartAxis.HeadingFontSize(RenderSize) + 7 : 0;
+        ChartAxis.DrawTitle(dc, this, "频数（个）", new Rect(6, 3 + headerOffset, 90, 20));
+        double legendLeft = DrawLegend(dc, w, headerOffset);
+        ChartAxis.DrawHeading(dc, this, Title, headerOffset > 0 ? ChartAxis.PlotLeft : 108,
+            headerOffset > 0 ? w - ChartAxis.PlotRight : legendLeft - 10);
         string xTitle = ChartAxis.ValueTitle(Unit);
         var title = ChartAxis.Text(this, xTitle);
         ChartAxis.DrawTitle(dc, this, xTitle, new Rect(Math.Max(4, (ChartAxis.PlotLeft + w - ChartAxis.PlotRight - title.Width) / 2),
-            h - 22, Math.Min(w - 8, title.Width + 2), 21));
+            h - ChartAxis.PlotBottom + ChartAxis.AxisTitleGap, Math.Min(w - 8, title.Width + 2), 17));
         if (Bins == null || Bins.Count == 0) return;
 
         double dataMin = Bins.Min(b => b.From), dataMax = Bins.Max(b => b.To);
         if (!double.IsFinite(dataMin) || !double.IsFinite(dataMax) || dataMax <= dataMin) return;
         int maxCount = Math.Max(1, Bins.Max(b => b.Count));
-        const double left = ChartAxis.PlotLeft, right = ChartAxis.PlotRight, bottom = 72;
+        const double left = ChartAxis.PlotLeft, right = ChartAxis.PlotRight, bottom = ChartAxis.PlotBottom;
         double plotW = w - left - right;
         if (plotW < 30) return;
         double MapX(double value) => left + (value - dataMin) / (dataMax - dataMin) * plotW;
@@ -152,11 +156,12 @@ public class HistogramControl : CachedPlotControl
         foreach (var reference in references.OrderBy(r => r.X))
         {
             double x = Math.Clamp(reference.X - reference.Text.Width / 2, left, left + plotW - reference.Text.Width);
-            var bounds = new Rect(x, 22, reference.Text.Width, reference.Text.Height);
+            double labelTop = string.IsNullOrWhiteSpace(Title) ? 22 : Math.Max(22 + headerOffset, ChartAxis.HeadingFontSize(RenderSize) + 10);
+            var bounds = new Rect(x, labelTop, reference.Text.Width, reference.Text.Height);
             while (labels.Any(label => Rect.Inflate(label.Bounds, 4, 1).IntersectsWith(bounds))) bounds.Y += 18;
             labels.Add((reference.X, reference.Text, reference.Pen, bounds));
         }
-        double top = Math.Max(40, labels.Count == 0 ? 0 : labels.Max(label => label.Bounds.Bottom) + 5);
+        double top = Math.Max(40 + headerOffset, labels.Count == 0 ? 0 : labels.Max(label => label.Bounds.Bottom) + 5);
         double plotH = h - top - bottom;
         if (plotH < 20) return;
         double MapY(double value) => top + plotH - value / maxCount * plotH;
@@ -170,9 +175,26 @@ public class HistogramControl : CachedPlotControl
             var text = ChartAxis.Text(this, ChartAxis.Format(tick));
             dc.DrawText(text, new Point(left - 7 - text.Width, y - text.Height / 2));
         }
+        // Both endpoint captions share the numeric tick row; reserve their space before placing ticks.
+        double captionWidth = Math.Max(1, (plotW - 16) / 2);
+        var lowerCaption = ChartAxis.Text(this, "＜" + ChartAxis.Format(dataMin));
+        var upperCaption = ChartAxis.Text(this, "＞" + ChartAxis.Format(dataMax));
+        foreach (var caption in new[] { lowerCaption, upperCaption })
+        {
+            caption.MaxTextWidth = captionWidth;
+            caption.MaxLineCount = 1;
+            caption.Trimming = TextTrimming.CharacterEllipsis;
+        }
+        double lowerWidth = Math.Min(captionWidth, lowerCaption.WidthIncludingTrailingWhitespace);
+        double upperWidth = Math.Min(captionWidth, upperCaption.WidthIncludingTrailingWhitespace);
+        double lowerX = Math.Max(2, left - lowerWidth / 2);
+        double upperX = Math.Min(w - upperWidth - 2, left + plotW - upperWidth / 2);
+        double tickY = top + plotH + ChartAxis.TickLabelGap;
+        dc.DrawText(lowerCaption, new Point(lowerX, tickY));
+        dc.DrawText(upperCaption, new Point(upperX, tickY));
         var xTicks = ChartAxis.Ticks(dataMin, dataMax, Math.Max(1, (int)(plotW / 85)));
         double xStep = xTicks.Count > 1 ? xTicks[1] - xTicks[0] : dataMax - dataMin;
-        double lastLabelRight = double.NegativeInfinity;
+        double lastLabelRight = lowerX + lowerWidth;
         foreach (double tick in xTicks)
         {
             double x = MapX(tick);
@@ -180,8 +202,8 @@ public class HistogramControl : CachedPlotControl
             dc.DrawLine(AxisPen, new Point(x, top + plotH), new Point(x, top + plotH + 4));
             var text = ChartAxis.Text(this, ChartAxis.Format(tick, xStep));
             double tx = Math.Clamp(x - text.Width / 2, 2, Math.Max(2, w - text.Width - 2));
-            if (tx < lastLabelRight + 8) continue;
-            dc.DrawText(text, new Point(tx, top + plotH + 7));
+            if (tx < lastLabelRight + 8 || tx + text.Width > upperX - 8) continue;
+            dc.DrawText(text, new Point(tx, tickY));
             lastLabelRight = tx + text.Width;
         }
 
@@ -209,19 +231,6 @@ public class HistogramControl : CachedPlotControl
         dc.Pop();
         ChartAxis.DrawAxes(dc, AxisPen, new Rect(left, top, plotW, plotH));
 
-        // Separate boundary captions from the numeric ticks and the axis title.
-        double captionWidth = (plotW - 8) / 2;
-        var lowerCaption = ChartAxis.Text(this, "＜" + ChartAxis.Format(dataMin));
-        var upperCaption = ChartAxis.Text(this, "＞" + ChartAxis.Format(dataMax));
-        foreach (var caption in new[] { lowerCaption, upperCaption })
-        {
-            caption.MaxTextWidth = captionWidth;
-            caption.MaxTextHeight = 20;
-            caption.Trimming = TextTrimming.CharacterEllipsis;
-        }
-        dc.DrawText(lowerCaption, new Point(left, top + plotH + 27));
-        dc.DrawText(upperCaption, new Point(left + plotW - upperCaption.Width, top + plotH + 27));
-
         foreach (var label in labels)
             dc.DrawLine(label.Pen, new Point(label.X, label.Bounds.Bottom + 1), new Point(label.X, top));
         foreach (var label in labels)
@@ -231,16 +240,18 @@ public class HistogramControl : CachedPlotControl
         }
     }
 
-    private void DrawLegend(DrawingContext dc, double width)
+    private double DrawLegend(DrawingContext dc, double width, double headerOffset)
     {
         var inSpec = ChartAxis.Text(this, "规格内", 10, Brushes.DimGray);
         var outSpec = ChartAxis.Text(this, "规格外", 10, Brushes.DimGray);
         const double swatch = 10, gap = 4, between = 12;
         double x = width - ChartAxis.PlotRight - (swatch + gap) * 2 - between - inSpec.Width - outSpec.Width;
-        dc.DrawRectangle(InSpecBrush, null, new Rect(x, 5, swatch, swatch));
-        dc.DrawText(inSpec, new Point(x + swatch + gap, 3));
+        double left = x;
+        dc.DrawRectangle(InSpecBrush, null, new Rect(x, 5 + headerOffset, swatch, swatch));
+        dc.DrawText(inSpec, new Point(x + swatch + gap, 3 + headerOffset));
         x += swatch + gap + inSpec.Width + between;
-        dc.DrawRectangle(OutSpecBrush, null, new Rect(x, 5, swatch, swatch));
-        dc.DrawText(outSpec, new Point(x + swatch + gap, 3));
+        dc.DrawRectangle(OutSpecBrush, null, new Rect(x, 5 + headerOffset, swatch, swatch));
+        dc.DrawText(outSpec, new Point(x + swatch + gap, 3 + headerOffset));
+        return left;
     }
 }

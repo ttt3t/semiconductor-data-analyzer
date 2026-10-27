@@ -158,12 +158,12 @@ public static class XlsxReportService
                         config.IncludeOutOfLimitData, config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma,
                         ScatterOrder: options.ScatterOrder, WaferOrder: wafers), AnalysisOperation.Token);
                     progress.At("绘制关注项直方图", item, i);
-                    var histogram = new HistogramControl();
+                    var histogram = new HistogramControl { Title = item.DisplayName };
                     histogram.Apply(detail.Bins, item.DisplayLowLimit, item.DisplayHighLimit, detail.Mean, detail.Sigma,
                         config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, item.ShownUnit);
                     Plot(favorites, focusRow + 3, 2, histogram, "Histogram_" + i, histogramSize);
                     progress.At("绘制关注项散点图", item, i);
-                    var scatter = new ScatterPlotControl { UseLimitRange = options.ScatterUseLimitRange };
+                    var scatter = new ScatterPlotControl { Title = item.DisplayName, UseLimitRange = options.ScatterUseLimitRange };
                     scatter.SetSeries(detail.Scatter, item.DisplayLowLimit, item.DisplayHighLimit, item.ShownUnit);
                     scatter.SetReferenceLines(detail.Statistics.Count > 0 ? detail.Statistics.Mean * item.DisplayFactor : null,
                         detail.Statistics.Count > 0 ? detail.Statistics.StdDev * item.DisplayFactor : null,

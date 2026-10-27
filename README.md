@@ -24,6 +24,8 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 
 ## V2.0.9 更新
 
+同版本样式更新：GUI、PNG 复制和 XLSX 图表加入自适应灰色测项标题；无单位时只显示“测量值”；直方图端点标注与刻度同行，底部轴标题更靠近坐标轴，并缩减留白以扩大实际绘图区。
+
 “设置 → 统计与绘图”新增独立的散点图 LSL、USL、均值、±3σ 参考线开关，并保存到 INI。复制 PNG 和 XLSX 报告沿用这些开关；参考线使用当前范围的有效测量值统计，不改变超限判断、缩放或芯片标记。旧配置默认显示 LSL / USL，均值与 ±3σ 默认关闭。
 
 ## V2.0.8 更新
