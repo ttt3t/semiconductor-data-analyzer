@@ -526,7 +526,7 @@ public partial class MainWindow : Window
             });
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { MessageBox.Show(ex.Message, "报告导出失败", MessageBoxButton.OK, MessageBoxImage.Error); }
+        catch (Exception ex) { MessageBox.Show(ReportExportFailure.Describe(ex), "报告导出失败", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
     #region 测试项列表 / Combine Site / 列头筛选

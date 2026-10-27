@@ -1,0 +1,45 @@
+using System.IO;
+using System.Reflection;
+using System.Windows;
+using System.Windows.Threading;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+static class Probe
+{
+    static int count;
+    static void Check(bool ok,string message){if(!ok)throw new Exception(message);count++;Console.WriteLine("PASS "+message);}
+    static void Pump(){var f=new DispatcherFrame();Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background,new Action(()=>f.Continue=false));Dispatcher.PushFrame(f);}
+    static void Wait(Task task){var w=System.Diagnostics.Stopwatch.StartNew();while(!task.IsCompleted){if(w.Elapsed.TotalSeconds>30)throw new TimeoutException();Pump();Thread.Sleep(2);}task.GetAwaiter().GetResult();}
+    [STAThread]static int Main(string[] args)
+    {
+        try
+        {
+            string root=Path.GetFullPath(args[0]);Directory.CreateDirectory(root);string logs=Path.Combine(root,"logs");
+            var app=new App();app.InitializeComponent();app.ShutdownMode=ShutdownMode.OnExplicitShutdown;
+            var item=new TestItemData{Id="a",Name="Repro_Item",DisplayName="Repro_Item",TestNumber="123",LowLimit=0,HighLimit=1};
+            var rows=new List<CsvRecord>{new(){Id="r1",WaferId="W",SerialNumber="1",Measurements=new(){{"a","0.1"}}},new(){Id="r2",WaferId="W",SerialNumber="2",Measurements=new(){{"a","0.2"}}}};
+            var data=DatasetService.Build(new(){item},rows);using var lease=new DatasetLease(rows);var options=new XlsxReportOptions(data.Wafers.ToArray(),RetestMode.All,null,0,true,new[]{"a"});var config=new AnalyzerConfig();
+            string target=Path.Combine(root,"existing.xlsx");File.WriteAllText(target,"preserve-existing-file");
+            var field=typeof(TestValueColumn).GetField("_records",BindingFlags.Instance|BindingFlags.NonPublic)!;
+            field.SetValue(item.Values,new List<CsvRecord>());
+            Exception? caught=null;try{Wait(XlsxReportService.SaveAsync(target,data,config,options,"diagnostic"));}catch(Exception ex){caught=ex;}
+            Check(caught is ArgumentOutOfRangeException && ((ArgumentOutOfRangeException)caught).ParamName=="index","original index-out-of-range exception survives export worker");
+            Check((string?)caught!.Data["ReportStage"]=="读取测项数据"&&((string)caught.Data["ReportItem"]!).Contains("Repro_Item"),"exception records exact failing phase and test item");
+            string message=ReportExportFailure.Describe(caught,logs);var log=Directory.GetFiles(logs).Single();string details=File.ReadAllText(log);
+            Check(message.Contains(caught.Message)&&message.Contains(log)&&message.Contains("阶段：")&&message.Contains("Test Num=123"),"user error shows original message, stage, test and log path");
+            Check(details.Contains("TestValueColumn")&&details.Contains("SelectItem")&&details.Contains("ArgumentOutOfRangeException")&&details.Contains("记录=2")&&details.Contains("关注=1")&&details.Contains("固定等宽"),"log contains full stack trace and selected report settings");
+            Check(File.ReadAllText(target)=="preserve-existing-file"&&!Directory.GetFiles(root,"existing.xlsx.*.xlsx").Any(),"failed export preserves original target and removes partial workbook");
+            field.SetValue(item.Values,rows);Wait(XlsxReportService.SaveAsync(target,data,config,options,"repaired fixture"));
+            Check(new FileInfo(target).Length>1000&&Directory.GetFiles(logs).Length==1,"successful exports are unchanged and do not write error logs");
+            using var cancellation=new CancellationTokenSource();cancellation.Cancel();bool canceled=false;try{Wait(XlsxReportService.SaveAsync(Path.Combine(root,"canceled.xlsx"),data,config,options,"cancel",cancellation.Token));}catch(OperationCanceledException){canceled=true;}
+            Check(canceled&&Directory.GetFiles(logs).Length==1&&!File.Exists(Path.Combine(root,"canceled.xlsx")),"cancellation remains cancellation without an error log");
+            string blocked=Path.Combine(root,"blocked");File.WriteAllText(blocked,"file instead of directory");caught=null;try{Wait(XlsxReportService.SaveAsync(Path.Combine(blocked,"report.xlsx"),data,config,options,"save failure"));}catch(Exception ex){caught=ex;}
+            Check(caught!=null&&(string?)caught.Data["ReportStage"]=="保存 XLSX 文件"&&string.IsNullOrEmpty((string?)caught.Data["ReportItem"]),"global workbook save failures do not falsely name the previous item");
+            string fallback=ReportExportFailure.Describe(caught!,blocked);
+            Check(fallback.Contains(caught!.Message)&&fallback.Contains("日志未能写入"),"unwritable log location does not mask the original export failure");
+            app.Shutdown();Console.WriteLine($"ALL {count} REPORT FAILURE CHECKS PASSED");return 0;
+        }
+        catch(Exception ex){Console.Error.WriteLine(ex);return 1;}
+    }
+}

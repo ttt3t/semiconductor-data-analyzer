@@ -54,8 +54,38 @@ public static class XlsxReportService
         return completion.Task;
     }
 
+    private sealed class ExportProgress
+    {
+        public string Stage { get; private set; } = "准备报告";
+        public string Item { get; private set; } = "";
+        public void At(string stage, TestItemData? item = null, int index = -1)
+        {
+            Stage = stage;
+            Item = item == null ? "" : $"第 {index + 1} 项 | Test Num={item.TestNumber} | {item.DisplayName} | ID={item.Id}";
+        }
+    }
+
     public static void Save(string path, CsvParseResult data, AnalyzerConfig config,
         XlsxReportOptions options, string sourceName)
+    {
+        var progress = new ExportProgress();
+        try { SaveCore(path, data, config, options, sourceName, progress); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Preserve the original exception and stack. The UI writes these diagnostics only on failure.
+            ex.Data["ReportStage"] = progress.Stage;
+            ex.Data["ReportItem"] = progress.Item;
+            ex.Data["ReportContext"] = $"记录={data.Records.Count}; 测项={data.Items.Count}; 晶圆={options.Wafers.Count}; " +
+                $"关注={options.FocusedItemIds.Count}; 直方图={HistogramName(options.HistogramMode)}({options.HistogramMode}); 分箱={config.BinCount}; 散点={options.ScatterOrder}; " +
+                $"复测={options.RetestMode}; 合并Site={options.CombineSites}; 合并Wafer={options.CombineWafers}; " +
+                $"离群阈值={options.OutlierSigma?.ToString(CultureInfo.InvariantCulture) ?? "关闭"}; " +
+                $"直方图尺寸={options.HistogramSize}; 散点图尺寸={options.ScatterSize}";
+            throw;
+        }
+    }
+
+    private static void SaveCore(string path, CsvParseResult data, AnalyzerConfig config,
+        XlsxReportOptions options, string sourceName, ExportProgress progress)
     {
         AnalysisOperation.CheckCancellation();
         if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA)
@@ -74,7 +104,9 @@ public static class XlsxReportService
             throw new InvalidDataException("关注图表高度超过 Excel 工作表上限，请减少关注测项或缩小图表。");
         if (options.OutlierSigma is double n && (!double.IsFinite(n) || n <= 0))
             throw new ArgumentOutOfRangeException(nameof(options.OutlierSigma));
+        progress.At("筛选晶圆与复测记录");
         var records = IntegratedCsvService.SelectRecords(data, options.Wafers, options.RetestMode);
+        progress.At("计算导出离群范围");
         var bounds = options.OutlierSigma.HasValue
             ? IntegratedCsvService.CalculateOutlierBounds(data.Items, records, options.OutlierSigma.Value) : null;
         var rowsById = records.Select((record, index) => (record.Id, index)).ToDictionary(p => p.Id, p => p.index);
@@ -95,6 +127,7 @@ public static class XlsxReportService
                 workbook.Style.Font.FontName = "Microsoft YaHei";
                 workbook.Style.Font.FontSize = 10;
                 workbook.Style.Font.FontColor = Ink;
+                progress.At("创建报告工作表");
                 var summaries = Sheet(workbook, "Testitem Yield", "测试项统计", sourceName, Context(options));
                 var sbins = Sheet(workbook, "SBIN Map", "SBIN 分布与分类", sourceName, BinContext(options));
                 var hbins = Sheet(workbook, "HBIN Map", "HBIN 分布与统计", sourceName, BinContext(options));
@@ -109,21 +142,27 @@ public static class XlsxReportService
                 {
                     AnalysisOperation.CheckCancellation();
                     // Build just this item's selected column, not an extra copy of the full dataset.
+                    progress.At("读取测项数据", data.Items[i], i);
                     var item = SelectItem(data.Items[i], records, rowsById, bounds?[i]);
+                    progress.At("计算测项统计", item, i);
                     foreach (var summary in SummaryService.Build(new[] { item }, sites, wafers,
                         options.CombineSites, options.CombineWafers, config))
                         WriteSummary(summaries, summaryRow++, summary, focused.Contains(item.Id));
                     if (!focused.Contains(item.Id)) continue;
+                    progress.At("计算关注项统计", item, i);
                     var combined = SummaryService.Build(new[] { item }, sites, true, config)[0];
                     WriteHeader(favorites, focusRow, 2, SummaryHeaders);
                     WriteSummary(favorites, focusRow + 1, combined, true);
+                    progress.At("计算关注项直方图与散点", item, i);
                     var detail = DetailCalculator.Calculate(new(item, null, options.HistogramMode, config.BinCount,
                         config.IncludeOutOfLimitData, config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma,
                         ScatterOrder: options.ScatterOrder, WaferOrder: wafers), AnalysisOperation.Token);
+                    progress.At("绘制关注项直方图", item, i);
                     var histogram = new HistogramControl();
                     histogram.Apply(detail.Bins, item.DisplayLowLimit, item.DisplayHighLimit, detail.Mean, detail.Sigma,
                         config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, item.ShownUnit);
                     Plot(favorites, focusRow + 3, 2, histogram, "Histogram_" + i, histogramSize);
+                    progress.At("绘制关注项散点图", item, i);
                     var scatter = new ScatterPlotControl { UseLimitRange = options.ScatterUseLimitRange };
                     scatter.SetSeries(detail.Scatter, item.DisplayLowLimit, item.DisplayHighLimit, item.ShownUnit);
                     scatter.SetReferenceLines(detail.Statistics.Count > 0 ? detail.Statistics.Mean * item.DisplayFactor : null,
@@ -139,14 +178,18 @@ public static class XlsxReportService
                 summaries.SheetView.Freeze(7, 4);
                 summaries.PageSetup.SetRowsToRepeatAtTop(7, 7);
                 if (focusRow == 7) favorites.Cell(7, 2).Value = "未勾选关注测项。可在主列表的“关注”列选择后重新导出。";
+                progress.At("生成 SBIN Map 与统计");
                 BinSheet(sbins, data, config, options, soft: true);
+                progress.At("生成 HBIN Map 与统计");
                 BinSheet(hbins, data, config, options, soft: false);
                 summaries.PageSetup.PrintAreas.Add(1, 2, Math.Max(8, summaryRow - 1), SummaryLastColumn);
                 favorites.PageSetup.PrintAreas.Add(1, 2, Math.Max(8, focusRow - 2), SummaryLastColumn);
                 AnalysisOperation.CheckCancellation();
+                progress.At("保存 XLSX 文件");
                 workbook.SaveAs(temp);
             }
             AnalysisOperation.CheckCancellation();
+            progress.At("写入目标文件");
             File.Move(temp, path, overwrite: true);
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }
