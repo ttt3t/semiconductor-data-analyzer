@@ -32,6 +32,27 @@ static class Probe
     static CheckBox Toggle(DataGrid grid, string key) => Header<CheckBox>((Panel)Column(grid, key).Header).Single(t => Equals(t.Tag, key));
     static void Enable(DataGrid grid, string key, bool enabled) { var check = Toggle(grid, key); check.IsChecked = enabled; check.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent)); }
     static void Refresh(MainWindow main) { ((DispatcherTimer)Field(main, "_filterTimer")!).Stop(); Call(main, "ApplySearchFilter", null, null, null); main.UpdateLayout(); Pump(); }
+    static void CheckHeaderLayout(MainWindow main)
+    {
+        foreach (double width in new[] { 24.0, 42, 150, 300 })
+        {
+            var row = new Grid { Width = width, Height = 17, ClipToBounds = true, UseLayoutRounding = true };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
+            row.ColumnDefinitions.Add(new ColumnDefinition());
+            var toggle = new CheckBox { Style = (Style)main.FindResource("ColFilterToggle") };
+            var input = new TextBox { Style = (Style)main.FindResource("ColFilterBox"), Text = new string('W', 200) };
+            Grid.SetColumn(input, 1); row.Children.Add(toggle); row.Children.Add(input);
+            row.Measure(new Size(width, 17)); row.Arrange(new Rect(0, 0, width, 17)); row.UpdateLayout(); toggle.ApplyTemplate();
+            var bounds = toggle.TransformToAncestor(row).TransformBounds(new Rect(toggle.RenderSize));
+            var search = input.TransformToAncestor(row).TransformBounds(new Rect(input.RenderSize));
+            var glyph = (Border)toggle.Template.FindName("Glyph", toggle);
+            Check(glyph.ActualWidth == 10 && glyph.ActualHeight == 10 && bounds.Right + 3 <= search.Left, "small checkbox has its own space before a long search input at row width " + width);
+            toggle.IsChecked = true;
+            Check(((FrameworkElement)toggle.Template.FindName("CheckMark", toggle)).Visibility == Visibility.Visible, "small checkbox displays its checked state at row width " + width);
+            toggle.IsChecked = null; toggle.IsEnabled = false;
+            Check(((FrameworkElement)toggle.Template.FindName("Dash", toggle)).Visibility == Visibility.Visible, "small disabled checkbox retains its checklist dash at row width " + width);
+        }
+    }
     static void Checklist(MainWindow main, DataGrid grid, string key, string? selected)
     {
         var column = Column(grid, key); Call(main, "OpenValueFilter", (FrameworkElement)column.Header, column, key); Pump();
@@ -62,7 +83,15 @@ static class Probe
             var main = new MainWindow(new LayoutSettings(Path.Combine(folder, "layout.json")), new RecentFilesService(Path.Combine(folder, "recent.json")), preferences);
             main.Show(); Wait(main.OpenManagedFilesAsync(new[] { new CsvImportSource(csv) }, config, RetestMode.All));
             var grid = (DataGrid)main.FindName("DgTestItems"); Refresh(main);
+            CheckHeaderLayout(main);
             Check(grid.Items.Count == 5 && grid.Columns.Count == 24 && grid.Columns.All(c => Toggle(grid, Header<TextBox>((Panel)c.Header).Single().Tag.ToString()!).IsChecked == false), "all 24 columns start unchecked, including focus");
+            var summaries = grid.Items.Cast<TestItemSummary>().ToArray();
+            summaries[0].Data.DisplayName = "prefix MAIN middle TEST suffix";
+            summaries[1].Data.DisplayName = "TEST before MAIN";
+            Box(grid, "DisplayName").Text = "main*test"; Enable(grid, "DisplayName", true); Refresh(main);
+            Check(grid.Items.Count == 2, "keyword AND matches both forward and reverse names through the real main view");
+            Enable(grid, "DisplayName", false);
+            summaries[0].Data.DisplayName = "A"; summaries[1].Data.DisplayName = "B"; Refresh(main);
             Box(grid, "TestNumber").Text = ">200"; Refresh(main);
             Check(grid.Items.Count == 5, "typing in an unchecked search never filters the main view");
             Enable(grid, "TestNumber", true); Refresh(main);
@@ -94,7 +123,7 @@ static class Probe
 
             Box(grid, "Count").Text = ">0"; Enable(grid, "Count", true); Refresh(main);
             Call(main, "SetColumnSearchVisibility", false); Refresh(main);
-            Check(grid.Items.Count == 5 && Box(grid, "Count").Text == "" && Toggle(grid, "Count").IsChecked == false && ((DockPanel)Box(grid, "Count").Parent).Visibility == Visibility.Collapsed, "hiding filters hides the checkbox row and removes active text restrictions");
+            Check(grid.Items.Count == 5 && Box(grid, "Count").Text == "" && Toggle(grid, "Count").IsChecked == false && ((Panel)Box(grid, "Count").Parent).Visibility == Visibility.Collapsed, "hiding filters hides the checkbox row and removes active text restrictions");
             Call(main, "SetColumnSearchVisibility", true); Refresh(main);
             Check(Toggle(grid, "Count").Visibility == Visibility.Visible && Box(grid, "Count").IsEnabled, "showing header search restores an editable unchecked row");
             Box(grid, "TestNumber").Text = "%0"; Enable(grid, "TestNumber", true); Refresh(main);

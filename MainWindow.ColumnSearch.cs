@@ -83,7 +83,7 @@ public partial class MainWindow
         bool changed = false;
         foreach (var column in DgTestItems.Columns)
         {
-            if (FilterBox(column) is not { Tag: string key, Parent: DockPanel row } box) continue;
+            if (FilterBox(column) is not { Tag: string key, Parent: Panel row } box) continue;
             if (!visible)
             {
                 var state = ColumnSearch(key);

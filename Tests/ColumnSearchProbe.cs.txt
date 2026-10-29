@@ -28,6 +28,15 @@ static class Probe
             Check(!M(">0", "-", null) && !M("%2", "NaN", double.NaN) && !M("*", "", null), "ordinary numeric operations exclude missing values");
             Check(M("abc", "xxABCyy", numeric: false), "text keeps case-insensitive keyword matching");
             Check(M("main*neg*", "Main.OS_Neg.ptd", numeric: false) && !M("main*neg*", "Main.OS_Pos.ptd", numeric: false), "text star wildcard");
+            Check(M("main*test", "prefix_main_extra_test_suffix", numeric: false), "star-separated keywords can appear inside a longer name");
+            Check(M("main*test", "TEST_foo_MAIN", numeric: false), "all keywords match without order or case restrictions");
+            Check(!M("main*test", "main_only", numeric: false) && !M("main*test", "test_only", numeric: false), "all star-separated keywords are required");
+            Check(M(" main ** test * voltage ", "voltage TEST tail MAIN", numeric: false), "multiple keywords ignore empty separators and surrounding spaces");
+            Check(M("*main*", "prefix MAIN suffix", numeric: false) && M("***", "", numeric: false), "leading/trailing separators and an all-star text query remain supported");
+            Check(M("m?in*test[12]", "TEST2 extra MAIN", numeric: false) && !M("m?in*test[12]", "test3 main", numeric: false), "keyword terms can retain question marks and character sets");
+            Check(M("main*[ab*]", "* main", numeric: false) && M("[a*b]", "*", numeric: false), "a star inside a character set is not a keyword separator");
+            Check(ColumnSearchRule.Compile("main*[", false).Error != null, "invalid wildcard keyword produces a validation message");
+            Check(M("12*34", "12934", 12934) && !M("12*34", "3412", 3412), "numeric star patterns retain their existing ordered digit semantics");
             Check(M("T?", "T1", numeric: false) && !M("T?", "T12", numeric: false), "text question mark is exactly one character");
             Check(M("T[123]", "T2", numeric: false) && !M("T[123]", "T4", numeric: false) && M("T[a-c]", "TB", numeric: false), "text character sets and ranges");
             Check(M("Main[Test1].ptd", "Main[Test1].ptd", numeric: false), "a full copied name with literal brackets is also searchable");
@@ -76,6 +85,11 @@ static class Probe
             long before = GC.GetAllocatedBytesForCurrentThread(); int count = 0;
             for (int i = 0; i < 100000; i++) if (hot.Matches("2", 2)) count++;
             Check(count == 100000 && GC.GetAllocatedBytesForCurrentThread() == before, "compiled numeric matching allocates no per-row objects");
+            hot = ColumnSearchRule.Compile("main*test", false);
+            for (int i = 0; i < 10000; i++) hot.Matches("prefix TEST suffix MAIN tail", null);
+            before = GC.GetAllocatedBytesForCurrentThread(); count = 0;
+            for (int i = 0; i < 100000; i++) if (hot.Matches("prefix TEST suffix MAIN tail", null)) count++;
+            Check(count == 100000 && GC.GetAllocatedBytesForCurrentThread() == before, "compiled keyword AND matching allocates no per-row objects");
             Console.WriteLine($"ALL {checks} COLUMN SEARCH CHECKS PASSED"); return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
