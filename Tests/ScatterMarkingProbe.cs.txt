@@ -101,7 +101,7 @@ static class Probe
             }
             finally { mouse_event(0x0010, 0, 0, 0, 0); }
             Pump();
-            Check(PointPixel(plot, 1, 1) == 0xff008000 && PointPixel(plot, 3, 3) == 0xffdc3c3c, "normal grouped points are green and unmarked failures red");
+            Check(PointPixel(plot, 1, 1) == 0xff1c801c && PointPixel(plot, 3, 3) == 0xffdc3c3c, "normal grouped points are green and unmarked failures red");
             var a = At(plot, .8, .8); var b = At(plot, 3.2, 3.2);
             long renders = (long)Field(plot, "_renderCount")!;
             var raster = Field(plot, "_pixelBuffer");

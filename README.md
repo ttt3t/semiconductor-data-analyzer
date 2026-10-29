@@ -24,6 +24,8 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 
 ## V2.0.9 更新
 
+同版本列搜索更新：主列表每列增加独立勾选开关；支持数值比较、区间、整数整除、一位数字通配和空值规则，文本支持关键字与通配符。右键勾选筛选接管同一列时搜索禁用并显示横杠；双击文字单元格复制并填入对应列，保持搜索未启用。散点绿色稍降饱和度，像素绘制方式保持不变。
+
 同版本样式更新：GUI、PNG 复制和 XLSX 图表加入自适应灰色测项标题；无单位时只显示“测量值”；直方图端点标注与刻度同行，底部轴标题更靠近坐标轴，并缩减留白以扩大实际绘图区。
 
 散点颜色和连接线沿用原像素图层：有效点为单像素细线 X，规格内绿色、超限红色、标记蓝色；按当前顺序以淡绿色单像素虚线相连，缺失测量和 Site / 晶圆组边界断开。GUI、PNG 和 XLSX 报告同步；版本保持 2.0.9。
@@ -157,3 +159,5 @@ dotnet publish SemiconductorCsvAnalyzer.csproj -c Release -r win-x64 --self-cont
 散点像素层检查：`bash Tests/run-scatter-raster.sh` 验证不同 DPI 的单像素 X、虚线宽度、越界裁剪、缺失值与分组断线、颜色覆盖顺序，并输出 3 万 / 10 万 / 100 万点的像素层耗时和逐帧内存分配。结果不包含 WPF 窗口合成耗时；预览图层写入 `bin/ScatterRasterProbe/results/`。
 
 Fail / 复测良品芯片 XLSX 的结构、冻结、交替配色、CP/FT 分组和复测保留方式检查已包含在 `bash Tests/run-core-memory.sh` 中。
+
+列搜索检查：`bash Tests/run-column-search.sh` 验证搜索规则、缺失数值和开关状态转换。Windows 上先编译 Release，再运行 `pwsh Tests/run-column-search-ui.ps1`，检查实际主表、右键筛选接管、双击复制填入和隐藏搜索框的行为。

@@ -1,0 +1,83 @@
+using System.Globalization;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static void Check(bool value, string description)
+    { if (!value) throw new Exception(description); checks++; Console.WriteLine("PASS " + description); }
+    static bool M(string query, string cell, double? number = null, bool numeric = true) => ColumnSearchRule.Compile(query, numeric).Matches(cell, number);
+    static int Main()
+    {
+        try
+        {
+            Check(M("1", "1", 1) && !M("1", "11", 11), "numeric literal is equality, never substring");
+            Check(M("-2.5", "-2.5", -2.5) && M("1e-3", "0.001", .001), "signed decimals and scientific notation");
+            Check(M(">1", "1.01", 1.01) && !M(">1", "1", 1) && M("<1", "0", 0) && !M("<1", "1", 1), "strict greater/less boundaries");
+            Check(M(">=1", "1", 1) && M("<=1", "1", 1) && !M("!=1", "1", 1), "inclusive and not-equal comparisons");
+            Check(M(" -2 .. 3 ", "-2", -2) && M("-2..3", "3", 3) && !M("-2..3", "3.01", 3.01), "ranges include both ends");
+            Check(M("1e-3..2e-3", ".0015", .0015), "scientific range endpoints");
+            Check(M("%3", "6", 6) && M("%3", "-6", -6) && M("%3", "0", 0) && !M("%3", "7", 7) && !M("%3", "6.5", 6.5), "modulo selects only divisible integer values");
+            Check(M("%-3", "6", 6), "negative integer divisor has the same multiples");
+            Check(M("60?000", "607000", 607000) && M("60?000", "609000", 609000) && !M("60?000", "6077000", 6077000) && !M("60?000", "60A000"), "numeric question mark matches exactly one ASCII digit");
+            foreach (var query in new[] { "NAN", "nan", "***" })
+                Check(M(query, "-", null) && M(query, "***", double.NaN) && M(query, "Infinity", double.PositiveInfinity) && !M(query, "0", 0), query + " selects missing/nonfinite values without treating zero as missing");
+            foreach (var query in new[] { "!NAN", "!nan", "!***" })
+                Check(!M(query, "-", null) && !M(query, "NaN", double.NaN) && M(query, "0", 0), query + " selects all finite values including zero");
+            Check(!M(">0", "-", null) && !M("%2", "NaN", double.NaN) && !M("*", "", null), "ordinary numeric operations exclude missing values");
+            Check(M("abc", "xxABCyy", numeric: false), "text keeps case-insensitive keyword matching");
+            Check(M("main*neg*", "Main.OS_Neg.ptd", numeric: false) && !M("main*neg*", "Main.OS_Pos.ptd", numeric: false), "text star wildcard");
+            Check(M("T?", "T1", numeric: false) && !M("T?", "T12", numeric: false), "text question mark is exactly one character");
+            Check(M("T[123]", "T2", numeric: false) && !M("T[123]", "T4", numeric: false) && M("T[a-c]", "TB", numeric: false), "text character sets and ranges");
+            Check(M("Main[Test1].ptd", "Main[Test1].ptd", numeric: false), "a full copied name with literal brackets is also searchable");
+            Check(M("a.b*", "a.b_tail", numeric: false) && !M("a.b*", "axb_tail", numeric: false), "regex metacharacters outside wildcards remain literal");
+            Check(M("NAN", "device_NAN", numeric: false) && M("1", "Test11", numeric: false), "missing markers and numeric literals in text columns remain ordinary keywords");
+            foreach (string query in new[] { "%0", "%1.5", ">abc", "4..1", "1..", "[", "[]", "T[z-a]" })
+            {
+                var rule = ColumnSearchRule.Compile(query, true);
+                Check(rule.Error != null && !rule.Matches("1", 1), "invalid syntax fails safely with a validation message: " + query);
+            }
+            Check(M(">1.23456785", "1.23457", 1.23456789) && !M("1.23457", "1.23457", 1.23456789), "numeric comparisons use actual values rather than rounded display text");
+            var culture = CultureInfo.CurrentCulture;
+            try
+            {
+                CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
+                Check(M(">1,5", "1,6", 1.6) && M(">1.5", "1,6", 1.6), "local decimal separator and invariant notation both work");
+            }
+            finally { CultureInfo.CurrentCulture = culture; }
+
+            var state = new ColumnSearchState(true) { Text = ">10" };
+            Check(state.IsChecked == false && !state.IsSearchActive && state.Matches("1", 1), "typing does not activate search");
+            state.Enable(true);
+            Check(state.IsSearchActive && !state.Matches("1", 1) && state.Matches("20", 20), "explicit check enables filtering");
+            state.Enable(false);
+            Check(!state.IsSearchActive && state.Text == ">10" && state.Matches("1", 1), "unchecking retains text and removes its restriction");
+            state.Enable(true); state.SetValueFilterActive(true);
+            Check(state.IsChecked == null && !state.CanSearch && !state.IsSearchActive && state.Matches("1", 1), "checklist takeover displays dash and disables keyword filtering");
+            state.Enable(true);
+            Check(state.IsChecked == null && !state.IsSearchActive, "a checklist-controlled search cannot be enabled");
+            state.FillFromCell("25");
+            Check(state.Text == "25" && state.IsChecked == null, "cell fill retains active checklist takeover");
+            state.SetValueFilterActive(false);
+            Check(state.IsChecked == false && state.CanSearch && state.Text == "25" && state.Matches("1", 1), "clearing checklist keeps query but requires a new explicit check");
+            state.Enable(true); state.FillFromCell("20");
+            Check(state.IsChecked == false && state.Text == "20" && state.Matches("1", 1), "cell fill deactivates a previously enabled query");
+            state.Enable(true); state.Text = "";
+            Check(state.IsChecked == true && !state.IsSearchActive && state.Matches("1", 1), "empty checked input never restricts rows");
+            state.Text = "%0";
+            Check(state.Error != null && !state.Matches("1", 1), "invalid active input has an error and does not silently match every row");
+            state.Text = "%2";
+            Check(state.Error == null && state.Matches("2", 2), "editing an invalid query repairs its compiled matcher");
+            Check(M("0", "0", 0) && !M("0", "1", 1) && M("1", "1", 1), "checkbox values can be filtered with zero and one");
+
+            var hot = ColumnSearchRule.Compile(">1", true);
+            for (int i = 0; i < 10000; i++) hot.Matches("2", 2);
+            long before = GC.GetAllocatedBytesForCurrentThread(); int count = 0;
+            for (int i = 0; i < 100000; i++) if (hot.Matches("2", 2)) count++;
+            Check(count == 100000 && GC.GetAllocatedBytesForCurrentThread() == before, "compiled numeric matching allocates no per-row objects");
+            Console.WriteLine($"ALL {checks} COLUMN SEARCH CHECKS PASSED"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

@@ -163,7 +163,7 @@ public partial class MainWindow
         }
         // Ordinary Run navigation updates only the Value cells, without rebuilding the view or charts.
         if (refreshView && (_columnValueFilters.ContainsKey("RunValue") ||
-            _columnFilters.TryGetValue("RunValue", out var filter) && !string.IsNullOrWhiteSpace(filter) ||
+            _columnFilters.TryGetValue("RunValue", out var filter) && filter.IsSearchActive ||
             _summaryView?.SortDescriptions.Any(s => s.PropertyName == nameof(TestItemSummary.RunValue)) == true))
             ApplySearchFilter(_currentItem?.DisplayName, _currentSite, _currentWafer);
     }
@@ -297,6 +297,7 @@ public partial class MainWindow
         if (focuses.Length == 0) return;
         bool select = focuses.Any(f => !f.IsFocused);
         foreach (var focus in focuses) focus.IsFocused = select;
+        RefreshFocusColumnFilter();
         TxtStatus.Text = $"已{(select ? "关注" : "取消关注")}当前筛选内的 {focuses.Length} 个测试项";
     }
 

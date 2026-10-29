@@ -46,7 +46,7 @@ public partial class MainWindow : Window
     private DatasetLease? _datasetLease;
     private bool _closeAfterOperation;
     private bool _operationCommitting;
-    private readonly Dictionary<string, string> _columnFilters = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ColumnSearchState> _columnFilters = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HashSet<string>> _columnValueFilters = new(StringComparer.OrdinalIgnoreCase);
     private ColumnValueFilterPopup? _valueFilterPopup;
     private readonly DispatcherTimer _filterTimer;
@@ -88,6 +88,7 @@ public partial class MainWindow : Window
         };
 
         InitializeComponent();
+        InitializeColumnSearch();
         ApplyUiPreferences();
         _uiPreferences.Changed += OnUiPreferencesChanged;
         _memoryReclaimer = new IdleMemoryReclaimer(Dispatcher, () => CanReclaimMemory);
@@ -191,14 +192,7 @@ public partial class MainWindow : Window
         DgTestItems.ColumnHeaderHeight = preferences.ShowColumnFilters ? 44 : 28;
         DgTestItems.AlternatingRowBackground = preferences.AlternateRows
             ? (Brush)new BrushConverter().ConvertFromString("#F7F9FC")! : Brushes.Transparent;
-        foreach (var column in DgTestItems.Columns)
-            if (column.Header is Panel panel)
-                foreach (var box in panel.Children.OfType<TextBox>())
-                {
-                    // A hidden keyword box must not leave an invisible restriction on the list.
-                    if (!preferences.ShowColumnFilters) box.Clear();
-                    box.Visibility = preferences.ShowColumnFilters ? Visibility.Visible : Visibility.Collapsed;
-                }
+        SetColumnSearchVisibility(preferences.ShowColumnFilters);
         ApplyRunSelectionMode(preferences.RunSelection);
     }
 
@@ -683,16 +677,6 @@ public partial class MainWindow : Window
         else if (_currentItem != null) ScheduleDetail();
     }
 
-    private void ColumnFilter_Changed(object sender, TextChangedEventArgs e)
-    {
-        if (sender is TextBox tb && tb.Tag is string key)
-        {
-            _columnFilters[key] = tb.Text ?? "";
-            if (_imeComposing) return;
-            ScheduleFilter();
-        }
-    }
-
     private void ScheduleFilter()
     {
         _filterTimer.Stop();
@@ -704,10 +688,6 @@ public partial class MainWindow : Window
         if (_valueFilterPopup != null) _valueFilterPopup.IsOpen = false;
         _valueFilterPopup = null;
     }
-
-    private static string? FilterKey(DataGridColumn column) => column.Header is Panel panel
-        ? panel.Children.OfType<TextBox>().Select(t => t.Tag as string).FirstOrDefault(k => k != null)
-        : null;
 
     private void TestItems_HeaderRightClick(object sender, MouseButtonEventArgs e)
     {
@@ -731,20 +711,10 @@ public partial class MainWindow : Window
             else _columnValueFilters[key] = values;
             UpdateValueFilterHeaders();
             ScheduleFilter();
-        }) { PlacementTarget = target };
+        }, filterHint: "应用后接管此列搜索；其他列条件同时生效") { PlacementTarget = target };
         popup.Closed += (_, _) => { if (ReferenceEquals(_valueFilterPopup, popup)) _valueFilterPopup = null; };
         _valueFilterPopup = popup;
         popup.IsOpen = true;
-    }
-
-    private void UpdateValueFilterHeaders()
-    {
-        foreach (var column in DgTestItems.Columns)
-        {
-            if (FilterKey(column) is not { } key || column.Header is not Panel panel) continue;
-            bool active = _columnValueFilters.ContainsKey(key);
-            panel.Background = active ? Brushes.LightBlue : Brushes.Transparent;
-        }
     }
 
     private void HeaderFilter_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -807,20 +777,14 @@ public partial class MainWindow : Window
         foreach (var kv in _columnValueFilters)
             if (!kv.Value.Contains(ColumnText(s, kv.Key))) return false;
         foreach (var kv in _columnFilters)
-        {
-            string needle = kv.Value.Trim();
-            if (needle.Length == 0) continue;
-
-            string cell = ColumnText(s, kv.Key);
-            if (!cell.Contains(needle, StringComparison.OrdinalIgnoreCase))
-                return false;
-        }
+            if (kv.Value.IsSearchActive && !kv.Value.Matches(ColumnText(s, kv.Key), ColumnNumber(s, kv.Key))) return false;
 
         return true;
     }
 
     private static string ColumnText(TestItemSummary s, string key) => key switch
     {
+        "Focus" => s.Data.Focus.IsFocused ? "1" : "0",
         "TestNumber" => s.TestNumberValue.ToString(),
         "DisplayName" => s.DisplayName ?? "",
         "Site" => s.Site ?? "",
@@ -1144,12 +1108,14 @@ public partial class MainWindow : Window
     {
         if (e.ChangedButton == MouseButton.Left && e.OriginalSource is DependencyObject origin)
         {
-            for (var node = origin; node != null; node = VisualTreeHelper.GetParent(node))
+            bool headerInput = false;
+            for (var node = origin; node != null; node = node is Visual ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node))
             {
-                if (node is Thumb) break; // Keep column-edge auto sizing intact.
+                if (node is TextBox or CheckBox) headerInput = true;
+                if (node is Thumb) return; // Keep column-edge auto sizing intact.
                 if (node is DataGridColumnHeader header)
                 {
-                    if (header.Column == FocusColumn && !_isBusy)
+                    if (!headerInput && header.Column == FocusColumn && !_isBusy)
                     {
                         ToggleVisibleFocus();
                         e.Handled = true;
@@ -1158,14 +1124,15 @@ public partial class MainWindow : Window
                 }
             }
         }
+        if (e.ChangedButton != MouseButton.Left || _isBusy) return;
         if (e.OriginalSource is DependencyObject source)
         {
-            for (var node = source; node != null; node = VisualTreeHelper.GetParent(node))
+            for (var node = source; node != null; node = node is Visual ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node))
                 if (node is CheckBox) return;
         }
         DependencyObject? dep = e.OriginalSource as DependencyObject;
         while (dep != null && dep is not DataGridCell)
-            dep = VisualTreeHelper.GetParent(dep);
+            dep = dep is Visual ? VisualTreeHelper.GetParent(dep) : LogicalTreeHelper.GetParent(dep);
 
         if (dep is not DataGridCell cell) return;
 
@@ -1177,16 +1144,16 @@ public partial class MainWindow : Window
             _ => null
         };
 
-        if (string.IsNullOrEmpty(text)) return;
-
+        if (text == null) return;
+        FillColumnSearchFromCell(cell.Column, text);
         try
         {
             Clipboard.SetText(text);
-            TxtStatus.Text = $"已复制单元格：{text}";
+            TxtStatus.Text = $"已复制并填入列搜索（未启用）：{text}";
         }
-        catch
+        catch (System.Runtime.InteropServices.ExternalException)
         {
-            // ignore clipboard errors
+            TxtStatus.Text = "已填入列搜索（未启用）；剪贴板正忙，请重试复制。";
         }
 
         e.Handled = true;

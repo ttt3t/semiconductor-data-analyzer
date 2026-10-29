@@ -29,11 +29,13 @@ public partial class ColumnValueFilterPopup : Popup
     private readonly ListCollectionView _view;
     private Action<HashSet<string>?>? _apply;
     private readonly DispatcherTimer _searchTimer;
+    private readonly string _filterHint;
 
     public ColumnValueFilterPopup(string title, IEnumerable<string> values, ISet<string>? selected,
-        Action<HashSet<string>?> apply)
+        Action<HashSet<string>?> apply, string? filterHint = null)
     {
         _apply = apply;
+        _filterHint = filterHint ?? "与表头关键字筛选同时生效";
         _choices = values.Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(s => s, StringComparer.OrdinalIgnoreCase).Select(s => new Choice(s, selected == null || selected.Contains(s))).ToList();
         _view = new ListCollectionView(_choices);
@@ -66,7 +68,7 @@ public partial class ColumnValueFilterPopup : Popup
     {
         string search = SearchBox.Text.Trim();
         _view.Filter = search.Length == 0 ? null : o => o is Choice c && c.Label.Contains(search, StringComparison.OrdinalIgnoreCase);
-        TxtCount.Text = $"显示 {_view.Count} / {_choices.Count} 个值；与表头关键字筛选同时生效";
+        TxtCount.Text = $"显示 {_view.Count} / {_choices.Count} 个值；{_filterHint}";
     }
 
     private void SetVisible(bool selected)

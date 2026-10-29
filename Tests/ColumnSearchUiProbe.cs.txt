@@ -1,0 +1,108 @@
+using System.Collections;
+using System.IO;
+using System.Reflection;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Controls;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static void Check(bool ok, string message) { if (!ok) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
+    static object? Field(object target, string name) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target);
+    static object? Call(object target, string name, params object?[] args) => target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(target, args);
+    static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame); }
+    static void Wait(Task task) { var watch = System.Diagnostics.Stopwatch.StartNew(); while (!task.IsCompleted) { Pump(); Thread.Sleep(5); if (watch.Elapsed.TotalSeconds > 45) throw new TimeoutException(); } task.GetAwaiter().GetResult(); Pump(); }
+    static IEnumerable<T> Children<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        { var child = VisualTreeHelper.GetChild(parent, i); if (child is T t) yield return t; foreach (var item in Children<T>(child)) yield return item; }
+    }
+    static IEnumerable<T> Header<T>(Panel panel) where T : FrameworkElement
+    { foreach (UIElement c in panel.Children) { if (c is T t) yield return t; if (c is Panel p) foreach (var nested in Header<T>(p)) yield return nested; } }
+    static DataGridColumn Column(DataGrid grid, string key) => grid.Columns.Single(c => c.Header is Panel panel && Header<TextBox>(panel).Any(t => Equals(t.Tag, key)));
+    static TextBox Box(DataGrid grid, string key) => Header<TextBox>((Panel)Column(grid, key).Header).Single(t => Equals(t.Tag, key));
+    static CheckBox Toggle(DataGrid grid, string key) => Header<CheckBox>((Panel)Column(grid, key).Header).Single(t => Equals(t.Tag, key));
+    static void Enable(DataGrid grid, string key, bool enabled) { var check = Toggle(grid, key); check.IsChecked = enabled; check.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent)); }
+    static void Refresh(MainWindow main) { ((DispatcherTimer)Field(main, "_filterTimer")!).Stop(); Call(main, "ApplySearchFilter", null, null, null); main.UpdateLayout(); Pump(); }
+    static void Checklist(MainWindow main, DataGrid grid, string key, string? selected)
+    {
+        var column = Column(grid, key); Call(main, "OpenValueFilter", (FrameworkElement)column.Header, column, key); Pump();
+        var popup = (ColumnValueFilterPopup)Field(main, "_valueFilterPopup")!;
+        if (selected == null) Call(popup, "Clear_Click", popup, new RoutedEventArgs());
+        else
+        {
+            foreach (var choice in ((IEnumerable)Field(popup, "_choices")!).Cast<ColumnValueFilterPopup.Choice>()) choice.IsChecked = choice.Value == selected;
+            Call(popup, "Apply_Click", popup, new RoutedEventArgs());
+        }
+        Refresh(main);
+    }
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            string folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            var app = new App(); app.InitializeComponent(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            var failures = new List<Exception>(); app.DispatcherUnhandledException += (_, e) => { failures.Add(e.Exception); e.Handled = true; };
+            typeof(AppSettings).GetField("_userDirectory", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, folder);
+            var config = new AnalyzerConfig { TestItemRow = 1, LowLimitRow = 2, HighLimitRow = 3, UnitRow = 4, TestNumberRow = 5,
+                DataStartRow = 6, TestItemStartColumn = 6, SerialNumberColumn = 1, XColumn = 2, YColumn = 3, SiteColumn = 4, WaferColumn = 5,
+                SBinRow = 0, HBinRow = 0, SBinColumn = 0, HBinColumn = 0 };
+            string csv = Path.Combine(folder, "search.csv");
+            File.WriteAllText(csv, "SN,X,Y,Site,Wafer,A,B,Noise_X,Missing,Huge\nLSL,,,,,0,0,0,0,0\nUSL,,,,,30,30,30,30,30\nUnit,,,,,V,V,V,V,V\nTest Num,,,,,101,102,201,301,401\n1,1,0,1,W,0,10,1,bad,6\n2,2,0,1,W,2,20,1,,8\n");
+            var preferences = new UiPreferencesService(Path.Combine(folder, "ui.json"));
+            var main = new MainWindow(new LayoutSettings(Path.Combine(folder, "layout.json")), new RecentFilesService(Path.Combine(folder, "recent.json")), preferences);
+            main.Show(); Wait(main.OpenManagedFilesAsync(new[] { new CsvImportSource(csv) }, config, RetestMode.All));
+            var grid = (DataGrid)main.FindName("DgTestItems"); Refresh(main);
+            Check(grid.Items.Count == 5 && grid.Columns.Count == 24 && grid.Columns.All(c => Toggle(grid, Header<TextBox>((Panel)c.Header).Single().Tag.ToString()!).IsChecked == false), "all 24 columns start unchecked, including focus");
+            Box(grid, "TestNumber").Text = ">200"; Refresh(main);
+            Check(grid.Items.Count == 5, "typing in an unchecked search never filters the main view");
+            Enable(grid, "TestNumber", true); Refresh(main);
+            Check(grid.Items.Count == 3 && grid.Items.Cast<TestItemSummary>().All(s => s.TestNumberValue > 200), "checking applies the numeric rule through the real collection view");
+            Box(grid, "TestNumber").Text = "10?"; Refresh(main);
+            Check(grid.Items.Count == 2, "editing a checked numeric wildcard updates the view");
+            Enable(grid, "TestNumber", false); Refresh(main);
+            Box(grid, "Mean").Text = "NAN"; Enable(grid, "Mean", true); Refresh(main);
+            Check(grid.Items.Count == 1 && ((TestItemSummary)grid.Items[0]).DisplayName == "Missing", "NAN uses missing statistics rather than a rendered dash or zero");
+            Enable(grid, "Mean", false); Refresh(main);
+            Box(grid, "DisplayName").Text = "A"; Enable(grid, "DisplayName", true); Refresh(main);
+            Checklist(main, grid, "DisplayName", "B");
+            Check(grid.Items.Count == 1 && ((TestItemSummary)grid.Items[0]).DisplayName == "B" && !Box(grid, "DisplayName").IsEnabled && !Toggle(grid, "DisplayName").IsEnabled && Toggle(grid, "DisplayName").IsChecked == null && Box(grid, "DisplayName").Text == "A", "real checklist takes over, preserves query, disables entry and displays dash");
+            Call(main, "FillColumnSearchFromCell", Column(grid, "DisplayName"), "Noise_X"); Refresh(main);
+            Check(grid.Items.Count == 1 && Toggle(grid, "DisplayName").IsChecked == null, "cell fill does not alter an active checklist");
+            Checklist(main, grid, "DisplayName", null);
+            Check(grid.Items.Count == 5 && Box(grid, "DisplayName").IsEnabled && Toggle(grid, "DisplayName").IsChecked == false && Box(grid, "DisplayName").Text == "Noise_X", "clearing checklist enables editing but never automatically activates saved text");
+
+            Box(grid, "DisplayName").Text = "Noise_X"; Enable(grid, "DisplayName", true); Refresh(main);
+            var row = (TestItemSummary)grid.Items[0]; var nameColumn = Column(grid, "DisplayName");
+            grid.ScrollIntoView(row, nameColumn); main.UpdateLayout(); Pump();
+            var rowControl = (DataGridRow)grid.ItemContainerGenerator.ContainerFromItem(row)!;
+            var cell = Children<DataGridCell>(rowControl).Single(c => c.Column == nameColumn);
+            var content = (TextBlock)cell.Content;
+            var mouse = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = Mouse.PreviewMouseDownEvent };
+            typeof(MouseButtonEventArgs).GetProperty(nameof(MouseButtonEventArgs.ClickCount))!.SetValue(mouse, 2);
+            content.RaiseEvent(mouse); Refresh(main);
+            Check(Clipboard.GetText() == "Noise_X" && Box(grid, "DisplayName").Text == "Noise_X" && Toggle(grid, "DisplayName").IsChecked == false && grid.Items.Count == 5, "actual cell double-click copies and fills the corresponding query while unchecking it");
+
+            Box(grid, "Count").Text = ">0"; Enable(grid, "Count", true); Refresh(main);
+            Call(main, "SetColumnSearchVisibility", false); Refresh(main);
+            Check(grid.Items.Count == 5 && Box(grid, "Count").Text == "" && Toggle(grid, "Count").IsChecked == false && ((DockPanel)Box(grid, "Count").Parent).Visibility == Visibility.Collapsed, "hiding filters hides the checkbox row and removes active text restrictions");
+            Call(main, "SetColumnSearchVisibility", true); Refresh(main);
+            Check(Toggle(grid, "Count").Visibility == Visibility.Visible && Box(grid, "Count").IsEnabled, "showing header search restores an editable unchecked row");
+            Box(grid, "TestNumber").Text = "%0"; Enable(grid, "TestNumber", true); Refresh(main);
+            Check(grid.Items.Count == 0 && Equals(Box(grid, "TestNumber").BorderBrush, Brushes.Firebrick), "invalid active rule has a visible validation border without an exception");
+            Enable(grid, "TestNumber", false); Refresh(main);
+            Check(grid.Items.Count == 5 && failures.Count == 0, "disabling an invalid query restores rows without dispatcher errors");
+            main.Close(); app.Shutdown(); Console.WriteLine($"ALL {checks} COLUMN SEARCH UI CHECKS PASSED"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

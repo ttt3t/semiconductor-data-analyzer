@@ -11,7 +11,7 @@
             <ResourceDictionary.MergedDictionaries><ResourceDictionary Source="Styles/WorkspaceTheme.xaml"/></ResourceDictionary.MergedDictionaries>
             <controls:YieldHeatBrushConverter x:Key="YieldHeatBrush"/>
             <Style x:Key="ColFilterBox" TargetType="TextBox">
-                <Setter Property="Margin" Value="0,3,0,0"/><Setter Property="Padding" Value="3,0"/>
+                <Setter Property="Margin" Value="0"/><Setter Property="Padding" Value="3,0"/>
                 <Setter Property="Height" Value="17"/><Setter Property="MinHeight" Value="17"/>
                 <Setter Property="FontSize" Value="10"/><Setter Property="FontWeight" Value="Normal"/>
                 <Setter Property="VerticalContentAlignment" Value="Center"/>
@@ -256,14 +256,22 @@
                     </Style></DataGrid.CellStyle>
 
                     <DataGrid.Columns>
-                        <DataGridTemplateColumn x:Name="FocusColumn" SortMemberPath="Data.Focus.IsFocused" CanUserSort="False" Width="45">
-                            <DataGridTemplateColumn.Header><TextBlock Text="关注" ToolTip="双击表头：全选 / 取消当前筛选内的全部测试项"/></DataGridTemplateColumn.Header>
+                        <DataGridTemplateColumn x:Name="FocusColumn" SortMemberPath="Data.Focus.IsFocused" CanUserSort="False" Width="62" MinWidth="55">
+                            <DataGridTemplateColumn.Header><StackPanel>
+                                <TextBlock Text="关注" Style="{StaticResource ColHeaderLabel}" ToolTip="双击表头：全选 / 取消当前筛选内的全部测试项"/>
+                                <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="Focus" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 Focus 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="Focus" TextChanged="ColumnFilter_Changed" PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
+                            </StackPanel></DataGridTemplateColumn.Header>
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <CheckBox DataContext="{Binding Data.Focus, Mode=OneTime}"
                                               IsChecked="{Binding IsFocused, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                               HorizontalAlignment="Center" VerticalAlignment="Center"
-                                              PreviewMouseDoubleClick="Focus_PreviewMouseDoubleClick"/>
+                                              PreviewMouseDoubleClick="Focus_PreviewMouseDoubleClick" Click="Focus_Click"/>
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
@@ -271,9 +279,14 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="Test Num" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="TestNumber"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="TestNumber" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 TestNumber 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="TestNumber"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -281,9 +294,14 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="Test Item" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="DisplayName"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="DisplayName" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 DisplayName 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="DisplayName"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -291,9 +309,14 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="Site" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="Site"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="Site" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 Site 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="Site"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -301,8 +324,13 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="Wafer" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="Wafer" TextChanged="ColumnFilter_Changed"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="Wafer" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 Wafer 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="Wafer" TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -310,9 +338,14 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="SBIN" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="SBin"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="SBin" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 SBin 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="SBin"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -320,9 +353,14 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="HBIN" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="HBin"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="HBin" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 HBin 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="HBin"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -330,9 +368,14 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="Unit" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="Unit"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="Unit" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 Unit 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="Unit"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -340,9 +383,14 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="LSL" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="Lsl"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="Lsl" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 Lsl 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="Lsl"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -350,9 +398,14 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="USL" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="Usl"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="Usl" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 Usl 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="Usl"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -360,9 +413,14 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="Count" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="Count"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="Count" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 Count 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="Count"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -370,16 +428,26 @@
                                             Binding="{Binding Fails, Mode=OneTime}" SortMemberPath="Fails" Width="60">
                             <DataGridTextColumn.Header><StackPanel>
                                 <TextBlock Text="Fails" Style="{StaticResource ColHeaderLabel}" AutomationProperties.HelpText="超出 LSL 或 USL 的有效测量样品数；缺测和无效值计入 Error"/>
-                                <TextBox Style="{StaticResource ColFilterBox}" Tag="Fails" TextChanged="ColumnFilter_Changed"
+                                <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="Fails" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 Fails 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="Fails" TextChanged="ColumnFilter_Changed"
                                          PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                             </StackPanel></DataGridTextColumn.Header>
                         </DataGridTextColumn>
                         <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding Eorr, Mode=OneTime}" SortMemberPath="Eorr" Width="60">
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="Error" Style="{StaticResource ColHeaderLabel}" ToolTip="当前测试项的空值、缺列、非数值及非有限值数量"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="Eorr" TextChanged="ColumnFilter_Changed"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="Eorr" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 Eorr 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="Eorr" TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -387,8 +455,13 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="Site σ" Style="{StaticResource ColHeaderLabel}" ToolTip="Combine Site 时，各有有效数据的 Site 良率的总体标准差（百分点）；各 Site 等权"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="SiteSigma" TextChanged="ColumnFilter_Changed"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="SiteSigma" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 SiteSigma 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="SiteSigma" TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -396,39 +469,64 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="Mean" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="Mean"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="Mean" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 Mean 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="Mean"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
                         <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding Max, StringFormat=G6, TargetNullValue=-, Mode=OneTime}" SortMemberPath="Max" Width="80">
                             <DataGridTextColumn.Header><StackPanel>
                                 <TextBlock Text="Max" Style="{StaticResource ColHeaderLabel}"/>
-                                <TextBox Style="{StaticResource ColFilterBox}" Tag="Max" TextChanged="ColumnFilter_Changed"
+                                <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="Max" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 Max 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="Max" TextChanged="ColumnFilter_Changed"
                                          PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                             </StackPanel></DataGridTextColumn.Header>
                         </DataGridTextColumn>
                         <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding Min, StringFormat=G6, TargetNullValue=-, Mode=OneTime}" SortMemberPath="Min" Width="80">
                             <DataGridTextColumn.Header><StackPanel>
                                 <TextBlock Text="Min" Style="{StaticResource ColHeaderLabel}"/>
-                                <TextBox Style="{StaticResource ColFilterBox}" Tag="Min" TextChanged="ColumnFilter_Changed"
+                                <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="Min" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 Min 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="Min" TextChanged="ColumnFilter_Changed"
                                          PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                             </StackPanel></DataGridTextColumn.Header>
                         </DataGridTextColumn>
                         <DataGridTextColumn x:Name="RunValueColumn" ElementStyle="{StaticResource SummaryCellText}" CellStyle="{StaticResource RunValueCell}" Binding="{Binding RunValue, StringFormat=G9, TargetNullValue=-, Mode=OneWay}" SortMemberPath="RunValue" Width="90">
                             <DataGridTextColumn.Header><StackPanel>
                                 <TextBlock Text="Value" Style="{StaticResource ColHeaderLabel}" ToolTip="Run 对应的原始测量值；其他 Site、缺测或无效值显示 -"/>
-                                <TextBox Style="{StaticResource ColFilterBox}" Tag="RunValue" TextChanged="ColumnFilter_Changed" PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="RunValue" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 RunValue 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="RunValue" TextChanged="ColumnFilter_Changed" PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                             </StackPanel></DataGridTextColumn.Header>
                         </DataGridTextColumn>
                         <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding Median, StringFormat=G6, TargetNullValue=-, Mode=OneTime}" SortMemberPath="Median" Width="80">
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="Median" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="Median"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="Median" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 Median 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="Median"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -436,9 +534,14 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="σ" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="Sigma"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="Sigma" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 Sigma 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="Sigma"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -446,9 +549,14 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="Robust Mean" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="RobustMean"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="RobustMean" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 RobustMean 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="RobustMean"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -456,9 +564,14 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="Robust Sigma" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="RobustSigma"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="RobustSigma" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 RobustSigma 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="RobustSigma"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -466,9 +579,14 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="Cpk" Style="{StaticResource ColHeaderLabel}"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="Cpk"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="Cpk" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 Cpk 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="Cpk"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
@@ -476,9 +594,14 @@
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="InSpec%" Style="{StaticResource ColHeaderLabel}" ToolTip="良率色标：0% 红色 → 50% 黄色 → 100% 绿色；无有效数值时不着色"/>
-                                    <TextBox Style="{StaticResource ColFilterBox}" Tag="InSpec"
+                                    <DockPanel Margin="0,3,0,0">
+                                        <CheckBox Tag="InSpec" Width="13" Margin="0,0,3,0" VerticalAlignment="Center"
+                                                  IsThreeState="False" Click="ColumnSearchToggle_Click" Focusable="True"
+                                                  AutomationProperties.Name="启用 InSpec 列搜索"/>
+                                        <TextBox Style="{StaticResource ColFilterBox}" Tag="InSpec"
                                              TextChanged="ColumnFilter_Changed"
                                              PreviewMouseLeftButtonDown="HeaderFilter_PreviewMouseLeftButtonDown"/>
+                                    </DockPanel>
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
