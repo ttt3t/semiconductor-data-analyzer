@@ -1,6 +1,6 @@
 <Project>
   <PropertyGroup>
-    <Version>2.0.9</Version>
+    <Version>2.0.10</Version>
     <!-- Desktop workloads use the smaller workstation GC in both entry projects. -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <!-- Both entry projects compile the same WPF views; keep their generated resource references separate. -->

@@ -36,12 +36,14 @@ public static partial class ProductYieldService
         config.SBinDescriptions = original.SBinDescriptions;
         config.TestMode = kind == "FT" ? TestAnalysisMode.FT : TestAnalysisMode.CP;
         config.UuidTestNumbers = RetestIdentityService.ParseTestNumbers(product.UuidTestNumbers);
+        config.PreferGoodRetest = product.PreferGoodRetest;
+        config.GoodRetestIncludePartialPass = product.IncludePartialPass;
         return config;
     }
 
     public static string Signature(ManagedProduct product) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
         JsonSerializer.Serialize(new { Schema = 3, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
-            product.IncludePartialPass, product.Files }))));
+            product.IncludePartialPass, product.PreferGoodRetest, product.Files }))));
 
     public static bool IsCurrent(ManagedProduct product)
     {
@@ -309,8 +311,10 @@ public static partial class ProductYieldService
         foreach (var reading in readings)
         {
             if (!devices.TryGetValue(reading.Key, out var stages)) devices[reading.Key] = stages = new(StringComparer.Ordinal);
-            if (product.RetestMode == RetestMode.First) stages.TryAdd(stage.Id, reading.Observation);
-            else stages[stage.Id] = reading.Observation;
+            if (!stages.TryGetValue(stage.Id, out var previous) || RetestPreference.Replace(
+                HBinClassifier.IsGood(previous.Disposition, product.IncludePartialPass),
+                HBinClassifier.IsGood(reading.Observation.Disposition, product.IncludePartialPass),
+                product.PreferGoodRetest, product.RetestMode)) stages[stage.Id] = reading.Observation;
         }
         state.Length = length; state.LastWriteUtc = modified; state.Records = readings.Count;
         state.MissingIdentity = readings.Count(r => !r.Observation.KnownIdentity);

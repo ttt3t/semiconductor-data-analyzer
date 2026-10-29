@@ -40,7 +40,7 @@ public partial class MainWindow : Window
     private bool _combineSites;
     private bool _combineWafers;
     private ScatterOrder _scatterOrder;
-    private RetestMode _retestMode = RetestMode.All;
+    private RetestMode _retestMode = RetestMode.Last;
     private bool _isBusy;
     private CancellationTokenSource? _operationCancellation;
     private DatasetLease? _datasetLease;
@@ -265,12 +265,15 @@ public partial class MainWindow : Window
     private void UpdateWindowTitle()
     {
         string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
-        Title = $"CSV Analyzer · V2.0.9 | 当前数据：{_currentDataName} | 配置：{configName}";
+        Title = $"CSV Analyzer · V2.0.10 | 当前数据：{_currentDataName} | 配置：{configName}";
     }
 
     private void UpdateConfigInfo()
     {
         UpdateWindowTitle();
+        if (_config.PreferGoodRetest) { _retestMode = RetestMode.Last; LstRetestMode.SelectedIndex = (int)RetestMode.Last; }
+        LstRetestMode.IsEnabled = !_config.PreferGoodRetest;
+        LstRetestMode.ToolTip = _config.PreferGoodRetest ? "良品优先已启用；在设置中取消后可选择首测或全部记录作对照。" : "默认按最新复测；可选择其他口径作对照。";
         TxtBottomInfo.Text = $"TestItemRow={_config.TestItemRow}  DataStartRow={_config.DataStartRow}  StartCol={_config.TestItemStartColumn}";
         CmbBinMode.SelectedIndex = _config.BinMode.ToUpperInvariant() switch
         {
@@ -481,7 +484,7 @@ public partial class MainWindow : Window
                         (exported.FailChips == 0 ? "" : exported.ReferenceSerial == null ? "；没有可用的良品参考。" : $"；Fail 表良品参考 SN：{exported.ReferenceSerial}");
                     return;
                 }
-                int count = await Task.Run(() => IntegratedCsvService.Save(file.FileName, ActiveData, wafers, mode, outlierSigma));
+                int count = await Task.Run(() => IntegratedCsvService.Save(file.FileName, ActiveData, wafers, mode, outlierSigma, _config));
                 TxtStatus.Text = $"已导出 {wafers.Length} 个 wafer、{count} 条测试记录（含异常原文），可直接重新打开" +
                     (outlierSigma.HasValue ? $"；已剔除均值 ± {outlierSigma.Value:G}σ 以外的测项值" : "");
             });
@@ -571,18 +574,19 @@ public partial class MainWindow : Window
 
     private Task<PreparedAnalysis> PrepareAnalysisAsync(CsvParseResult data, AnalyzerConfig config)
     {
-        var mode = _retestMode;
+        var mode = config.PreferGoodRetest ? RetestMode.Last : _retestMode;
+        string definition = RetestPreference.Signature(config);
         bool combine = _combineSites;
         bool combineWafers = _combineWafers;
         var ranges = ReferenceEquals(data, _data) ? _sampleRanges.ToArray() : Array.Empty<SampleRange>();
         var match = ReferenceEquals(data, _data) ? _sampleMatch : SampleMatchMode.Intersection;
-        var cachedScope = ReferenceEquals(data, _scopeSource) && _scopeMode == mode && _scopeMatch == match && _scopeRanges.SequenceEqual(ranges) ? _scopeData : null;
+        var cachedScope = ReferenceEquals(data, _scopeSource) && _scopeRetestDefinition == definition && _scopeMode == mode && _scopeMatch == match && _scopeRanges.SequenceEqual(ranges) ? _scopeData : null;
         return Task.Run(() =>
         {
             AnalysisOperation.CheckCancellation();
             data = RetestIdentityService.Prepare(data, config);
-            var scope = ReferenceEquals(data, _scopeSource) && cachedScope != null ? cachedScope : SampleFilterService.Apply(data, ranges, mode, match);
-            var analysis = DatasetService.SelectRetests(scope, mode);
+            var scope = ReferenceEquals(data, _scopeSource) && cachedScope != null ? cachedScope : SampleFilterService.Apply(data, ranges, mode, match, config);
+            var analysis = DatasetService.SelectRetests(scope, mode, config);
             var sites = CollectSites(scope.Items, scope.Records);
             return new PreparedAnalysis(analysis, sites,
                 SummaryService.Build(analysis.Items, sites, scope.Wafers, combine, combineWafers, config), data, scope, ranges, match);
@@ -611,7 +615,7 @@ public partial class MainWindow : Window
         _data = data;
         _sampleRanges = prepared.Ranges;
         _scopeData = prepared.Scope;
-        _scopeSource = data; _scopeMode = _retestMode; _scopeRanges = prepared.Ranges;
+        _scopeSource = data; _scopeMode = _config.PreferGoodRetest ? RetestMode.Last : _retestMode; _scopeRetestDefinition = RetestPreference.Signature(_config); _scopeRanges = prepared.Ranges;
         _sampleMatch = _scopeMatch = prepared.Match;
         _sampleIncludedIds = _sampleRanges.Count == 0 ? null : prepared.Scope.Records.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
         TxtSampleFilterAction.Text = _sampleRanges.Count == 0 ? "数据筛选" : $"数据筛选（{_sampleRanges.Count}）";
@@ -860,6 +864,7 @@ public partial class MainWindow : Window
         if (_allItems.Count == 0) return;
         TxtBottomInfo.Text =
             $"测试项 {_allItems.Count} 个 | Site {_allSites.Count} 个 | Wafer {ActiveData.Wafers.Count} 个 | 表格 {_summaries.Count} 行 | 唯一芯片 {_devices.Count} 颗" +
+            (_config.PreferGoodRetest ? " | 良品优先" : "") +
             (_sampleRanges.Count > 0 ? $" | 筛选记录 {ActiveData.Records.Count:N0}/{_data.Records.Count:N0}" : "");
     }
 
@@ -1239,7 +1244,7 @@ public partial class MainWindow : Window
 
         string? site = _combineSites || _currentSite == TestItemSummary.CombinedSite ? null : _currentSite;
         var mapItem = ActiveData.Items.FirstOrDefault(i => i.Id == _currentItem.Id) ?? _currentItem;
-        var pages = MapDataService.PfPages(ActiveData, mapItem, site);
+        var pages = MapDataService.PfPages(ActiveData, mapItem, site, _config);
         if (pages.All(p => p.Dies.Count == 0))
         {
             MessageBox.Show("当前测试项没有有效的 X/Y 坐标", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -1256,7 +1261,7 @@ public partial class MainWindow : Window
         {
             var item = data.Items.FirstOrDefault(i => i.Id == selectedId) ??
                 data.Items.FirstOrDefault(i => i.Name == selectedName && i.TestNumber == selectedNumber);
-            return item != null ? MapDataService.PfPages(data, item, site) :
+            return item != null ? MapDataService.PfPages(data, item, site, _config) :
                 data.Wafers.Select(w => new WaferMapPage(w, Array.Empty<WaferDie>())).ToList();
         });
     }
@@ -1269,15 +1274,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        var pages = MapDataService.BinPages(ActiveData, soft);
+        var pages = MapDataService.BinPages(ActiveData, soft, _config);
         if (pages.All(p => p.Dies.Count == 0))
         {
             MessageBox.Show("没有有效的 X/Y 坐标，无法绘制 Map", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
-        ShowMapWindow(new WaferMapWindow($"{binName} Map  （按 wafer 分开，同坐标取最新）", pages, binName),
-            data => MapDataService.BinPages(data, soft));
+        ShowMapWindow(new WaferMapWindow($"{binName} Map  （按 wafer 分开，{(_config.PreferGoodRetest ? "良品优先，无良品取末次" : "同坐标取最新")}）", pages, binName),
+            data => MapDataService.BinPages(data, soft, _config));
     }
 
     private void ShowMapWindow(WaferMapWindow window, Func<CsvParseResult, IReadOnlyList<WaferMapPage>> pages)

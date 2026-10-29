@@ -77,6 +77,11 @@
             <TabItem x:Name="AnalysisTab" Header="统计与绘图">
                 <ScrollViewer TextElement.Foreground="{StaticResource TextPrimary}" TextElement.FontWeight="Normal" VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="24">
+                        <TextBlock Text="复测良品口径" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                        <CheckBox x:Name="ChkPreferGoodRetest" Content="良品优先（同一芯片有良品时取最新良品，否则取最新复测）"
+                                  Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged" Margin="0,0,0,20"
+                                  ToolTip="按已配置的 HBIN Pass 判断整条记录。启用后采用末测统计并优先良品；保留全部原始记录，取消后按最新复测。"/>
+
                         <TextBlock Text="稳健统计" Style="{StaticResource SectionTitle}"/>
                         <CheckBox x:Name="ChkRemoveOutliers" Content="计算 Robust Mean / Sigma 时剔除离群点" IsChecked="True"
                                   Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>

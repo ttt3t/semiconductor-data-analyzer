@@ -145,6 +145,7 @@ public partial class SettingsWindow : Window
         string mode = (CmbHistogramMode.SelectedItem as ComboBoxItem)?.Tag as string ?? "Fixed";
         var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
+            ["PreferGoodRetest"] = (ChkPreferGoodRetest.IsChecked == true).ToString(),
             ["RemoveOutliers"] = (ChkRemoveOutliers.IsChecked == true).ToString(),
             ["OutlierSigma"] = sigma.ToString("R", CultureInfo.InvariantCulture),
             ["BinCount"] = bins.ToString(CultureInfo.InvariantCulture), ["BinMode"] = mode,
@@ -184,8 +185,9 @@ public partial class SettingsWindow : Window
         }
         string result = string.Join(Environment.NewLine, lines);
         var scatter = fields.Where(p => !found.Contains(p.Key) && p.Key.StartsWith("Scatter", StringComparison.Ordinal)).ToList();
-        var histogram = fields.Where(p => !found.Contains(p.Key) && !p.Key.StartsWith("Scatter", StringComparison.Ordinal) && p.Key is not "RemoveOutliers" and not "OutlierSigma").ToList();
+        var histogram = fields.Where(p => !found.Contains(p.Key) && !p.Key.StartsWith("Scatter", StringComparison.Ordinal) && p.Key is not "RemoveOutliers" and not "OutlierSigma" and not "PreferGoodRetest").ToList();
         var robust = fields.Where(p => !found.Contains(p.Key) && p.Key is "RemoveOutliers" or "OutlierSigma").ToList();
+        if (!found.Contains("PreferGoodRetest")) result += Environment.NewLine + "[RetestSelection]" + Environment.NewLine + "PreferGoodRetest=" + fields["PreferGoodRetest"];
         if (histogram.Count > 0) result += Environment.NewLine + "[Histogram]" + Environment.NewLine + string.Join(Environment.NewLine, histogram.Select(p => p.Key + "=" + p.Value));
         if (scatter.Count > 0) result += Environment.NewLine + "[Scatter]" + Environment.NewLine + string.Join(Environment.NewLine, scatter.Select(p => p.Key + "=" + p.Value));
         if (robust.Count > 0) result += Environment.NewLine + "[Robust]" + Environment.NewLine + string.Join(Environment.NewLine, robust.Select(p => p.Key + "=" + p.Value));
@@ -197,6 +199,7 @@ public partial class SettingsWindow : Window
         bool wasSyncing = _syncing; _syncing = true;
         try
         {
+            ChkPreferGoodRetest.IsChecked = config.PreferGoodRetest;
             ChkRemoveOutliers.IsChecked = config.RemoveOutliers;
             TxtOutlierSigma.Text = config.OutlierSigma.ToString("G", CultureInfo.InvariantCulture);
             TxtBinCount.Text = config.BinCount.ToString(CultureInfo.InvariantCulture);

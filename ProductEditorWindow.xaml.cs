@@ -28,6 +28,14 @@ public partial class ProductEditorWindow : Window
         TxtConfig.Text = Product.ConfigText; TxtUuid.Text = Product.UuidTestNumbers;
         HasFt.IsChecked = _flow.Any(s => s.Kind == "FT"); IncludePartial.IsChecked = Product.IncludePartialPass;
         FirstMode.IsChecked = Product.RetestMode == RetestMode.First;
+        PreferGoodRetest.IsChecked = Product.PreferGoodRetest;
+        FirstMode.IsEnabled = Product.PreferGoodRetest == false;
+        if (Product.PreferGoodRetest) LastMode.IsChecked = true;
+    }
+    private void PreferGoodRetest_Click(object sender, RoutedEventArgs e)
+    {
+        LastMode.IsChecked = true;
+        FirstMode.IsEnabled = PreferGoodRetest.IsChecked != true;
     }
     private void Add(string kind)
     {
@@ -70,6 +78,7 @@ public partial class ProductEditorWindow : Window
             Product.Name = TxtName.Text.Trim(); Product.Description = TxtDescription.Text.Trim();
             Product.ConfigText = TxtConfig.Text; Product.UuidTestNumbers = string.Join(",", RetestIdentityService.ParseTestNumbers(TxtUuid.Text));
             Product.IncludePartialPass = IncludePartial.IsChecked == true;
+            Product.PreferGoodRetest = PreferGoodRetest.IsChecked == true;
             Product.RetestMode = FirstMode.IsChecked == true ? RetestMode.First : RetestMode.Last;
             Product.Flow = _flow.ToList();
             if (Product.Files.Any(f => !Product.Flow.Any(s => s.Id == f.StageId) &&

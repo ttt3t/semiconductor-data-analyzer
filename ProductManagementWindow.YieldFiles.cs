@@ -84,7 +84,7 @@ public partial class ProductManagementWindow
             {
                 if (_closed || version != _version || _product?.Id != product.Id) break;
                 var config = ConfigLoader.Parse(sources[0].ConfigText, product.Name + ".ini");
-                opening = new MainWindow { Owner = this };
+                opening = new MainWindow();
                 opening.Show();
                 await opening.OpenManagedFilesAsync(sources, config, product.RetestMode);
                 opening = null;

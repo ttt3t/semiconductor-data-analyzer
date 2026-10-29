@@ -67,7 +67,7 @@ public partial class ProductManagementWindow : Window
         ProductActions.IsEnabled = product != null && !_busy;
         DgFlow.ItemsSource = product?.Flow;
         CategoryStages.ItemsSource = product?.Flow; CategoryStages.SelectedIndex = product?.Flow.Count > 0 ? 0 : -1;
-        TxtRules.Text = product == null ? "" : $"良品口径：{(product.IncludePartialPass ? "Pass + PartialPass" : "Pass")}；复测：{(product.RetestMode == RetestMode.Last ? "保留末次整条记录" : "保留首测整条记录")}。CP：批次 + 晶圆 + XY；FT：批次 + UUID（Test Num {product.UuidTestNumbers}）。综合分母为必测温度芯片并集，缺温/身份缺失显示未完成。文件登记顺序决定同温跨文件复测的先后。";
+        TxtRules.Text = product == null ? "" : $"良品口径：{(product.IncludePartialPass ? "Pass + PartialPass" : "Pass")}；复测：{(product.PreferGoodRetest ? "良品优先（无良品取末次）" : product.RetestMode == RetestMode.Last ? "保留末次整条记录" : "保留首测整条记录")}。CP：批次 + 晶圆 + XY；FT：批次 + UUID（Test Num {product.UuidTestNumbers}）。综合分母为必测温度芯片并集，缺温/身份缺失显示未完成。文件登记顺序决定同温跨文件复测的先后。";
         RefreshDetails();
     }
     private void RefreshDetails()
@@ -254,20 +254,24 @@ public partial class ProductManagementWindow : Window
     private async void OpenFile_Click(object sender, RoutedEventArgs e)
     {
         if (_product == null || _busy) return;
+        var product = _product;
         MainWindow? window = null;
         string[] paths = DgFiles.SelectedItems.OfType<FileRow>().Select(r => r.File.FilePath).ToArray();
         SetBusy(true);
         try
         {
-            var sources = ManagedAnalysisService.Sources(_product, DgFiles.SelectedItems.OfType<FileRow>().Select(r => r.File.Id));
-            var config = ConfigLoader.Parse(sources[0].ConfigText, _product.Name + ".ini"); window = new MainWindow { Owner = this }; window.Show();
-            await window.OpenManagedFilesAsync(sources, config, _product.RetestMode);
+            var sources = ManagedAnalysisService.Sources(product, DgFiles.SelectedItems.OfType<FileRow>().Select(r => r.File.Id));
+            var config = ConfigLoader.Parse(sources[0].ConfigText, product.Name + ".ini"); window = new MainWindow(); window.Show();
+            await window.OpenManagedFilesAsync(sources, config, product.RetestMode);
         }
-        catch (OperationCanceledException) { window?.Close(); TxtStatus.Text = "已取消打开。"; }
+        catch (OperationCanceledException) { window?.Close(); if (!_closed) TxtStatus.Text = "已取消打开。"; }
         catch (Exception ex)
         {
-            TxtStatus.Text = "打开失败：" + ex.Message;
-            MessageBox.Show(this, OpenFailureReport.Describe(ex, paths), "数据打开失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            if (!_closed)
+            {
+                TxtStatus.Text = "打开失败：" + ex.Message;
+                MessageBox.Show(this, OpenFailureReport.Describe(ex, paths), "数据打开失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
             window?.Close();
         }
         finally { if (!_closed) SetBusy(false); }

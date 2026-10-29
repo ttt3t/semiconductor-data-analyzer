@@ -4,8 +4,13 @@ namespace SemiconductorCsvAnalyzer.Services;
 
 public static class MapDataService
 {
-    public static List<WaferMapPage> PfPages(CsvParseResult data, TestItemData item, string? site)
+    public static List<WaferMapPage> PfPages(CsvParseResult data, TestItemData item, string? site, AnalyzerConfig? config = null)
     {
+        if (config?.PreferGoodRetest == true)
+        {
+            data = DatasetService.SelectRetests(data, RetestMode.Last, config);
+            item = data.Items.Single(i => i.Id == item.Id);
+        }
         bool IncludeSite(string value) => site == null || (string.IsNullOrWhiteSpace(value) ? "(空)" : value) == site;
         // Pool all wafer measurements once. A wafer switch must not change the meaning of a color.
         // Retain the PF map's existing valid-measurement and Site population.
@@ -33,9 +38,10 @@ public static class MapDataService
         }).ToList();
     }
 
-    public static List<WaferMapPage> BinPages(CsvParseResult data, bool soft)
+    public static List<WaferMapPage> BinPages(CsvParseResult data, bool soft, AnalyzerConfig? config = null)
     {
         var colors = BinPalette.Create(data.Records.Select(r => soft ? r.SBin : r.HBin));
+        if (config?.PreferGoodRetest == true) data = DatasetService.SelectRetests(data, RetestMode.Last, config);
         return data.Wafers.Select(wafer => new WaferMapPage(wafer,
             data.Devices.Where(d => d.WaferId == wafer && d.X.HasValue && d.Y.HasValue).Select(d =>
             {

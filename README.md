@@ -1,6 +1,6 @@
 # Semiconductor Data Analyzer
 
-**CSV Analyzer V2.0.9 · GYF**
+**CSV Analyzer V2.0.10 · GYF**
 
 A Windows desktop application for semiconductor CSV / STDF test-data analysis, built with .NET 8 and WPF.
 
@@ -21,6 +21,12 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 - 产品目录和统计摘要存于本机用户目录 `SemiconductorCsvAnalyzer/ProductLibrary`；保存时保留上一份备份，不保存完整测量矩阵。
 
 只启动独立分析器可使用 `SemiconductorCsvAnalyzer.exe --analyzer`。详细口径见 [使用手册](Docs/UserGuide.md)。
+
+## V2.0.10 更新
+
+- 产品与流程、分析器设置的“统计与绘图”增加“良品优先”，按 HBIN 取同一芯片的最新良品记录，没有良品回退末次；产品可沿用“良品包含 PartialPass”口径。设置分别保存到产品目录和 INI，旧配置默认关闭。
+- 分析器默认采用最新复测；启用良品优先时固定到该口径。统计、筛选、BIN / P/F Map、末测 CSV/XLSX 与联合良率采用相同选值，原始测试历史仍完整保留；首测/全部记录可在关闭优先选项后作对照。
+- 管理器打开的分析器不再绑定为子窗口。独立入口、数据文件和良率明细打开的分析器均可独立最小化、关闭；关闭管理器保留已打开的分析器和数据，最后一个窗口关闭时程序才退出。
 
 ## V2.0.9 更新
 
@@ -167,3 +173,5 @@ Fail / 复测良品芯片 XLSX 的结构、冻结、交替配色、CP/FT 分组�
 列搜索检查：`bash Tests/run-column-search.sh` 验证搜索规则、缺失数值和开关状态转换。Windows 上先编译 Release，再运行 `pwsh Tests/run-column-search-ui.ps1`，检查实际主表、右键筛选接管、双击复制填入和隐藏搜索框的行为。
 
 Map 表格检查：`bash Tests/run-map-table-copy.sh` 验证坐标方向、空位、BIN/PF 值、重复坐标、边界与大晶圆。Windows 上运行 `pwsh Tests/run-clipboard-busy.ps1 -Assembly ./bin/Release/net8.0-windows/SemiconductorCsvAnalyzer.dll`，验证三类 Map 的实际剪贴板、晶圆切换、热力图 / 置灰显示，以及占用后重试。
+
+良品优先检查：`bash Tests/run-good-retest.sh` 验证 HBIN、CP/FT 身份、跨文件/月份、PartialPass、缓存与持久化；Windows 运行 `pwsh Tests/run-good-retest-ui.ps1` 验证实际勾选、重算、筛选和导出。`pwsh Tests/run-yield-multiselect.ps1` 同时验证三个打开入口的独立窗口生命周期。

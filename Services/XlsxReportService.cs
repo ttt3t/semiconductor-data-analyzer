@@ -105,7 +105,7 @@ public static class XlsxReportService
         if (options.OutlierSigma is double n && (!double.IsFinite(n) || n <= 0))
             throw new ArgumentOutOfRangeException(nameof(options.OutlierSigma));
         progress.At("筛选晶圆与复测记录");
-        var records = IntegratedCsvService.SelectRecords(data, options.Wafers, options.RetestMode);
+        var records = IntegratedCsvService.SelectRecords(data, options.Wafers, options.RetestMode, config);
         progress.At("计算导出离群范围");
         var bounds = options.OutlierSigma.HasValue
             ? IntegratedCsvService.CalculateOutlierBounds(data.Items, records, options.OutlierSigma.Value) : null;
@@ -128,11 +128,11 @@ public static class XlsxReportService
                 workbook.Style.Font.FontSize = 10;
                 workbook.Style.Font.FontColor = Ink;
                 progress.At("创建报告工作表");
-                var summaries = Sheet(workbook, "Testitem Yield", "测试项统计", sourceName, Context(options));
-                var sbins = Sheet(workbook, "SBIN Map", "SBIN 分布与分类", sourceName, BinContext(options));
-                var hbins = Sheet(workbook, "HBIN Map", "HBIN 分布与统计", sourceName, BinContext(options));
+                var summaries = Sheet(workbook, "Testitem Yield", "测试项统计", sourceName, Context(options, config));
+                var sbins = Sheet(workbook, "SBIN Map", "SBIN 分布与分类", sourceName, BinContext(options, config));
+                var hbins = Sheet(workbook, "HBIN Map", "HBIN 分布与统计", sourceName, BinContext(options, config));
                 var favorites = Sheet(workbook, "关注测项", "关注测试项", sourceName,
-                    Context(options) + "；关注图表合并 Site 和 Wafer；直方图：" + HistogramName(options.HistogramMode) +
+                    Context(options, config) + "；关注图表合并 Site 和 Wafer；直方图：" + HistogramName(options.HistogramMode) +
                     "；散点排序：" + (options.ScatterOrder == ScatterOrder.Site ? "Site → SN" : options.ScatterOrder == ScatterOrder.Wafer ? "晶圆 → SN" : "SN") +
                     (options.ScatterUseLimitRange ? "；Zoom limit" : "；Zoom all"));
                 SummaryColumns(summaries); SummaryColumns(favorites);
@@ -219,14 +219,14 @@ public static class XlsxReportService
     { RetestMode.First => "只保留首测", RetestMode.Last => "复测覆盖首测",
         RetestMode.OnlyRetests => "只保留复测", _ => "首测与复测均保留" };
     private static string HistogramName(int mode) => mode switch { 1 => "规格区间", 2 => "中位数中心", _ => "固定等宽" };
-    private static string Context(XlsxReportOptions options) =>
-        $"晶圆 {options.Wafers.Count} 个 | {ModeName(options.RetestMode)} | " +
+    private static string Context(XlsxReportOptions options, AnalyzerConfig config) =>
+        $"晶圆 {options.Wafers.Count} 个 | {(config.PreferGoodRetest && options.RetestMode == RetestMode.Last ? "良品优先，无良品取末次" : ModeName(options.RetestMode))} | " +
         (options.OutlierSigma.HasValue ? $"剔除均值 ± {options.OutlierSigma.Value:G}σ 以外的测项值（单次）" : "不剔除离群点") +
         (options.CombineSites ? " | 合并 Site" : " | 按 Site 分行") +
         (options.CombineWafers ? " | 合并 Wafer" : " | 按 Wafer 分行");
-    private static string BinContext(XlsxReportOptions options) =>
+    private static string BinContext(XlsxReportOptions options, AnalyzerConfig config) =>
         (options.RetestMode == RetestMode.OnlyRetests ? "仅统计有复测测项的芯片；" : "") +
-        "按晶圆与芯片选择整条" + (options.RetestMode == RetestMode.First ? "首测" : "末测") +
+        "按晶圆与芯片选择整条" + (options.RetestMode == RetestMode.First ? "首测" : config.PreferGoodRetest ? "最新良品（无良品取末次）" : "末测") +
         "记录；Map 仅绘制有完整坐标的芯片。BIN 占比以有相应 BIN 的芯片为分母。";
 
     private static IXLWorksheet Sheet(XLWorkbook workbook, string name, string title, string source, string context)
@@ -333,14 +333,8 @@ public static class XlsxReportService
                     .Select(DatasetService.ChipKey).ToHashSet();
                 raw = raw.Where(r => retested.Contains(DatasetService.ChipKey(r))).ToList();
             }
-            var chosen = new Dictionary<(string Wafer, int? X, int? Y, string Fallback), CsvRecord>();
-            foreach (var record in raw)
-            {
-                AnalysisOperation.CheckCancellation();
-                if (mode == RetestMode.First) chosen.TryAdd(DatasetService.ChipKey(record), record);
-                else chosen[DatasetService.ChipKey(record)] = record;
-            }
-            var dies = chosen.Values.Where(r => r.X.HasValue && r.Y.HasValue).Select(r =>
+            var chosen = RetestPreference.SelectWhole(raw, mode, config);
+            var dies = chosen.Where(r => r.X.HasValue && r.Y.HasValue).Select(r =>
             {
                 string category = soft ? r.SBin : r.HBin;
                 if (string.IsNullOrWhiteSpace(category)) category = "(空)";

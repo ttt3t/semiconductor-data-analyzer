@@ -18,6 +18,7 @@ public sealed class ManagedProduct
     public string ConfigText { get; set; } = "";
     public string UuidTestNumbers { get; set; } = "";
     public bool IncludePartialPass { get; set; }
+    public bool PreferGoodRetest { get; set; }
     public RetestMode RetestMode { get; set; } = RetestMode.Last;
     public List<ProductTestStage> Flow { get; set; } = new();
     public List<ManagedDataFile> Files { get; set; } = new();

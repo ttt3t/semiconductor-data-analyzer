@@ -1,0 +1,90 @@
+using System.IO;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static void Check(bool ok, string name) { if (!ok) throw new Exception(name); checks++; Console.WriteLine("PASS " + name); }
+    static CsvRecord R(string id, int x, string bin, string value, string wafer = "W") => new()
+    { Id = id, SerialNumber = id, WaferId = wafer, X = x, Y = 0, Lot = "L", Site = "1", HBin = bin, SBin = bin, Measurements = new() { ["a"] = value } };
+    static int Main(string[] args)
+    {
+        try
+        {
+            var config = new AnalyzerConfig { PreferGoodRetest = true, PartialPassHBins = new() { "3" } };
+            var rows = new List<CsvRecord> { R("good-first", 0, "1", "1"), R("bad-later", 0, "2", "20"),
+                R("bad-first", 1, "2", "21"), R("good-middle", 1, "1", "2"), R("good-last", 1, "01", "3"),
+                R("fail-old", 2, "2", "22"), R("fail-last", 2, "4", "23"),
+                R("pass", 3, "1", "4"), R("partial", 3, "3", "5"), R("other-wafer", 0, "2", "24", "W2") };
+            var selected = RetestPreference.SelectWhole(rows, RetestMode.Last, config);
+            Check(selected.Select(r => r.Id).SequenceEqual(new[] { "good-first", "good-last", "fail-last", "pass", "other-wafer" }), "latest pass wins; no-pass chips use latest; separate wafers remain distinct");
+            Check(selected.All(r => rows.Any(source => ReferenceEquals(source, r))), "selected records share original raw measurements and identities");
+            config.GoodRetestIncludePartialPass = true;
+            Check(RetestPreference.SelectWhole(rows, RetestMode.Last, config).Any(r => r.Id == "partial"), "including PartialPass uses the latest qualifying good record");
+            config.GoodRetestIncludePartialPass = false;
+            Check(RetestPreference.SelectWhole(rows, RetestMode.First, config).Select(r => r.Id).SequenceEqual(new[] { "good-first", "bad-first", "fail-old", "pass", "other-wafer" }), "explicit first-test comparison remains available");
+            config.PreferGoodRetest = false;
+            Check(RetestPreference.SelectWhole(rows, RetestMode.Last, config).Any(r => r.Id == "bad-later"), "unchecked preference restores latest whole-record BIN results");
+            config.PreferGoodRetest = true;
+            var ft = new[] { R("ft-pass", 0, "1", "1"), R("ft-fail", 10, "2", "20", "W2"), R("uuid-missing-a", 1, "1", "1"), R("uuid-missing-b", 1, "2", "20") };
+            foreach (var r in ft) r.IsFtIdentity = true;
+            ft[0].RetestUuid = ft[1].RetestUuid = "UUID";
+            Check(RetestPreference.SelectWhole(ft, RetestMode.Last, config).Select(r => r.Id).SequenceEqual(new[] { "ft-pass", "uuid-missing-a", "uuid-missing-b" }), "FT UUID crosses wafer changes, while missing UUID records never merge");
+            ft[1].Lot = "OTHER";
+            Check(RetestPreference.SelectWhole(ft, RetestMode.Last, config).Count == 4, "same UUID in separate lots is not the same chip");
+            var item = new TestItemData { Id = "a", DisplayName = "A", Name = "A", LowLimit = 0, HighLimit = 10 };
+            var data = DatasetService.Build(new() { item }, rows); using var lease = new DatasetLease(rows);
+            var view = DatasetService.SelectRetests(data, RetestMode.Last, config);
+            Check(view.Records.Select(r => r.Id).SequenceEqual(selected.Select(r => r.Id)) && view.Items[0].Values.Count == 5 && data.Records.Count == 10, "analyzer selection follows good whole records while retaining all loaded history");
+            Check(BinStatisticsService.Build(rows, RetestMode.Last, config).PassCount == 3, "BIN statistics use the same preferred records as analyzer statistics");
+            var filtered = SampleFilterService.Apply(data, new[] { new SampleRange("a", null, 10) }, RetestMode.Last, SampleMatchMode.Intersection, config);
+            Check(filtered.Records.Select(r => DatasetService.ChipKey(r)).Distinct().Count() == 3, "sample filter membership uses preferred good records");
+            var snapshot = SimulationSnapshot.Build(data, config, RetestMode.Last, default);
+            Check(snapshot.Count == 5 && snapshot.Chips.Select(r => r.Id).Contains("good-first"), "joint yield snapshots share good-priority identities and measurements");
+            var round = ConfigLoader.Parse(ConfigLoader.Serialize(config));
+            Check(round.PreferGoodRetest && !round.GoodRetestIncludePartialPass && !ConfigLoader.Parse("[Histogram]\nBinCount=40").PreferGoodRetest, "INI round-trip persists preference and old INIs default off");
+
+            string folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            var csvConfig = new AnalyzerConfig { TestItemRow = 1, LowLimitRow = 2, HighLimitRow = 3, UnitRow = 4, TestNumberRow = 5,
+                DataStartRow = 6, TestItemStartColumn = 8, SerialNumberColumn = 1, XColumn = 2, YColumn = 3, SiteColumn = 4, SBinColumn = 5, HBinColumn = 6, WaferColumn = 7, PartialPassHBins = new() { "3" } };
+            var stage = new ProductTestStage { Id = "CP", Kind = "CP" };
+            var product = new ManagedProduct { Name = "good priority", ConfigText = ConfigLoader.Serialize(csvConfig), Flow = new() { stage } };
+            foreach (var (name, month, body) in new[] { ("old", 1, "1,0,0,1,1,1,W,1\n2,1,0,1,2,2,W,20\n3,2,0,1,1,1,W,2\n"),
+                ("new", 2, "4,0,0,1,2,2,W,20\n5,1,0,1,4,4,W,21\n6,2,0,1,3,3,W,3\n") })
+            {
+                string path = Path.Combine(folder, name + ".csv");
+                File.WriteAllText(path, "SN,X,Y,Site,SBIN,HBIN,Wafer,A\nLSL,,,,,,,0\nUSL,,,,,,,10\nUnit,,,,,,,V\nTest Num,,,,,,,101\n" + body);
+                product.Files.Add(new() { Id = name, FilePath = path, StageId = stage.Id, Lot = "L", TestTime = new DateTime(2026, month, 1) });
+            }
+            var latest = ProductYieldService.Calculate(product); var lastRow = latest.Yields.Single(r => !r.IsCombined);
+            Check(lastRow.Total == 3 && lastRow.Good == 0 && latest.FailedFiles == 0, "manager unchecked uses latest retest across files");
+            product.Snapshot = latest; product.PreferGoodRetest = true;
+            Check(!ProductYieldService.IsCurrent(product), "preference changes invalidate the cached management snapshot");
+            var good = ProductYieldService.Calculate(product); var goodRow = good.Yields.Single(r => !r.IsCombined);
+            Check(goodRow.Total == 3 && goodRow.Good == 2 && goodRow.Failed == 1 && good.FailedFiles == 0, "manager prioritizes pass across registered files within the same stage");
+            Check(good.MonthlyYields.Where(r => !r.IsCombined && r.Period == "2026-01").Sum(r => r.Good) == 2, "monthly contribution follows the chosen good record's test date");
+            product.IncludePartialPass = true;
+            var partial = ProductYieldService.Calculate(product).Yields.Single(r => !r.IsCombined);
+            Check(partial.Good == 2 && partial.Pass == 1 && partial.PartialPass == 1, "manager's PartialPass good definition chooses the newer partial record when enabled");
+            var fileConfig = ProductYieldService.FileConfig(product, product.Files[0]);
+            Check(fileConfig.PreferGoodRetest && fileConfig.GoodRetestIncludePartialPass, "opening managed sources carries the product's preference and PartialPass definition");
+            var hot = new ProductTestStage { Id = "HOT", Kind = "CP", Name = "hot", Temperature = 85 };
+            product.Flow.Add(hot);
+            string hotPath = Path.Combine(folder, "hot.csv");
+            File.WriteAllText(hotPath, "SN,X,Y,Site,SBIN,HBIN,Wafer,A\nLSL,,,,,,,0\nUSL,,,,,,,10\nUnit,,,,,,,V\nTest Num,,,,,,,101\n7,0,0,1,2,2,W,30\n8,1,0,1,1,1,W,1\n9,2,0,1,1,1,W,1\n");
+            product.Files.Add(new() { Id = "hot", FilePath = hotPath, StageId = hot.Id, Lot = "L", TestTime = new DateTime(2026, 3, 1) });
+            Check(ProductYieldService.Calculate(product).Yields.Single(r => r.IsCombined).Good == 1, "a pass in another temperature cannot override a failing required stage");
+            string catalog = Path.Combine(folder, "catalog.json"); var store = new ProductCatalogStore(catalog);
+            store.Save(new ProductCatalog { Products = new() { product } });
+            Check(new ProductCatalogStore(catalog).Catalog.Products[0].PreferGoodRetest, "product catalog persists preference without changing original data paths");
+            using (new AnalysisOperation(new CancellationToken(true)))
+            {
+                bool canceled = false; try { RetestPreference.SelectWhole(rows, RetestMode.Last, config); } catch (OperationCanceledException) { canceled = true; }
+                Check(canceled, "preferred record selection respects cancellation");
+            }
+            Console.WriteLine($"ALL {checks} GOOD RETEST CHECKS PASSED"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

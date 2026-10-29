@@ -29,22 +29,22 @@ public static class IntegratedCsvService
         => SaveRows(path, data.Items, data.Records);
 
     public static int Save(string path, CsvParseResult data, IReadOnlyCollection<string> wafers, RetestMode mode,
-        double? outlierSigma = null)
+        double? outlierSigma = null, AnalyzerConfig? config = null)
     {
         if (outlierSigma.HasValue && (!double.IsFinite(outlierSigma.Value) || outlierSigma.Value <= 0))
             throw new ArgumentOutOfRangeException(nameof(outlierSigma), "离群阈值必须大于 0 且为有限数字。");
-        var records = SelectRecords(data, wafers, mode);
+        var records = SelectRecords(data, wafers, mode, config);
         var bounds = outlierSigma.HasValue ? CalculateOutlierBounds(data.Items, records, outlierSigma.Value) : null;
         SaveRows(path, data.Items, records, bounds);
         return records.Count;
     }
 
-    internal static List<CsvRecord> SelectRecords(CsvParseResult data, IReadOnlyCollection<string> wafers, RetestMode mode)
+    internal static List<CsvRecord> SelectRecords(CsvParseResult data, IReadOnlyCollection<string> wafers, RetestMode mode, AnalyzerConfig? config = null)
     {
         var selected = wafers.ToHashSet(StringComparer.Ordinal);
         if (selected.Count == 0 || selected.Except(data.Wafers).Any())
             throw new InvalidDataException("请至少选择一个有效晶圆。");
-        return DatasetService.SelectRetestRecords(data.Records.Where(r => selected.Contains(r.WaferId)).ToList(), mode);
+        return DatasetService.SelectRetestRecords(data.Records.Where(r => selected.Contains(r.WaferId)).ToList(), mode, config);
     }
 
     internal static (double Lower, double Upper)[] CalculateOutlierBounds(IReadOnlyList<TestItemData> items,

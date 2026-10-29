@@ -10,6 +10,7 @@ public partial class MainWindow
     private CsvParseResult? _scopeSource;
     private IReadOnlyList<SampleRange> _scopeRanges = Array.Empty<SampleRange>();
     private Models.RetestMode _scopeMode;
+    private string _scopeRetestDefinition = "";
     private SampleMatchMode _sampleMatch, _scopeMatch;
     private SampleFilterWindow? _sampleFilterWindow;
     private HashSet<string>? _sampleIncludedIds;

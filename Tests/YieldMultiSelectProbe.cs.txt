@@ -61,11 +61,17 @@ static class Probe
             Check(resolved?.Length == 2 && ManagedAnalysisService.YieldFiles((ManagedProduct)Field(window, "_product")!, resolved).Select(f => f.Id).SequenceEqual(new[] { "F1", "F2" }), "current selection resolves the union in original registration order");
             Call(window, "OpenYield_Click", open, new RoutedEventArgs());
             first.ContextMenu.IsOpen = false;
-            Until(() => !(bool)Field(window, "_busy")! && window.OwnedWindows.OfType<MainWindow>().Count() == 1);
-            var analysis = window.OwnedWindows.OfType<MainWindow>().Single(); var data = (CsvParseResult)Field(analysis, "_data")!;
+            Until(() => !(bool)Field(window, "_busy")! && app.Windows.OfType<MainWindow>().Count() == 1);
+            var analysis = app.Windows.OfType<MainWindow>().Single(); var data = (CsvParseResult)Field(analysis, "_data")!;
             Check(data.Records.Select(r => r.SerialNumber).SequenceEqual(new[] { "1", "2" }) && ((IReadOnlyList<CsvImportSource>)Field(analysis, "_sources")!).Count == 2,
                 "actual context action opens both selected rows as one analyzer with ordered source records");
-            analysis.Close(); Pump();
+            Check(analysis.Owner == null, "analyzer opened from yield details has no manager owner");
+            window.WindowState = WindowState.Minimized; Pump();
+            Check(analysis.IsVisible && analysis.WindowState != WindowState.Minimized, "minimizing manager leaves analyzer visible");
+            window.WindowState = WindowState.Normal; analysis.WindowState = WindowState.Minimized; Pump();
+            Check(window.IsVisible && window.WindowState == WindowState.Normal, "minimizing analyzer leaves manager visible");
+            analysis.WindowState = WindowState.Normal; analysis.Close(); Pump();
+            Check(window.IsVisible, "closing analyzer leaves manager open");
 
             RightClick(Row(grid, hotRow)); Pump();
             Check(grid.SelectedItems.Count == 1 && ReferenceEquals(grid.SelectedItem, hotRow), "right-click on an unselected row replaces the previous selection");
@@ -73,16 +79,31 @@ static class Probe
             var mixedContainer = Row(grid, coldRows[0]); open = Menu(mixedContainer);
             Call(window, "OpenYield_Click", open, new RoutedEventArgs());
             mixedContainer.ContextMenu.IsOpen = false;
-            Until(() => !(bool)Field(window, "_busy")! && window.OwnedWindows.OfType<MainWindow>().Count() == 2);
-            Check(window.OwnedWindows.OfType<MainWindow>().All(w => ((CsvParseResult)Field(w, "_data")!).Records.Count == 1), "different temperatures open as separate valid merged groups");
-            foreach (var child in window.OwnedWindows.OfType<MainWindow>().ToArray()) child.Close(); Pump();
+            Until(() => !(bool)Field(window, "_busy")! && app.Windows.OfType<MainWindow>().Count() == 2);
+            Check(app.Windows.OfType<MainWindow>().All(w => ((CsvParseResult)Field(w, "_data")!).Records.Count == 1), "different temperatures open as separate valid merged groups");
+            var survivors = app.Windows.OfType<MainWindow>().ToArray();
+            Check(survivors.All(w => w.Owner == null), "all temperature analyzer windows are independent");
+            foreach (var child in survivors) child.Close(); Pump();
 
             grid.SelectedItems.Clear(); foreach (var row in coldRows) grid.SelectedItems.Add(row);
             first = Row(grid, coldRows[0]); open = Menu(first);
             ((ManagedProduct)Field(window, "_product")!).Snapshot!.DefinitionSignature = "old-snapshot";
             resolved = Wait((Task<ManagedYieldRow[]?>)Call(window, "CurrentYieldRowsAsync", open)!);
             Check(resolved?.Length == 2 && resolved.SelectMany(r => r.SourceFileIds).ToHashSet().SetEquals(new[] { "F1", "F2" }), "recomputing an old snapshot remaps every selected row instead of losing multi-selection");
-            first.ContextMenu.IsOpen = false; window.Close(); Pump();
+            first.ContextMenu.IsOpen = false;
+            Call(window, "OpenYield_Click", Menu(Row(grid, resolved![0])), new RoutedEventArgs());
+            Until(() => !(bool)Field(window, "_busy")! && app.Windows.OfType<MainWindow>().Count() == 1);
+            ((TabControl)window.FindName("MainTabs")).SelectedIndex = 2; Pump();
+            var files = (DataGrid)window.FindName("DgFiles"); files.SelectedItem = files.Items[0];
+            Call(window, "OpenFile_Click", window, new RoutedEventArgs());
+            Until(() => !(bool)Field(window, "_busy")! && app.Windows.OfType<MainWindow>().Count() == 2);
+            Check(app.Windows.OfType<MainWindow>().All(w => w.Owner == null), "file-list opening also creates an independent analyzer");
+            Call(window, "Standalone_Click", window, new RoutedEventArgs()); Pump();
+            var independent = app.Windows.OfType<MainWindow>().ToArray();
+            Check(independent.Length == 3 && independent.All(w => w.Owner == null), "standalone and managed analyzer entry points use independent top-level windows");
+            window.Close(); Pump();
+            Check(independent.All(w => w.IsVisible) && independent.Count(w => ((CsvParseResult)Field(w, "_data")!).Records.Count > 0) == 2, "closing manager preserves all analyzers and their loaded data");
+            foreach (var child in independent) child.Close(); Pump();
             Check(failures.Count == 0, "multi-row selection, opening, recalculation and closing have no dispatcher errors");
             Console.WriteLine($"ALL {checks} YIELD MULTI-SELECT CHECKS PASSED"); app.Shutdown(); return 0;
         }

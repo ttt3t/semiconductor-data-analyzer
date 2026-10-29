@@ -36,6 +36,8 @@ public sealed class AnalyzerConfig
     // Original disposition comes exclusively from HBIN; failed records are never filtered.
     public List<string> PassHBins { get; set; } = new() { "1" };
     public List<string> PartialPassHBins { get; set; } = new();
+    public bool PreferGoodRetest { get; set; }
+    public bool GoodRetestIncludePartialPass { get; set; }
     public int ProductColumn { get; set; }
     public int ProgramColumn { get; set; }
     public int LotColumn { get; set; }

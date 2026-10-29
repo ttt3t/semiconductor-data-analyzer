@@ -22,6 +22,8 @@ public sealed class SimulationSnapshot
     public static SimulationSnapshot Build(CsvParseResult data, AnalyzerConfig config, RetestMode mode, CancellationToken token)
     {
         if (mode is not (RetestMode.First or RetestMode.Last)) throw new ArgumentException("芯片联合判定请选择首测或末测；不能重复计算同一芯片。");
+        if (mode == RetestMode.Last && config.PreferGoodRetest)
+            data = DatasetService.SelectRetests(data, mode, config);
         var groups = new Dictionary<(string, int?, int?, string), int>(data.Records.Count);
         var chips = new List<CsvRecord>(data.Records.Count);
         var rowChips = new int[data.Records.Count];

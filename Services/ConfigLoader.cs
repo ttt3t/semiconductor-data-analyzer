@@ -108,6 +108,8 @@ public static class ConfigLoader
 
             case "PASSHBINS": c.PassHBins = List(value); break;
             case "PARTIALPASSHBINS": c.PartialPassHBins = List(value); break;
+            case "PREFERGOODRETEST": c.PreferGoodRetest = ParseBool(value); break;
+            case "GOODRETESTINCLUDEPARTIALPASS": c.GoodRetestIncludePartialPass = ParseBool(value); break;
             case "PRODUCTCOLUMN": c.ProductColumn = ParseNonNegativeInt(key, value); break;
             case "PROGRAMCOLUMN": c.ProgramColumn = ParseNonNegativeInt(key, value); break;
             case "LOTCOLUMN": c.LotColumn = ParseNonNegativeInt(key, value); break;
@@ -263,6 +265,10 @@ public static class ConfigLoader
             [HBINClassification]
             PassHBins={string.Join(",", c.PassHBins)}
             PartialPassHBins={string.Join(",", c.PartialPassHBins)}
+
+            [RetestSelection]
+            PreferGoodRetest={c.PreferGoodRetest}
+            GoodRetestIncludePartialPass={c.GoodRetestIncludePartialPass}
 
             [PredictionContext]
             ; 列号为 0 或单元格为空时使用下列默认值；产品/程序未知时不做缺测预测。

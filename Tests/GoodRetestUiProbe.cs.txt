@@ -1,0 +1,87 @@
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Threading;
+using ClosedXML.Excel;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static void Check(bool ok, string text) { if (!ok) throw new Exception(text); checks++; Console.WriteLine("PASS " + text); }
+    static object? Field(object target, string name) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target);
+    static object? Call(object target, string name, params object[] args) => target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(target, args);
+    static void Pump() { var f = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => f.Continue = false)); Dispatcher.PushFrame(f); }
+    static void Wait(Task task) { var w = Stopwatch.StartNew(); while (!task.IsCompleted) { Pump(); Thread.Sleep(3); if (w.Elapsed.TotalSeconds > 60) throw new TimeoutException(); } task.GetAwaiter().GetResult(); Pump(); }
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            string folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            var app = new App(); app.InitializeComponent(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            var failures = new List<Exception>(); app.DispatcherUnhandledException += (_, e) => { failures.Add(e.Exception); e.Handled = true; };
+            typeof(AppSettings).GetField("_userDirectory", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, folder);
+            var config = new AnalyzerConfig { TestItemRow = 1, LowLimitRow = 2, HighLimitRow = 3, UnitRow = 4, TestNumberRow = 5,
+                DataStartRow = 6, TestItemStartColumn = 8, SerialNumberColumn = 1, XColumn = 2, YColumn = 3, SiteColumn = 4, SBinColumn = 5, HBinColumn = 6, WaferColumn = 7 };
+            var settings = new SettingsWindow(config, _ => { }); settings.Show(); Pump();
+            ((TabControl)settings.FindName("SettingsTabs")).SelectedItem = settings.FindName("AnalysisTab"); Pump();
+            var prefer = (CheckBox)settings.FindName("ChkPreferGoodRetest");
+            Check(prefer.IsChecked == false, "old analyzer INI initializes good-priority checkbox off");
+            prefer.IsChecked = true;
+            var edited = (AnalyzerConfig)Call(settings, "ReadConfig")!;
+            Check(edited.PreferGoodRetest && ((TextBox)settings.FindName("TxtConfig")).Text.Contains("[RetestSelection]"), "statistics/plot checkbox persists through actual INI editing pipeline");
+            settings.Close();
+            var product = new ManagedProduct { Name = "UI-good", ConfigText = ConfigLoader.Serialize(config), Flow = new() { new ProductTestStage() }, RetestMode = RetestMode.First };
+            foreach (bool enabled in new[] { true, false })
+            {
+                var editor = new ProductEditorWindow(product);
+                editor.Loaded += (_, _) => editor.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+                {
+                    ((CheckBox)editor.FindName("PreferGoodRetest")).IsChecked = enabled;
+                    Call(editor, "PreferGoodRetest_Click", editor, new RoutedEventArgs());
+                    Check(((RadioButton)editor.FindName("LastMode")).IsChecked == true && ((RadioButton)editor.FindName("FirstMode")).IsEnabled == !enabled, "product preference selects latest semantics and handles first-test comparison controls: " + enabled);
+                    Call(editor, "Save_Click", editor, new RoutedEventArgs());
+                }));
+                Check(editor.ShowDialog() == true && editor.Product.PreferGoodRetest == enabled && editor.Product.RetestMode == RetestMode.Last, "product save persists checkbox and latest fallback: " + enabled);
+                product = editor.Product;
+            }
+            string path = Path.Combine(folder, "retests.csv");
+            File.WriteAllText(path, "SN,X,Y,Site,SBIN,HBIN,Wafer,A\nLSL,,,,,,,0\nUSL,,,,,,,10\nUnit,,,,,,,V\nTest Num,,,,,,,101\n1,0,0,1,1,1,W,1\n2,0,0,1,2,2,W,20\n3,1,0,1,2,2,W,30\n");
+            var main = new MainWindow(new LayoutSettings(Path.Combine(folder, "layout.json")), new RecentFilesService(Path.Combine(folder, "recent.json")), new UiPreferencesService(Path.Combine(folder, "ui.json")));
+            main.Show(); Wait(main.OpenManagedFilesAsync(new[] { new CsvImportSource(path) }, config, RetestMode.Last));
+            var original = (CsvParseResult)Field(main, "_data")!;
+            var grid = (DataGrid)main.FindName("DgTestItems");
+            Check(grid.Items.OfType<TestItemSummary>().Single().Mean == 25, "unchecked analyzer computes latest retest measurements");
+            Wait((Task)Call(main, "ApplySettings", edited)!);
+            Check(ReferenceEquals(original, Field(main, "_data")) && original.Records.Count == 3 && grid.Items.OfType<TestItemSummary>().Single().Mean == 15.5, "enabling preference recalculates view without rereading or deleting raw history");
+            Check(!((ListBox)main.FindName("LstRetestMode")).IsEnabled && ((ListBox)main.FindName("LstRetestMode")).SelectedIndex == (int)RetestMode.Last, "analyzer clearly shows preferred-latest mode rather than an inconsistent all-record mode");
+            var pf = MapDataService.PfPages(original, original.Items[0], null, edited).Single().Dies;
+            var bins = MapDataService.BinPages(original, true, edited).Single().Dies;
+            Check(pf.Single(d => d.X == 0).Value == 1 && bins.Single(d => d.X == 0).SBin == "1", "PF and BIN maps follow the same good record as analyzer statistics");
+            var rules = new[] { new SampleRange(original.Items[0].Id, null, 10) };
+            Wait((Task)Call(main, "ApplySampleFiltersAsync", rules, SampleMatchMode.Intersection)!);
+            Check(((CsvParseResult)Field(main, "_scopeData")!).Records.Count == 2, "sample filter admits the chip whose preferred good record satisfies the condition");
+            edited.PreferGoodRetest = false; Wait((Task)Call(main, "ApplySettings", edited)!);
+            Check(((CsvParseResult)Field(main, "_scopeData")!).Records.Count == 0 && ((ListBox)main.FindName("LstRetestMode")).IsEnabled, "turning preference off invalidates cached membership and restores selectable latest mode");
+            Wait((Task)Call(main, "ApplySampleFiltersAsync", Array.Empty<SampleRange>(), SampleMatchMode.Intersection)!);
+            Check(grid.Items.OfType<TestItemSummary>().Single().Mean == 25 && ReferenceEquals(original, Field(main, "_data")), "removing filter restores latest statistics over unchanged loaded data");
+            edited.PreferGoodRetest = true;
+            string report = Path.Combine(folder, "preferred.xlsx");
+            Wait(XlsxReportService.SaveAsync(report, original, edited, new(new[] { "W" }, RetestMode.Last, null, 0, true, Array.Empty<string>()), "test"));
+            using (var book = new XLWorkbook(report))
+                Check(book.Worksheet(1).Cell(8, 16).GetDouble() == 15.5, "XLSX test-item summary uses preferred records consistently with GUI");
+            string output = Path.Combine(folder, "preferred.csv");
+            Check(IntegratedCsvService.Save(output, original, new[] { "W" }, RetestMode.Last, config: edited) == 2, "integrated CSV exports one preferred record per chip");
+            var csv = DataFileService.Parse(output, edited);
+            Check(csv.Items[0].Values.Any(v => v.Value == 1) && csv.Items[0].Values.All(v => v.Value != 20), "CSV export retains the preferred acquisition's actual value");
+            main.Close(); Pump(); Check(failures.Count == 0, "settings, filtering, export and close raise no dispatcher exceptions");
+            app.Shutdown(); Console.WriteLine($"ALL {checks} GOOD RETEST UI CHECKS PASSED"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

@@ -89,7 +89,7 @@ public static class ManagementReportService
                 IXLWorksheet Sheet(string name, string[] headers)
                 {
                     var sheet = book.AddWorksheet(name); sheet.Cell(1, 1).Value = product.Name + " · " + name;
-                    sheet.Cell(2, 1).Value = $"计算时间 {snapshot.CalculatedUtc.ToLocalTime():yyyy-MM-dd HH:mm}；{(product.IncludePartialPass ? "Pass + PartialPass" : "Pass")}；{product.RetestMode}；未覆盖文件 {snapshot.FailedFiles}；筛选 {filter}；趋势口径 {periodLabel}";
+                    sheet.Cell(2, 1).Value = $"计算时间 {snapshot.CalculatedUtc.ToLocalTime():yyyy-MM-dd HH:mm}；{(product.IncludePartialPass ? "Pass + PartialPass" : "Pass")}；{(product.PreferGoodRetest ? "良品优先" : product.RetestMode.ToString())}；未覆盖文件 {snapshot.FailedFiles}；筛选 {filter}；趋势口径 {periodLabel}";
                     for (int i = 0; i < headers.Length; i++) sheet.Cell(4, i + 1).Value = headers[i];
                     var head = sheet.Range(4, 1, 4, Math.Max(1, headers.Length)); head.Style.Fill.BackgroundColor = XLColor.FromHtml("#315B82"); head.Style.Font.FontColor = XLColor.White; head.Style.Font.Bold = true;
                     sheet.SheetView.FreezeRows(4); sheet.Columns().Width = 18; return sheet;

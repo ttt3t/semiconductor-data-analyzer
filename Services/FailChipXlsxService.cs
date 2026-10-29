@@ -27,14 +27,19 @@ public static class FailChipXlsxService
         if (selectedWafers.Count == 0 || selectedWafers.Except(data.Wafers).Any()) throw new InvalidDataException("请选择有效晶圆。");
         if (outlierSigma.HasValue && (!double.IsFinite(outlierSigma.Value) || outlierSigma <= 0)) throw new InvalidDataException("离群点 σ 必须大于 0。");
         var source = data.Records.Where(r => selectedWafers.Contains(r.WaferId)).ToList();
-        var selected = DatasetService.SelectRetestRecords(source, mode);
+        var selected = DatasetService.SelectRetestRecords(source, mode, config);
         var byId = selected.ToDictionary(r => r.Id, StringComparer.Ordinal);
         var classifier = new HBinClassifier(config);
         var chips = source.GroupBy(DatasetService.ChipKey).Select(g =>
         {
             var history = g.ToList();
+            var final = history[^1];
+            if (config.PreferGoodRetest)
+                for (int i = history.Count - 1; i >= 0; i--)
+                    if (HBinClassifier.IsGood(classifier.Classify(history[i].HBin), config.GoodRetestIncludePartialPass))
+                    { final = history[i]; break; }
             return new Chip(history, history.Where(r => byId.ContainsKey(r.Id)).Select(r => byId[r.Id]).ToList(),
-                classifier.Classify(history[^1].HBin) == OriginalDisposition.Pass);
+                HBinClassifier.IsGood(classifier.Classify(final.HBin), config.PreferGoodRetest && config.GoodRetestIncludePartialPass));
         }).Where(c => c.Rows.Count > 0).ToArray();
         var fails = chips.Where(c => !c.Good).ToArray();
         var retestGoods = chips.Where(c => c.Good && c.History.Count > 1).ToArray();

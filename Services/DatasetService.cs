@@ -13,11 +13,11 @@ public sealed record CsvImportSource(string Path, ImportOptions? Options = null,
 
 public static partial class DatasetService
 {
-    public static CsvParseResult SelectRetests(CsvParseResult data, RetestMode mode)
+    public static CsvParseResult SelectRetests(CsvParseResult data, RetestMode mode, AnalyzerConfig? config = null)
     {
         AnalysisOperation.CheckCancellation();
         if (mode == RetestMode.All) return data;
-        var records = SelectRetestRecords(data.Records, mode);
+        var records = SelectRetestRecords(data.Records, mode, config);
         if (ReferenceEquals(records, data.Records)) return data;
         var result = CreateView(data, records);
         result.SourceDescription = data.SourceDescription;
@@ -37,8 +37,10 @@ public static partial class DatasetService
     }
 
     // Export needs raw record selection only, without rebuilding every numeric column.
-    public static List<CsvRecord> SelectRetestRecords(List<CsvRecord> source, RetestMode mode)
+    public static List<CsvRecord> SelectRetestRecords(List<CsvRecord> source, RetestMode mode, AnalyzerConfig? config = null)
     {
+        if (mode == RetestMode.Last && config?.PreferGoodRetest == true)
+            return RetestPreference.SelectWhole(source, mode, config);
         if (mode == RetestMode.All) return source;
         if (mode != RetestMode.First && mode != RetestMode.Last && mode != RetestMode.OnlyRetests)
             throw new ArgumentOutOfRangeException(nameof(mode));
