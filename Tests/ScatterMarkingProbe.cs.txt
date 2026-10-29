@@ -101,7 +101,7 @@ static class Probe
             }
             finally { mouse_event(0x0010, 0, 0, 0, 0); }
             Pump();
-            Check(PointPixel(plot, 1, 1) == 0xff1f5fa5 && PointPixel(plot, 3, 3) == 0xffdc3c3c, "normal grouped points stay blue and unmarked failures red");
+            Check(PointPixel(plot, 1, 1) == 0xff008000 && PointPixel(plot, 3, 3) == 0xffdc3c3c, "normal grouped points are green and unmarked failures red");
             var a = At(plot, .8, .8); var b = At(plot, 3.2, 3.2);
             long renders = (long)Field(plot, "_renderCount")!;
             var raster = Field(plot, "_pixelBuffer");
@@ -118,19 +118,19 @@ static class Probe
             int changes = 0; plot.ChipMarksChanged += (_, _) => changes++;
             Mark(plot, 1, 1); Mark(plot, 3, 3);
             Check(plot.ChipMarkCount == 2 && changes == 2, "separate right-drag gestures accumulate chip marks");
-            Check(PointPixel(plot, 1, 1) == 0xff167d3e && PointPixel(plot, 3, 3) == 0xff74d190, "site groups use dark/light green including marked failure");
+            Check(PointPixel(plot, 1, 1) == 0xff1e78c8 && PointPixel(plot, 3, 3) == 0xff1e78c8, "marked points are blue in every site, including marked failure");
             Save(plot, "marked-site.png");
             plot.SetSeries(ScatterSeries.BuildSorted(values, 0, 2.5, ScatterOrder.Wafer, trackChips: true), 0, 2.5, "V"); Pump();
-            Check(PointPixel(plot, 1, 1) == 0xff167d3e && PointPixel(plot, 3, 3) == 0xff74d190, "wafer grouping preserves green alternation");
+            Check(PointPixel(plot, 1, 1) == 0xff1e78c8 && PointPixel(plot, 3, 3) == 0xff1e78c8, "wafer grouping preserves blue marking");
             plot.SetSeries(ScatterSeries.Empty, null, null, "");
             // A second test uses the same physical identities with different measurements and order.
             var next = values.Select(v => { v.Value *= 10; return v; }).Reverse().ToArray();
             plot.SetSeries(ScatterSeries.BuildSorted(next, 0, 25, ScatterOrder.SerialNumber, trackChips: true), 0, 25, "mV"); Pump();
-            Check(plot.ChipMarkCount == 2 && PointPixel(plot, 1, 10) == 0xff167d3e && PointPixel(plot, 3, 30) == 0xff167d3e, "marks follow chips to another test item and SN sorting");
+            Check(plot.ChipMarkCount == 2 && PointPixel(plot, 1, 10) == 0xff1e78c8 && PointPixel(plot, 3, 30) == 0xff1e78c8, "marks follow chips to another test item and SN sorting");
             plot.IsYAxisLocked = true; Call(plot, "ZoomAt", At(plot, 2, 20), 120); Pump();
             Mark(plot, 2, 20); Check(plot.ChipMarkCount == 3, "rectangle uses current zoom and locked-Y coordinates");
             plot.ClearChipMarks(); Pump();
-            Check(plot.ChipMarkCount == 0 && ((bool[])Field(plot, "_markedPoints")!).Length == 0 && PointPixel(plot, 3, 30) == 0xffdc3c3c, "clear restores red/blue colors and releases mask");
+            Check(plot.ChipMarkCount == 0 && ((bool[])Field(plot, "_markedPoints")!).Length == 0 && PointPixel(plot, 3, 30) == 0xffdc3c3c, "clear restores red/green colors and releases mask");
             // Right clicks/drags only select. Only a double left click resets zoom.
             Call(plot, "ZoomAt", At(plot, 2, 20), 120); double scale = (double)Field(plot, "_scaleX")!;
             Set(plot, "_rightStart", new Point(200, 100)); Call(plot, "CompleteRightGesture", new Point(220, 120));

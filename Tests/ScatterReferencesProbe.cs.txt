@@ -29,6 +29,7 @@ static class Probe
     static BitmapSource Decode(Stream stream) { stream.Position = 0; return BitmapDecoder.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0]; }
     static byte[] Pixels(BitmapSource image) { var b = new FormatConvertedBitmap(image, PixelFormats.Bgra32, null, 0); var bytes = new byte[b.PixelWidth * b.PixelHeight * 4]; b.CopyPixels(bytes, b.PixelWidth * 4, 0); return bytes; }
     static bool Same(BitmapSource a, BitmapSource b) => a.PixelWidth == b.PixelWidth && a.PixelHeight == b.PixelHeight && Pixels(a).SequenceEqual(Pixels(b));
+    // Mean is DarkGreen (G=100); normal green X points (G=128) are not mean-line pixels.
     static int ColoredRow(ScatterPlotControl plot, BitmapSource image, double value, int color)
     {
         var bytes = Pixels(image); var size = ChartImage.SizeOf(plot);
@@ -42,7 +43,7 @@ static class Probe
             for (int row = Math.Max(0, y - 2); row <= Math.Min(image.PixelHeight - 1, y + 2); row++)
             {
                 int p = (row * image.PixelWidth + x) * 4; int b = bytes[p], g = bytes[p + 1], r = bytes[p + 2];
-                found |= color switch { 0 => r > 180 && g < 100 && b < 100, 1 => g > 60 && g > r + 30 && g > b + 30,
+                found |= color switch { 0 => r > 180 && g < 100 && b < 100, 1 => g >= 80 && g <= 115 && r < 30 && b < 30,
                     _ => r > 200 && g > 80 && g < 220 && b < 80 };
             }
             if (found) count++;

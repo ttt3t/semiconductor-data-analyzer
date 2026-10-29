@@ -95,17 +95,17 @@ static class Probe
                 Check(copied.PixelWidth == size.PixelWidth && copied.PixelHeight == size.PixelHeight && Same(copied, ChartImage.Capture(sizes[i], size)), "copied pixels and dimensions match the live chart including current viewport and marks: " + i);
                 if (i == 1)
                 {
-                    var green = At(3, 4); var pixels = Pixels(copied);
-                    int x = (int)Math.Round(green.X * size.DpiX / 96), y = (int)Math.Round(green.Y * size.DpiY / 96);
+                    var marked = At(3, 4); var pixels = Pixels(copied);
+                    int x = (int)Math.Round(marked.X * size.DpiX / 96), y = (int)Math.Round(marked.Y * size.DpiY / 96);
                     bool found = false;
                     for (int py = Math.Max(0, y - 4); py <= Math.Min(copied.PixelHeight - 1, y + 4); py++)
                         for (int px = Math.Max(0, x - 4); px <= Math.Min(copied.PixelWidth - 1, x + 4); px++)
                         {
                             int offset = (py * copied.PixelWidth + px) * 4;
-                            if (pixels[offset + 1] > pixels[offset + 2] + 40 && pixels[offset + 1] > pixels[offset] + 40) found = true;
+                            if (pixels[offset] > pixels[offset + 2] + 40 && pixels[offset] > pixels[offset + 1] + 40) found = true;
                         }
                     File.WriteAllBytes(Path.Combine(folder, "copied-scatter.png"), bytes);
-                    Check(found, "copied green point lands at its actual chart coordinates without parent layout offset or cropping");
+                    Check(found, "copied blue marked point lands at its actual chart coordinates without parent layout offset or cropping");
                 }
                 File.WriteAllBytes(Path.Combine(folder, i == 0 ? "copied-histogram.png" : "copied-scatter.png"), bytes);
             }

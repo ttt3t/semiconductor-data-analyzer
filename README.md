@@ -26,6 +26,8 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 
 同版本样式更新：GUI、PNG 复制和 XLSX 图表加入自适应灰色测项标题；无单位时只显示“测量值”；直方图端点标注与刻度同行，底部轴标题更靠近坐标轴，并缩减留白以扩大实际绘图区。
 
+散点颜色和连接线沿用原像素图层：有效点为单像素细线 X，规格内绿色、超限红色、标记蓝色；按当前顺序以淡绿色单像素虚线相连，缺失测量和 Site / 晶圆组边界断开。GUI、PNG 和 XLSX 报告同步；版本保持 2.0.9。
+
 “设置 → 统计与绘图”新增独立的散点图 LSL、USL、均值、±3σ 参考线开关，并保存到 INI。复制 PNG 和 XLSX 报告沿用这些开关；参考线使用当前范围的有效测量值统计，不改变超限判断、缩放或芯片标记。旧配置默认显示 LSL / USL，均值与 ±3σ 默认关闭。
 
 ## V2.0.8 更新
@@ -47,7 +49,7 @@ Fail 芯片 XLSX 拆为“Fail 芯片”和“复测良品芯片”两个工作�
 
 ## V2.0.5 更新
 
-散点图支持长按右键 0.4 秒后拖出半透明选框，松开累计标记芯片。绿色标记跨测试项保留，Site / 晶圆分组交替使用深绿和浅绿；右上角可一键清空。左键继续平移，仅双击左键重置视图。沿用原有位图绘制，拖动选框只刷新叠加层。标记仅用于当前分析窗口，不改变统计或源数据，加载新数据时清空。
+散点图右键按下即可拖出半透明选框，松开累计标记芯片。蓝色标记按同一次记录跨测试项保留；右上角可一键清空。左键继续平移，仅双击左键重置视图。沿用原有位图绘制，拖动选框只刷新叠加层。标记仅用于当前分析窗口，不改变统计或源数据，加载新数据时清空。
 
 ## V2.0.4 更新
 
@@ -55,7 +57,7 @@ Fail 芯片 XLSX 拆为“Fail 芯片”和“复测良品芯片”两个工作�
 
 - **CP / FT**：默认 CP；FT 按指定的一个或多个 Test Num 读取 eFuse / OTP 原文，按顺序拼接 UUID 识别复测，支持预览与 INI 保存。UUID 缺失的记录独立保留并提示，原始测量值及 Run 序列号不改写。部分复测导出的整合 CSV 同时保存派生身份。
 - **图表性能**：直方图直接绘制清晰的柱形与坐标；散点合成一个可复用的点图层，游标独立更新，不再额外缓存整张图。拉伸和缩放按真实数据重绘，切换测项保留旧图直至最新结果就绪，避免闪白。
-- **主表与散点**：Fails、Max、Min；粉红色超限 Value、良率热力底色；Combine Site / Wafer；按 SN、Site、Wafer 排序；组间交替蓝色、组名与分隔线；可锁定纵轴对比测项。
+- **主表与散点**：Fails、Max、Min；粉红色超限 Value、良率热力底色；Combine Site / Wafer；按 SN、Site、Wafer 排序；绿色良品、红色超限点、蓝色标记、细线 X 与绿色单像素虚线连接、组名与分隔线；可锁定纵轴对比测项。
 - **BIN Map**：图例单项勾选或点击列头全选 / 取消；未勾选以灰色显示，统计不变。仅 SBIN 1 / HBIN 1 使用绿色，其他 BIN 的 50 色配色避开灰色和绿色系，报告颜色一致。
 - **热力图与 Run**：自定义蓝 / 绿 / 红色标，多晶圆统一范围；Run 可按序列号或晶圆 + X/Y 定位。
 
@@ -150,6 +152,8 @@ V2.0.9 的依赖框架单 EXE 可用以下命令生成（Linux 交叉编译时�
 dotnet publish SemiconductorCsvAnalyzer.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=false -p:DebugType=None -p:DebugSymbols=false -o artifacts/win-x64-framework-dependent
 ```
 
-散点标记回归检查：Windows 上先编译 Release，再运行 `pwsh Tests/run-scatter-marking.ps1`，验证跨测项标记、分组颜色、清空、缩放坐标和选框叠加层不触发点图重绘。手势状态以模拟方式检查；实际鼠标操作可按上述使用说明复核。跨平台核心检查为 `bash Tests/run-core-memory.sh`。
+散点标记回归检查：Windows 上先编译 Release，再运行 `pwsh Tests/run-scatter-marking.ps1`，验证跨测项标记、蓝色标记与红绿点、清空、缩放坐标和选框叠加层不触发点图重绘。手势状态以模拟方式检查；实际鼠标操作可按上述使用说明复核。跨平台核心检查为 `bash Tests/run-core-memory.sh`。
+
+散点像素层检查：`bash Tests/run-scatter-raster.sh` 验证不同 DPI 的单像素 X、虚线宽度、越界裁剪、缺失值与分组断线、颜色覆盖顺序，并输出 3 万 / 10 万 / 100 万点的像素层耗时和逐帧内存分配。结果不包含 WPF 窗口合成耗时；预览图层写入 `bin/ScatterRasterProbe/results/`。
 
 Fail / 复测良品芯片 XLSX 的结构、冻结、交替配色、CP/FT 分组和复测保留方式检查已包含在 `bash Tests/run-core-memory.sh` 中。

@@ -1,0 +1,156 @@
+using System.Diagnostics;
+using SemiconductorCsvAnalyzer.Controls;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static void Check(bool ok, string description)
+    { if (!ok) throw new Exception(description); checks++; Console.WriteLine("PASS " + description); }
+    static ScatterSeries Series(double[] samples, ScatterOrder order = ScatterOrder.SerialNumber) =>
+        ScatterSeries.BuildSorted(samples.Select((v, i) => new TestValue(new CsvRecord
+        { Id = "r" + i, SerialNumber = (i + 1).ToString(), WaferId = i < samples.Length / 2 ? "W1" : "W2", Site = i < samples.Length / 2 ? "1" : "2" }, v)).ToArray(), 0, 80, order);
+    static void Connections(uint[] pixels, int w, int h, ScatterSeries series,
+        double sx, double bx, double sy = 1, double by = 0, double min = 1, double max = double.MaxValue) =>
+        ScatterRaster.DrawConnections(pixels, w, h, series, min, max, sx, bx, sy, by);
+
+    static int Main(string[] args)
+    {
+        try
+        {
+            const int w = 128, h = 100;
+            var pixels = new uint[w * h + 16];
+            foreach (double dpi in new[] { 1.0, 1.5, 2.0, 3.0 })
+            {
+                var offsets = ScatterRaster.CrossOffsets(dpi, out int radius);
+                Array.Clear(pixels);
+                ScatterRaster.StampCross(pixels, w, h, 30, 30, radius, offsets, ScatterRaster.Pass);
+                bool exact = true;
+                for (int y = 0; y < h; y++) for (int x = 0; x < w; x++)
+                {
+                    bool on = Math.Abs(x - 30) == Math.Abs(y - 30) && Math.Abs(x - 30) <= radius;
+                    exact &= pixels[y * w + x] == (on ? ScatterRaster.Pass : 0);
+                }
+                Check(exact && offsets.Length == radius * 4 + 1, "X has exactly two one-pixel diagonals at DPI " + dpi);
+                foreach (uint color in new[] { ScatterRaster.Fail, ScatterRaster.Mark })
+                {
+                    ScatterRaster.StampCross(pixels, w, h, 30, 30, radius, offsets, color);
+                    Check(pixels[30 * w + 30] == color, "opaque red/blue override is exact at DPI " + dpi);
+                }
+                foreach (var point in new[] { (-radius, 0), (0, 0), (w - 1, h - 1), (w + radius - 1, h - 1) })
+                    ScatterRaster.StampCross(pixels, w, h, point.Item1, point.Item2, radius, offsets, ScatterRaster.Pass);
+                Check(pixels.AsSpan(w * h).ToArray().All(p => p == 0), "edge crosses never write outside the active raster at DPI " + dpi);
+            }
+
+            Array.Clear(pixels);
+            Connections(pixels, w, h, Series(new[] { 20.0, 20 }), 100, -100);
+            Check(Enumerable.Range(0, w * h).All(i => pixels[i] == (i / w == 20 && i % w <= 100 && i % w % 6 < 3 ? ScatterRaster.Connection : 0)), "horizontal green connector has one-pixel width and three-on/three-off dashes");
+            Array.Clear(pixels);
+            Connections(pixels, w, h, Series(new[] { -1e9, 1e9 }), 0, 30);
+            Check(Enumerable.Range(0, w * h).All(i => pixels[i] == (i % w == 30 && i / w % 6 < 3 ? ScatterRaster.Connection : 0)), "vertical connector clips huge offscreen endpoints and stays one pixel wide");
+            Array.Clear(pixels);
+            Connections(pixels, w, h, Series(new[] { 20.0, 20 }), 300, -400, min: 1.4, max: 1.9);
+            Check(Enumerable.Range(0, w).All(x => pixels[20 * w + x] == (x % 6 < 3 ? ScatterRaster.Connection : 0)), "neighbors outside horizontal view connect to both clipped viewport edges");
+            Array.Clear(pixels);
+            Connections(pixels, w, h, Series(new[] { 20.0, double.NaN, 20 }), 40, -40);
+            Check(pixels.All(p => p == 0), "missing measurements break connectivity");
+            foreach (var order in new[] { ScatterOrder.Site, ScatterOrder.Wafer })
+            {
+                Array.Clear(pixels);
+                Connections(pixels, w, h, Series(new[] { 20.0, 20 }, order), 100, -100);
+                Check(pixels.All(p => p == 0), "different " + order + " groups do not create an artificial connection");
+            }
+
+            var random = new Random(721);
+            for (int t = 0; t < 100; t++)
+            {
+                var series = Series(Enumerable.Range(0, 50).Select(_ => random.NextDouble() * 2000 - 1000).ToArray());
+                Array.Clear(pixels);
+                Connections(pixels, w, h, series, random.NextDouble() * 300, -random.NextDouble() * 3000, random.NextDouble() * 100, -500);
+                if (pixels.AsSpan(w * h).ToArray().Any(p => p != 0)) throw new Exception("Clipped connector overran raster");
+            }
+            Check(true, "100 offscreen/zoomed random traces remain within the active pixel buffer");
+            Array.Clear(pixels);
+            Connections(pixels, w, h, Series(new[] { 20.0, 20 }), double.PositiveInfinity, 0);
+            Connections(pixels, w, h, ScatterSeries.Empty, 1, 0);
+            Connections(pixels, w, h, Series(new[] { 20.0 }), 1, 0);
+            Check(pixels.All(p => p == 0), "empty, single and nonfinite screen coordinates safely omit connections");
+
+            // Compare one dense vertical chain with the same continuous path sampled only at its extrema.
+            var denseColumn = Series(Enumerable.Range(0, 30000).Select(i => i % 2 == 0 ? 10.0 : 90.0).ToArray());
+            Array.Clear(pixels); Connections(pixels, w, h, denseColumn, 0, 30);
+            var expected = new uint[pixels.Length]; Connections(expected, w, h, Series(new[] { 10.0, 90 }), 0, 30);
+            Check(pixels.SequenceEqual(expected), "30,000 repeated vertical segments collapse without changing dashed pixels or opacity");
+            var cross = ScatterRaster.CrossOffsets(1, out int r);
+            ScatterRaster.StampCross(pixels, w, h, 30, 60, r, cross, ScatterRaster.Pass);
+            ScatterRaster.StampCross(pixels, w, h, 30, 60, r, cross, ScatterRaster.Fail);
+            ScatterRaster.StampCross(pixels, w, h, 30, 60, r, cross, ScatterRaster.Mark);
+            Check(pixels[60 * w + 30] == ScatterRaster.Mark, "points cover connectors and blue marking overrides red/green at overlaps");
+
+            // Export the actual production pixels for a visual check independent of WPF availability.
+            string folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            foreach (int count in new[] { 60, 6000 })
+            {
+                const int pw = 1100, ph = 400;
+                var preview = new uint[pw * ph];
+                var samples = Enumerable.Range(0, count).Select(i =>
+                    i % 71 == 0 ? 325.0 : 100 + Math.Sin(i * .07) * 18 + random.NextDouble() * 60).ToArray();
+                var series = Series(samples); double sx = (pw - 20.0) / (count - 1);
+                Connections(preview, pw, ph, series, sx, 10 - sx);
+                for (int layer = 0; layer < 3; layer++) foreach (var p in series.Points)
+                {
+                    int pointLayer = p.Index % 37 == 0 ? 2 : p.Value > 250 ? 1 : 0;
+                    if (pointLayer != layer) continue;
+                    uint color = pointLayer == 2 ? ScatterRaster.Mark : pointLayer == 1 ? ScatterRaster.Fail : ScatterRaster.Pass;
+                    ScatterRaster.StampCross(preview, pw, ph, (int)Math.Round(Math.FusedMultiplyAdd(p.Index, sx, 10 - sx)),
+                        (int)Math.Round(p.Value), r, cross, color);
+                }
+                using var file = File.Create(Path.Combine(folder, $"scatter-{count}.ppm"));
+                file.Write(System.Text.Encoding.ASCII.GetBytes($"P6\n{pw} {ph}\n255\n"));
+                foreach (uint pixel in preview)
+                {
+                    int white = 255 - (int)(pixel >> 24);
+                    file.WriteByte((byte)(((pixel >> 16) & 255) + white));
+                    file.WriteByte((byte)(((pixel >> 8) & 255) + white));
+                    file.WriteByte((byte)((pixel & 255) + white));
+                }
+            }
+
+            // Time the actual production connection and sparse stamp routines, with no WPF/test rendering substitutes.
+            const int bw = 1200, bh = 400;
+            var buffer = new uint[bw * bh]; var occupancy = new byte[buffer.Length];
+            foreach (int count in new[] { 30000, 100000, 1000000 })
+            {
+                var data = Series(Enumerable.Range(0, count).Select(i => 200.0 + random.NextDouble() * 360 - 180).ToArray());
+                double sx = (bw - 1.0) / (count - 1);
+                void Frame(bool connections)
+                {
+                    Array.Clear(buffer); Array.Clear(occupancy);
+                    if (connections) Connections(buffer, bw, bh, data, sx, -sx);
+                    foreach (var p in data.Points)
+                    {
+                        int x = (int)Math.Round(Math.FusedMultiplyAdd(p.Index, sx, -sx));
+                        int y = (int)Math.Round(p.Value);
+                        int index = y * bw + x;
+                        if (occupancy[index] != 0) continue;
+                        occupancy[index] = 1;
+                        ScatterRaster.StampCross(buffer, bw, bh, x, y, r, cross, p.OutOfSpec ? ScatterRaster.Fail : ScatterRaster.Pass);
+                    }
+                }
+                for (int i = 0; i < 10; i++) Frame(true);
+                var durations = new double[30];
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 0; i < durations.Length; i++)
+                { long tick = Stopwatch.GetTimestamp(); Frame(true); durations[i] = Stopwatch.GetElapsedTime(tick).TotalMilliseconds; }
+                long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+                Array.Sort(durations);
+                var timer = Stopwatch.StartNew(); for (int i = 0; i < 30; i++) Frame(false); timer.Stop();
+                Console.WriteLine($"PERF {count:N0} points at {bw}x{bh}: X+connections median {durations[15]:F2} ms, p95 {durations[28]:F2} ms; X only {timer.Elapsed.TotalMilliseconds / 30:F2} ms; frame allocations {allocated} B");
+                Check(allocated == 0, "raster frames reuse storage without managed allocations: " + count);
+            }
+            Console.WriteLine($"ALL {checks} SCATTER RASTER CHECKS PASSED"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}
