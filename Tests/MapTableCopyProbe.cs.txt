@@ -1,0 +1,61 @@
+using System.Diagnostics;
+using System.Globalization;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static void Check(bool ok, string message) { if (!ok) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
+    static void Reject(Action action, string message)
+    { try { action(); } catch (InvalidOperationException) { Check(true, message); return; } throw new Exception(message); }
+    static int Main()
+    {
+        try
+        {
+            var cells = new[] {
+                new MapTableEntry(1, -1, "2", "20", "FAIL"),
+                new MapTableEntry(-1, -1, "1", "10", "PASS"),
+                new MapTableEntry(0, 1, "0", "", "Eorr")
+            };
+            var sbin = MapTableCopyService.Build(cells, MapTableKind.SBin);
+            Check(sbin.Text == "Y\\X\t-1\t0\t1\r\n-1\t1\t\t2\r\n0\t\t\t\r\n1\t\t0\t\r\n", "SBIN table preserves negative axes, empty coordinates and a numeric zero");
+            var hbin = MapTableCopyService.Build(cells, MapTableKind.HBin);
+            Check(hbin.Text == "Y\\X\t-1\t0\t1\r\n-1\t10\t\t20\r\n0\t\t\t\r\n1\t\t\t\r\n", "HBIN table uses HBIN values rather than soft-bin categories, with missing bins blank");
+            var pf = MapTableCopyService.Build(cells, MapTableKind.PassFail);
+            Check(pf.Text == "Y\\X\t-1\t0\t1\r\n-1\tP\t\tF\r\n0\t\t\t\r\n1\t\tE\t\r\n", "PF table preserves displayed direction, uses P/F and distinguishes invalid E from absent positions");
+            Check(pf.Columns == 3 && pf.Rows == 3 && pf.DieCount == 3 && pf.ErrorCount == 1 && sbin.ErrorCount == 0, "table dimensions and unique/invalid die counts describe the copied page");
+            Check(MapTableCopyService.Build(cells.Reverse(), MapTableKind.SBin).Text == sbin.Text, "spatial table is independent of input order when coordinates are unique");
+            var repeated = cells.Concat(new[] { new MapTableEntry(-1, -1, "007", "99", "FAIL"), new MapTableEntry(0, 1, "8", "8", "pass") }).ToArray();
+            var last = MapTableCopyService.Build(repeated, MapTableKind.PassFail);
+            Check(last.Text.Contains("-1\tF\t\tF\r\n") && last.Text.Contains("1\t\tP\t\r\n") && last.DieCount == 3 && last.ErrorCount == 0, "latest duplicate coordinates override old classifications and invalid counts");
+            Check(MapTableCopyService.Build(repeated, MapTableKind.SBin).Text.Contains("-1\t007\t\t2\r\n"), "BIN copy preserves source numbers without color labels or prefix text");
+            var missing = MapTableCopyService.Build(new[] { new MapTableEntry(7, 8, null, " ", null) }, MapTableKind.SBin);
+            Check(missing.Text == "Y\\X\t7\r\n8\t\r\n" && missing.DieCount == 1, "single die with a missing bin still retains its actual nonzero coordinate");
+            var error = MapTableCopyService.Build(new[] { new MapTableEntry(7, 8, null, null, "Eorr") }, MapTableKind.PassFail);
+            Check(error.Text == "Y\\X\t7\r\n8\tE\r\n", "an invalid test is not silently reported as a failing measurement");
+            Check(MapTableCopyService.Build(Array.Empty<MapTableEntry>(), MapTableKind.SBin) == new MapTableText("", 0, 0, 0, 0), "empty page has no fabricated axes or data");
+            var extreme = MapTableCopyService.Build(new[] { new MapTableEntry(int.MaxValue, int.MinValue, "1", "2", "PASS") }, MapTableKind.PassFail);
+            Check(extreme.Text == "Y\\X\t2147483647\r\n-2147483648\tP\r\n", "single extreme integer coordinates do not overflow or wrap a loop");
+            var culture = CultureInfo.CurrentCulture;
+            try
+            {
+                CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
+                Check(MapTableCopyService.Build(cells, MapTableKind.SBin).Text == sbin.Text, "axis numbers and TSV format do not depend on locale");
+            }
+            finally { CultureInfo.CurrentCulture = culture; }
+            var tabs = MapTableCopyService.Build(new[] { new MapTableEntry(0, 0, " 4\t5\n6\r7 ", "1", "PASS") }, MapTableKind.SBin);
+            Check(tabs.Text == "Y\\X\t0\r\n0\t4 5 6 7\r\n", "control characters in a source bin never create spurious spreadsheet cells");
+            Reject(() => MapTableCopyService.Build(new[] { cells[0], new MapTableEntry(int.MinValue, 0, "1", "1", "PASS") }, MapTableKind.SBin), "an extreme sparse coordinate span is rejected before matrix expansion");
+            Reject(() => MapTableCopyService.Build(new[] { new MapTableEntry(0, 0, "1", "1", "PASS"), new MapTableEntry(16383, 0, "1", "1", "PASS") }, MapTableKind.SBin), "Excel column limit includes the numeric Y axis");
+            Reject(() => MapTableCopyService.Build(new[] { new MapTableEntry(0, 0, "1", "1", "PASS"), new MapTableEntry(0, 1048575, "1", "1", "PASS") }, MapTableKind.SBin), "Excel row limit includes the numeric X axis");
+            Reject(() => MapTableCopyService.Build(new[] { new MapTableEntry(0, 0, "1", "1", "PASS"), new MapTableEntry(1999, 1999, "1", "1", "PASS") }, MapTableKind.SBin), "large sparse rectangle is bounded before allocating a clipboard matrix");
+            var dense = Enumerable.Range(0, 50000).Select(i => new MapTableEntry(i % 250, i / 250, (i % 51).ToString(CultureInfo.InvariantCulture), (i % 3).ToString(), i % 5 == 0 ? "FAIL" : "PASS")).ToArray();
+            var watch = Stopwatch.StartNew(); var matrix = MapTableCopyService.Build(dense, MapTableKind.SBin); watch.Stop();
+            Check(matrix.DieCount == 50000 && matrix.Columns == 250 && matrix.Rows == 200 && matrix.Text.Split("\r\n").Length == 202, "50,000 die wafer expands to one correctly sized spatial table");
+            Console.WriteLine($"PERF 50,000 die map: {watch.Elapsed.TotalMilliseconds:F1} ms, {matrix.Text.Length:N0} TSV characters");
+            Check(MapTableCopyService.Build(cells, MapTableKind.SBin).Text == sbin.Text && cells[0].SBin == "2", "copying all three modes leaves original entries unchanged");
+            Console.WriteLine($"ALL {checks} MAP TABLE CHECKS PASSED"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

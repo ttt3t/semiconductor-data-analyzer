@@ -24,6 +24,8 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 
 ## V2.0.9 更新
 
+同版本 Map 表格复制：SBIN、HBIN 和 P/F Map 的“复制图例”上方新增“复制 Map 表格”，可直接粘贴到 Excel。当前晶圆按真实 X/Y 坐标排列并带数字坐标轴，空坐标留空；BIN 填编号，P/F 填 P / F，无效测量填 E。同坐标取最新，沿用当前测项与 Site 范围。
+
 列搜索样式修正：缩小勾选图形，并在输入框前为它保留独立网格列；输入框不会遮挡勾选及横杠提示。文本可用 `main*test` 同时搜索包含 main 和 test 的项，不限顺序、不区分大小写，支持继续追加关键词。版本保持 2.0.9。
 
 同版本列搜索更新：主列表每列增加独立勾选开关；支持数值比较、区间、整数整除、一位数字通配和空值规则，文本支持关键字与通配符。右键勾选筛选接管同一列时搜索禁用并显示横杠；双击文字单元格复制并填入对应列，保持搜索未启用。散点绿色稍降饱和度，像素绘制方式保持不变。
@@ -163,3 +165,5 @@ dotnet publish SemiconductorCsvAnalyzer.csproj -c Release -r win-x64 --self-cont
 Fail / 复测良品芯片 XLSX 的结构、冻结、交替配色、CP/FT 分组和复测保留方式检查已包含在 `bash Tests/run-core-memory.sh` 中。
 
 列搜索检查：`bash Tests/run-column-search.sh` 验证搜索规则、缺失数值和开关状态转换。Windows 上先编译 Release，再运行 `pwsh Tests/run-column-search-ui.ps1`，检查实际主表、右键筛选接管、双击复制填入和隐藏搜索框的行为。
+
+Map 表格检查：`bash Tests/run-map-table-copy.sh` 验证坐标方向、空位、BIN/PF 值、重复坐标、边界与大晶圆。Windows 上运行 `pwsh Tests/run-clipboard-busy.ps1 -Assembly ./bin/Release/net8.0-windows/SemiconductorCsvAnalyzer.dll`，验证三类 Map 的实际剪贴板、晶圆切换、热力图 / 置灰显示，以及占用后重试。

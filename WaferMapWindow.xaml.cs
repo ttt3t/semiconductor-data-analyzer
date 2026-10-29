@@ -35,6 +35,7 @@ public partial class WaferMapWindow : Window
 
     private List<LegendRow> _legend = new();
     private readonly bool _isBinMap;
+    private readonly MapTableKind _mapTableKind;
     private readonly HashSet<string> _dimmedBins = new(StringComparer.Ordinal);
     private bool _updatingBinVisibility;
     private IList<WaferDie> _pfDies = Array.Empty<WaferDie>();
@@ -54,6 +55,8 @@ public partial class WaferMapWindow : Window
     {
         InitializeComponent();
         _isBinMap = binName != null;
+        _mapTableKind = binName == null ? MapTableKind.PassFail :
+            binName.Equals("HBIN", StringComparison.OrdinalIgnoreCase) ? MapTableKind.HBin : MapTableKind.SBin;
         if (binName != null)
         {
             BinVisibilityColumn.Visibility = Visibility.Visible;
@@ -68,6 +71,7 @@ public partial class WaferMapWindow : Window
             HoverInfo.Visibility = Visibility.Collapsed;
             HoverText.Text = "";
             _ready = false;
+            BtnCopyMapTable.IsEnabled = false;
             Map.Dies = null;
             WaferList.ItemsSource = null;
             DgLegend.ItemsSource = null;
@@ -122,6 +126,8 @@ public partial class WaferMapWindow : Window
         ApplySelectedPage();
         if (pages.Count == 0)
         {
+            BtnCopyMapTable.IsEnabled = false;
+            TxtCopyStatus.Text = "";
             Map.Dies = null; _pfDies = Array.Empty<WaferDie>(); _heatDies = null; _heatmapScale = null;
             ClearLegend(); DgLegend.ItemsSource = new ListCollectionView(_legend);
             TxtMapInfo.Text = "没有可显示的 wafer。"; TxtHeatRange.Text = "";
@@ -142,6 +148,8 @@ public partial class WaferMapWindow : Window
     private void ApplySelectedPage()
     {
         if (!_ready || WaferList.SelectedItem is not WaferMapPage page) return;
+        BtnCopyMapTable.IsEnabled = page.Dies.Count > 0;
+        TxtCopyStatus.Text = "";
         if (_customRange is { } previous && _unit != page.Unit)
         {
             if (MeasurementDisplay.ConversionFactor(_unit, page.Unit) is double factor &&
@@ -331,10 +339,29 @@ public partial class WaferMapWindow : Window
         CopyLegendText(sb.ToString());
     }
 
-    private void CopyLegendText(string text)
+    private void BtnCopyMapTable_Click(object sender, RoutedEventArgs e)
     {
-        try { Clipboard.SetText(text); TxtCopyStatus.Text = "已复制"; }
-        catch (System.Runtime.InteropServices.COMException) { TxtCopyStatus.Text = "剪贴板正忙，请重试"; }
+        if (!_ready || WaferList.SelectedItem is not WaferMapPage page || _pfDies.Count == 0)
+        { TxtCopyStatus.Text = "没有可复制的 Map 数据"; return; }
+        try
+        {
+            // Copy the selected page's classifications, including dimmed BINs and P/F in heat mode.
+            // No matrix or extra numeric columns are retained during rendering/wafer switching.
+            var table = MapTableCopyService.Build(_pfDies.Select(d =>
+                new MapTableEntry(d.X, d.Y, d.SBin, d.HBin, d.Category)), _mapTableKind);
+            string status = $"已复制 {page.WaferId} 的 {table.Columns}×{table.Rows} Map 表格（{table.DieCount} 颗芯片）";
+            if (table.ErrorCount > 0) status += $"；{table.ErrorCount} 颗无效测量标为 E";
+            CopyText(table.Text, status);
+        }
+        catch (InvalidOperationException ex) { TxtCopyStatus.Text = ex.Message; }
+    }
+
+    private void CopyLegendText(string text) => CopyText(text, "已复制");
+
+    private void CopyText(string text, string success)
+    {
+        try { Clipboard.SetText(text); TxtCopyStatus.Text = success; }
+        catch (System.Runtime.InteropServices.ExternalException) { TxtCopyStatus.Text = "剪贴板正忙，请重试"; }
     }
 
     public static Brush ColorForCategory(string category)

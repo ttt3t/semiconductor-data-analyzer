@@ -108,7 +108,11 @@
             </ScrollViewer>
 
             <StackPanel Grid.Row="6">
-                <Button Content="复制图例"
+                <Button x:Name="BtnCopyMapTable" Content="复制 Map 表格" IsEnabled="False"
+                        Click="BtnCopyMapTable_Click" Margin="0,0,0,8" Padding="8,4"
+                        AutomationProperties.Name="复制 Map 表格"
+                        ToolTip="复制当前晶圆的坐标表格，可粘贴到 Excel；SBIN/HBIN 填编号，P/F 填 P 或 F，无效测量填 E，空坐标留空"/>
+                <Button x:Name="BtnCopyLegend" Content="复制图例"
                         Click="BtnCopyLegend_Click" Margin="0,0,0,8" Padding="8,4"/>
                 <TextBlock x:Name="TxtCopyStatus" Foreground="DimGray" TextWrapping="Wrap"/>
             </StackPanel>

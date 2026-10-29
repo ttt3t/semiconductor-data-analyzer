@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Controls;
 using SemiconductorCsvAnalyzer.Models;
 using SemiconductorCsvAnalyzer.Services;
 
@@ -20,6 +21,13 @@ static class Probe
     static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame); }
     static void Copy(Window window, string method) => window.GetType().GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, new object[] { window, new RoutedEventArgs() });
     static string Status(Window window, string name) => ((TextBlock)window.FindName(name)).Text;
+    static void SaveMap(Window window, string name)
+    {
+        string folder = Path.GetFullPath("bin/ClipboardBusyProbe/results"); Directory.CreateDirectory(folder);
+        var content = (FrameworkElement)window.Content; content.UpdateLayout(); Pump();
+        using var png = ChartImage.Png(ChartImage.Capture(content, ChartImage.SizeOf(content)));
+        File.WriteAllBytes(Path.Combine(folder, name), png.ToArray());
+    }
 
     [STAThread] static int Main(string[] args)
     {
@@ -40,23 +48,44 @@ static class Probe
             var failures = new List<Exception>(); app.DispatcherUnhandledException += (_, e) => { failures.Add(e.Exception); Console.Error.WriteLine(e.Exception); e.Handled = true; };
             var record = new CsvRecord { Id = "row", SerialNumber = "芯片-01", X = 2, Y = 3, Site = "1", SBin = "1", HBin = "1", Measurements = new Dictionary<string, string> { ["T"] = "1.250" } };
             var values = new ValuesWindow("clipboard values", new[] { new TestValue(record, 1.25, "T") });
-            var dies = new[] { new WaferDie { WaferId = "W", SerialNumber = "芯片-01", X = 2, Y = 3, Site = "1", Category = "1", Color = Brushes.Green, Value = 1.25 } };
+            var dies = new[] { new WaferDie { WaferId = "W", SerialNumber = "芯片-01", X = 2, Y = 3, Site = "1", SBin = "1", HBin = "2", Category = "1", Color = Brushes.Green, Value = 1.25 } };
             var legend = new WaferMapWindow("clipboard legend", new[] { new WaferMapPage("W", dies) }, "SBIN");
             var heat = new WaferMapWindow("clipboard heat", dies, HeatmapScale.Create(new[] { 1.25, 2.5 }), "V");
-            values.Show(); legend.Show(); heat.Show(); ((RadioButton)heat.FindName("HeatMode")).IsChecked = true; Pump();
+            var hbin = new WaferMapWindow("HBIN clipboard", new[] { new WaferMapPage("W", new[] { new WaferDie { WaferId = "W", X = 2, Y = 3, SBin = "1", HBin = "2", Category = "2", Color = Brushes.Red } }) }, "HBIN");
+            var pfDies = new[] { new WaferDie { WaferId = "W", X = -1, Y = -1, Category = "PASS", HBin = "2", Value = 1, Color = Brushes.Green },
+                new WaferDie { WaferId = "W", X = 1, Y = -1, Category = "FAIL", HBin = "1", Value = 20, Color = Brushes.Red },
+                new WaferDie { WaferId = "W", X = 0, Y = 1, Category = "Eorr" } };
+            var pf = new WaferMapWindow("PF clipboard", new[] { new WaferMapPage("W", pfDies, HeatmapScale.Create(new[] { 1.0, 20 }), "V", true),
+                new WaferMapPage("W2", new[] { new WaferDie { WaferId = "W2", X = 5, Y = 6, Category = "PASS" } }), new WaferMapPage("empty", Array.Empty<WaferDie>()) });
+            values.Show(); legend.Show(); heat.Show(); hbin.Show(); pf.Show(); ((RadioButton)heat.FindName("HeatMode")).IsChecked = true; Pump();
+            pf.SelectWafer("W2"); Pump(); Copy(pf, "BtnCopyMapTable_Click");
+            Check(Clipboard.GetText() == "Y\\X\t5\r\n6\tP\r\n", "Map copy uses only the wafer currently selected");
+            pf.SelectWafer("empty"); Pump();
+            Check(!((Button)pf.FindName("BtnCopyMapTable")).IsEnabled, "empty wafer disables Map table copy");
+            Copy(pf, "BtnCopyMapTable_Click");
+            Check(Clipboard.GetText() == "Y\\X\t5\r\n6\tP\r\n" && Status(pf, "TxtCopyStatus").Contains("没有可复制"), "empty Map leaves clipboard unchanged");
+            pf.SelectWafer("W"); ((RadioButton)pf.FindName("HeatMode")).IsChecked = true; Pump();
+            ((WaferMapControl)legend.FindName("Map")).DimmedCategories = new HashSet<string> { "1" };
             var cases = new[] { (Window: (Window)values, Method: "BtnCopy_Click", Status: "TxtCount"),
                 (Window: (Window)legend, Method: "BtnCopyLegend_Click", Status: "TxtCopyStatus"),
-                (Window: (Window)heat, Method: "BtnCopyLegend_Click", Status: "TxtCopyStatus") };
+                (Window: (Window)heat, Method: "BtnCopyLegend_Click", Status: "TxtCopyStatus"),
+                (Window: (Window)legend, Method: "BtnCopyMapTable_Click", Status: "TxtCopyStatus"),
+                (Window: (Window)hbin, Method: "BtnCopyMapTable_Click", Status: "TxtCopyStatus"),
+                (Window: (Window)pf, Method: "BtnCopyMapTable_Click", Status: "TxtCopyStatus") };
             string[] expected = {
                 "SN\tX\tY\tSite\tValue\tSBIN\tHBIN" + Environment.NewLine + "芯片-01\t2\t3\t1\t1.250\t1\t1" + Environment.NewLine,
                 "Bin\t数量\t占比%" + Environment.NewLine + "1\t1\t100.00" + Environment.NewLine,
-                "热力图色标\n" + (string)typeof(WaferMapWindow).GetMethod("HeatRangeText", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(heat, null)!
+                "热力图色标\n" + (string)typeof(WaferMapWindow).GetMethod("HeatRangeText", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(heat, null)!,
+                "Y\\X\t2\r\n3\t1\r\n",
+                "Y\\X\t2\r\n3\t2\r\n",
+                "Y\\X\t-1\t0\t1\r\n-1\tP\t\tF\r\n0\t\t\t\r\n1\t\tE\t\r\n"
             };
             for (int i = 0; i < cases.Length; i++)
             {
                 Copy(cases[i].Window, cases[i].Method);
                 Check(Clipboard.GetText() == expected[i] && Status(cases[i].Window, cases[i].Status).Contains("已复制"), "unlocked clipboard preserves exact copy text and success status: " + i);
             }
+            SaveMap(legend, "sbin-map-copy.png"); SaveMap(hbin, "hbin-map-copy.png"); SaveMap(pf, "pf-heat-copy.png");
             string token = Guid.NewGuid().ToString("N");
             using var readyEvent = new EventWaitHandle(false, EventResetMode.ManualReset, "Local\\ClipboardProbe-ready-" + token);
             using var releaseEvent = new EventWaitHandle(false, EventResetMode.ManualReset, "Local\\ClipboardProbe-release-" + token);
@@ -86,8 +115,8 @@ static class Probe
             {
                 Copy(cases[i].Window, cases[i].Method);
                 Check(Clipboard.GetText() == expected[i] && Status(cases[i].Window, cases[i].Status).Contains("已复制"), "retry after releasing clipboard succeeds with original text: " + i);
-                cases[i].Window.Close();
             }
+            foreach (var window in cases.Select(c => c.Window).Distinct()) window.Close();
             Pump(); Check(failures.Count == 0, "copy and close raise no unhandled dispatcher exceptions");
             Console.WriteLine($"ALL {checks} CLIPBOARD CHECKS PASSED"); app.Shutdown(); return 0;
         }
