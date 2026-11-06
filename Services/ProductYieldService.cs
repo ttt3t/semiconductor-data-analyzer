@@ -42,7 +42,7 @@ public static partial class ProductYieldService
     }
 
     public static string Signature(ManagedProduct product) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-        JsonSerializer.Serialize(new { Schema = 3, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
+        JsonSerializer.Serialize(new { Schema = 4, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
             product.IncludePartialPass, product.PreferGoodRetest, product.Files }))));
 
     public static bool IsCurrent(ManagedProduct product)
@@ -91,6 +91,7 @@ public static partial class ProductYieldService
         }
         token.ThrowIfCancellationRequested();
         var config = ConfigLoader.Parse(product.ConfigText);
+        AddAnalytics(product, result, devices, token);
         var categories = config.SBinCategories.SelectMany(c => c.Value.Select(bin => (Bin: BinStatisticsService.NormalizeBin(bin), Name: c.Key)))
             .ToDictionary(c => c.Bin, c => c.Name);
         foreach (var group in devices.GroupBy(d => (d.Key.Kind, d.Key.Lot, d.Key.Wafer)))

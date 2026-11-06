@@ -69,6 +69,7 @@ public sealed class ManagedDataFile
 
 public sealed class ManagementSnapshot
 {
+    public int AnalyticsVersion { get; set; }
     public DateTime CalculatedUtc { get; set; } = DateTime.UtcNow;
     public string DefinitionSignature { get; set; } = "";
     public List<ManagedYieldRow> Yields { get; set; } = new();
@@ -77,8 +78,39 @@ public sealed class ManagementSnapshot
     public List<ManagedYieldRow> MonthlyYields { get; set; } = new();
     public List<ManagedCategoryCount> MonthlyCategories { get; set; } = new();
     public List<ManagedFileResult> Files { get; set; } = new();
+    public List<ManagedFailBinCount> FailBins { get; set; } = new();
+    public List<ManagedRadialCount> Radial { get; set; } = new();
     [JsonIgnore] public int FailedFiles => Files.Count(f => f.Error.Length > 0);
 }
+
+public sealed class ManagedFailBinCount
+{
+    public string Kind { get; set; } = "";
+    public string Lot { get; set; } = "";
+    public string Wafer { get; set; } = "";
+    public string StageId { get; set; } = "";
+    public string Period { get; set; } = "";
+    public string BinType { get; set; } = "";
+    public string Bin { get; set; } = "";
+    public string Description { get; set; } = "";
+    public int Count { get; set; }
+}
+
+public sealed class ManagedRadialCount
+{
+    public string Lot { get; set; } = "";
+    public string Wafer { get; set; } = "";
+    public string StageId { get; set; } = "";
+    public int Region { get; set; }
+    public int Total { get; set; }
+    public int Good { get; set; }
+    public double CenterX { get; set; }
+    public double CenterY { get; set; }
+    public double Radius { get; set; }
+    [JsonIgnore] public double? Yield => Total == 0 ? null : Good * 100.0 / Total;
+}
+
+public readonly record struct ManagementScope(string Kind, string Lot, string Wafer);
 
 public sealed class ManagedYieldRow
 {

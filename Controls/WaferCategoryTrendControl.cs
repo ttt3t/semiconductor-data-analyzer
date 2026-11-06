@@ -3,7 +3,7 @@ using System.Windows.Media;
 
 namespace SemiconductorCsvAnalyzer.Controls;
 
-public sealed record WaferCategorySeries(string Category, Brush LineBrush, double?[] Values);
+public sealed record WaferCategorySeries(string Category, Brush LineBrush, double?[] Values, double? Mean = null, int[]? Counts = null);
 
 /// <summary>Compact aggregate series only; the virtualized table supplies matching wafer labels.</summary>
 public sealed class WaferCategoryTrendControl : FrameworkElement

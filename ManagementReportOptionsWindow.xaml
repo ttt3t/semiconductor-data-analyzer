@@ -1,0 +1,28 @@
+<Window x:Class="SemiconductorCsvAnalyzer.ManagementReportOptionsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="导出管理报告 · 选择批次与晶圆" Width="620" Height="650" MinHeight="450" WindowStartupLocation="CenterOwner" Background="#F8FAFC" FontFamily="Microsoft YaHei UI" FontSize="12">
+    <Window.Resources><BooleanToVisibilityConverter x:Key="Visible"/></Window.Resources>
+    <DockPanel Margin="16">
+        <StackPanel DockPanel.Dock="Top">
+            <TextBlock Text="选择报告范围" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,7"/>
+            <TextBlock Text="勾选批次可选中该批次全部晶圆，也可逐片选择；FT 按批次选择。" Foreground="#64748B" TextWrapping="Wrap" Margin="0,0,0,9"/>
+            <DockPanel Margin="0,0,0,8"><Button Content="全选" Click="All_Click" DockPanel.Dock="Right" Padding="9,3" Margin="6,0,0,0"/><Button Content="清空" Click="None_Click" DockPanel.Dock="Right" Padding="9,3" Margin="6,0,0,0"/>
+                <TextBox x:Name="Search" TextChanged="Search_Changed" Padding="6,4" ToolTip="搜索只改变列表显示，不会取消隐藏项的勾选。"/>
+            </DockPanel>
+        </StackPanel>
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+            <TextBlock Text="报告包含：基础良率表、柱状趋势、Fail 堆叠图、HBIN / SBIN Pareto、径向良率、中心 / 边缘对比及 SBIN Fail 归因。" TextWrapping="Wrap" Foreground="#475569" FontSize="11"/>
+            <TextBlock Text="径向图仅覆盖有完整 XY 的 CP 芯片；中心和半径按已测坐标估算，局部测试不等同物理边缘。" TextWrapping="Wrap" Foreground="#64748B" FontSize="11" Margin="0,5,0,7"/>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,8"><TextBlock Text="良率参考线（%）" VerticalAlignment="Center"/><TextBox x:Name="Target" Width="65" Padding="5,3" Margin="8,0,0,0"/></StackPanel>
+            <TextBlock x:Name="Summary" Foreground="#2563EB" Margin="0,0,0,5"/>
+            <TextBlock x:Name="Error" Foreground="Firebrick" TextWrapping="Wrap"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Content="取消" IsCancel="True" Width="75" Padding="7,5"/><Button Content="下一步 · 保存报告" Click="Export_Click" Padding="12,5" Margin="8,0,0,0"/></StackPanel>
+        </StackPanel>
+        <TreeView x:Name="ScopeTree" BorderBrush="#CBD5E1" Padding="7" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling">
+            <TreeView.ItemContainerStyle><Style TargetType="TreeViewItem"><Setter Property="IsExpanded" Value="True"/><Setter Property="Visibility" Value="{Binding Visible, Converter={StaticResource Visible}}"/></Style></TreeView.ItemContainerStyle>
+            <TreeView.ItemTemplate><HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                <CheckBox Content="{Binding Label}" IsChecked="{Binding Selected, Mode=TwoWay}" Margin="2,3"/>
+            </HierarchicalDataTemplate></TreeView.ItemTemplate>
+        </TreeView>
+    </DockPanel>
+</Window>

@@ -1,0 +1,87 @@
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Controls;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Preview
+{
+    static string folder = "";
+    static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame); }
+    static void Save(Window window, string name, int width = 1400, int height = 850)
+    {
+        var root = (FrameworkElement)window.Content;
+        root.Measure(new Size(width, height)); root.Arrange(new Rect(0,0,width,height)); root.UpdateLayout();
+        using var png = ChartImage.Png(ChartImage.Capture(root, new ChartImageSize(width,height)));
+        File.WriteAllBytes(Path.Combine(folder,name),png.ToArray());
+    }
+    static void Pair(string name, byte[] left, byte[] right)
+    {
+        BitmapSource Read(byte[] bytes) { using var s=new MemoryStream(bytes);return BitmapFrame.Create(s,BitmapCreateOptions.PreservePixelFormat,BitmapCacheOption.OnLoad); }
+        var v=new DrawingVisual();using(var dc=v.RenderOpen()){dc.DrawRectangle(Brushes.White,null,new Rect(0,0,1200,440));dc.DrawImage(Read(left),new Rect(0,0,600,440));dc.DrawImage(Read(right),new Rect(600,0,600,440));}
+        var b=new RenderTargetBitmap(1200,440,96,96,PixelFormats.Pbgra32);b.Render(v);using var png=ChartImage.Png(b);File.WriteAllBytes(Path.Combine(folder,name),png.ToArray());
+    }
+    static ManagedProduct Product()
+    {
+        var config=new AnalyzerConfig { TestItemRow=1,TestNumberRow=0,LowLimitRow=0,HighLimitRow=0,UnitRow=0,SBinRow=0,HBinRow=0,DataStartRow=2,TestItemStartColumn=8,SerialNumberColumn=1,XColumn=2,YColumn=3,SiteColumn=4,SBinColumn=5,HBinColumn=6,WaferColumn=7 };
+        int[] sbins={12,381,10,13,403,384,15,385,979,383,525,1247};
+        string[] descriptions={"Standby 电流超标 / 电源与漏电流","Dark 信号与噪声 / shading 采集缺陷","OS 电流与电压异常 / 接触与短路","DVDD 动态电流超标","Light 环路与坏列 / 曝光缺陷","Dark 噪声与暗场采集异常","模拟模块参数 / VPP 与 NTH","Dark 采集异常与 shading","全 0 值 / 电源与全功能失效","Light-Dark 坏点与采集缺陷","Light 采集缺陷","其他 OTP 相关异常"};
+        config.SBinDescriptions=sbins.Select((bin,i)=>(bin,i)).ToDictionary(v=>v.bin.ToString(),v=>descriptions[v.i]);
+        config.SBinCategories=new() { ["良品"]=new(){"1"},["电源 / 电流"]=new(){"12","10","13"},["成像 / 采集"]=new(){"381","403","384","385","383","525"},["逻辑 / 模拟"]=new(){"15","979","1247"} };
+        var stage=new ProductTestStage {Kind="CP",Name="常温 CP",Temperature=25,Required=true};
+        var product=new ManagedProduct {Name="CIS CP · 样式预览（模拟数据）",Flow=new(){stage},ConfigText=ConfigLoader.Serialize(config),RetestMode=RetestMode.Last};
+        int[] wafers={1,2,4,6,8,10,12,14,16,18,20,22,24,25};double[] targets={.906,.931,.918,.851,.932,.944,.928,.924,.930,.905,.940,.944,.914,.938};
+        double[] weights={.204,.167,.113,.09,.086,.073,.042,.033,.025,.025,.025,.017};
+        Directory.CreateDirectory(Path.Combine(folder,"data"));
+        for(int index=0;index<wafers.Length;index++)
+        {
+            string wafer=$"W{wafers[index]:00}",lot=index<7?"LOT-2407A":"LOT-2407B",path=Path.Combine(folder,"data",wafer+".csv");
+            var random=new Random(1543+index);int serial=0;
+            using(var writer=new StreamWriter(path,false,new UTF8Encoding(false)))
+            {
+                writer.WriteLine("SN,X,Y,Site,SBIN,HBIN,Wafer,Value");
+                for(int y=-24;y<=24;y++)for(int x=-24;x<=24;x++)
+                {
+                    double r=Math.Sqrt(x*x+y*y)/24;if(r>1)continue;
+                    double chance=Math.Clamp(targets[index]+(r<=.4?.06:r<=.7?.045:r<=.9?.01:-.15),.01,.997);
+                    bool good=random.NextDouble()<chance;int hbin=1,sbin=1;
+                    if(!good){double q=random.NextDouble();hbin=q<.46?2:q<.78?5:q<.93?4:q<.96?8:q<.98?21:22;q=random.NextDouble();int b=0;while(b<weights.Length-1&&q>weights[b]){q-=weights[b];b++;}sbin=sbins[b];}
+                    writer.WriteLine($"{index*100000+ ++serial},{x},{y},{serial%4+1},{sbin},{hbin},{wafer},1.25");
+                }
+            }
+            product.Files.Add(new ManagedDataFile {FilePath=path,StageId=stage.Id,Lot=lot,TestTime=new DateTime(2026,11,1).AddHours(index),UseStdfTestTime=false});
+        }
+        product.Snapshot=ProductYieldService.Calculate(product);
+        return product;
+    }
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            folder=Path.GetFullPath(args[0]);Directory.CreateDirectory(folder);
+            var app=new App();app.InitializeComponent();app.ShutdownMode=ShutdownMode.OnExplicitShutdown;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            var product=Product();var store=new ProductCatalogStore(Path.Combine(folder,"catalog.json"));store.Save(new ProductCatalog {Products=new(){product}});
+            var window=new ProductManagementWindow(store){Width=1440,Height=900};window.Show();Pump();
+            Save(window,"01-yield-bars.png");
+            var tabs=(TabControl)window.FindName("MainTabs");tabs.SelectedIndex=1;Pump();Save(window,"02-compact-yield-table.png");
+            tabs.SelectedIndex=3;Pump();Save(window,"03-hbin-fail-stacks.png");
+            var options=new ManagementReportOptionsWindow(product){Owner=window};options.Show();Pump();Save(options,"04-export-selection.png",590,650);options.Close();
+            string stage=product.Flow[0].Id;
+            Pair("05-pareto-preview.png",ManagementReportService.AnalysisImage(ManagementTrendService.Pareto(product,stage,"HBIN"),"HBIN Fail Pareto",600,440),ManagementReportService.AnalysisImage(ManagementTrendService.Pareto(product,stage,"SBIN",12),"SBIN Fail Pareto · Top 12",600,440));
+            var radial=ManagementTrendService.RadialTrend(product,stage);radial=radial with {Series=radial.Series.Take(12).ToList()};
+            Pair("06-radial-center-edge-preview.png",ManagementReportService.AnalysisImage(radial,"各晶圆径向良率分布",600,440),ManagementReportService.AnalysisImage(ManagementTrendService.CenterEdge(product,stage),"中心区 vs 边缘区",600,440));
+            File.WriteAllBytes(Path.Combine(folder,"07-sbin-root-causes.png"),ManagementReportService.AnalysisImage(ManagementTrendService.RootCause(product,stage),"SBIN Fail 分类 · 释义来自产品配置",1200,530));
+            ManagementReportService.SaveWorkbook(Path.Combine(folder,"management-report-preview.xlsx"),product,options:new ManagementReportOptions(ManagementAnalytics.Scopes(product).ToHashSet()));
+            window.Close();Pump();app.Shutdown();Console.WriteLine("Preview screenshots and XLSX generated from simulated data.");return 0;
+        }
+        catch(Exception ex){Console.Error.WriteLine(ex);return 1;}
+    }
+}

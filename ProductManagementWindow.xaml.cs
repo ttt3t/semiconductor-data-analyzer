@@ -22,6 +22,7 @@ public partial class ProductManagementWindow : Window
     private readonly DispatcherTimer _filterTimer;
     private readonly IdleMemoryReclaimer _memoryReclaimer;
     private readonly ManagementGridFilter _yieldFilters, _fileFilters, _categoryFilters;
+    private readonly HashSet<string> _analyticsQueued = new(StringComparer.Ordinal);
     private ManagementPeriod Period => PeriodYear?.IsChecked == true ? ManagementPeriod.Year : PeriodMonth?.IsChecked == true ? ManagementPeriod.Month : PeriodLot?.IsChecked == true ? ManagementPeriod.Lot : ManagementPeriod.Wafer;
 
     public ProductManagementWindow(ProductCatalogStore? store = null)
@@ -43,6 +44,7 @@ public partial class ProductManagementWindow : Window
             _closed = true; ++_version; _calculation?.Cancel(); _filterTimer.Stop(); _memoryReclaimer.Dispose();
             _yieldFilters.Dispose(); _fileFilters.Dispose(); _categoryFilters.Dispose();
             YieldTrend.SetData(new(Array.Empty<string>(), new()));
+            CategoryTrend.SetData(new(Array.Empty<string>(), new()));
             DgFiles.ItemsSource = DgYields.ItemsSource = DgCategories.ItemsSource = DgFlow.ItemsSource = null;
             ProductList.ItemsSource = CategoryStages.ItemsSource = null; _product = null; _store = null;
         };
@@ -69,6 +71,12 @@ public partial class ProductManagementWindow : Window
         CategoryStages.ItemsSource = product?.Flow; CategoryStages.SelectedIndex = product?.Flow.Count > 0 ? 0 : -1;
         TxtRules.Text = product == null ? "" : $"良品口径：{(product.IncludePartialPass ? "Pass + PartialPass" : "Pass")}；复测：{(product.PreferGoodRetest ? "良品优先（无良品取末次）" : product.RetestMode == RetestMode.Last ? "保留末次整条记录" : "保留首测整条记录")}。CP：批次 + 晶圆 + XY；FT：批次 + UUID（Test Num {product.UuidTestNumbers}）。综合分母为必测温度芯片并集，缺温/身份缺失显示未完成。文件登记顺序决定同温跨文件复测的先后。";
         RefreshDetails();
+        if (product?.Snapshot is { AnalyticsVersion: < 1 } && product.Files.Count > 0 && _analyticsQueued.Add(product.Id))
+        {
+            string id = product.Id;
+            Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(async () =>
+            { if (!_closed && _product?.Id == id && !_busy) await CalculateAsync(id); }));
+        }
     }
     private void RefreshDetails()
     {
@@ -86,6 +94,9 @@ public partial class ProductManagementWindow : Window
             count.Text = combined.Length == 0 ? "待登记对应步骤数据" : combined.Any(r => !r.HasSampleCount) ? "未提供样本数或无法自动综合" : $"{good:N0} / {total:N0} 颗 · 未完成 {combined.Sum(r => r.Pending):N0}";
         }
         Metric("CP", TxtCpYield, TxtCpCount); Metric("FT", TxtFtYield, TxtFtCount);
+        bool cp = product == null || product.Flow.Any(s => s.Kind == "CP"), ft = product == null || product.Flow.Any(s => s.Kind == "FT");
+        CpMetricCard.Visibility = cp ? Visibility.Visible : Visibility.Collapsed; FtMetricCard.Visibility = ft ? Visibility.Visible : Visibility.Collapsed;
+        MetricGrid.Columns = 2 + (cp ? 1 : 0) + (ft ? 1 : 0);
         TxtLots.Text = $"{rows.Select(r => r.Lot).Distinct().Count()} / {rows.Where(r => r.Kind == "CP").Select(r => (r.Lot, r.Wafer)).Distinct().Count()}";
         TxtFiles.Text = $"{product?.Files.Count ?? 0} / {snapshot?.FailedFiles ?? 0}";
         TxtCalculated.Text = snapshot == null ? "尚未计算" : $"上次 {snapshot.CalculatedUtc.ToLocalTime():MM-dd HH:mm}";
@@ -95,9 +106,10 @@ public partial class ProductManagementWindow : Window
             TxtNotice.Text = snapshot == null ? "" :
                 !current ? "原文件、路径或测试配置已变化，当前显示上次统计，请重新计算。" :
                 snapshot.FailedFiles > 0 ? $"{snapshot.FailedFiles} 个文件未参与计算，统计仅覆盖成功读取的数据。请在数据文件页查看原因。" :
-                $"已覆盖 {snapshot.Files.Count} 条登记数据。";
+                "";
         }
         else TxtNotice.Text = "";
+        NoticePanel.Visibility = TxtNotice.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
         var files = product?.Files.Where(f => filter.Length == 0 || f.Lot.Contains(filter, StringComparison.OrdinalIgnoreCase) || f.WaferOverride.Contains(filter, StringComparison.OrdinalIgnoreCase) || f.FileName.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToArray() ?? Array.Empty<ManagedDataFile>();
         _fileFilters?.SetItems(files.Select(file =>
         {
@@ -129,7 +141,10 @@ public partial class ProductManagementWindow : Window
         if (DgCategories == null) return;
         string? id = (CategoryStages.SelectedItem as ProductTestStage)?.Id;
         _categoryFilters?.SetItems(_product == null ? Array.Empty<ManagedCategoryCount>() : ManagementTrendService.CategoryRows(_product, TxtFilter.Text.Trim(), Period).Where(c => c.StageId == id).ToArray());
+        if (CategoryTrend != null) CategoryTrend.SetData(_product == null || id == null ? new(Array.Empty<string>(), new()) :
+            ManagementTrendService.FailTrend(_product, id, CategorySbin.IsChecked == true ? "SBIN" : "HBIN", TxtFilter.Text.Trim(), Period));
     }
+    private void CategoryBin_Changed(object sender, RoutedEventArgs e) { if (DgCategories != null) RefreshCategories(); }
     private void Period_Changed(object sender, RoutedEventArgs e)
     {
         if (DgYields == null || YieldPeriodColumn == null) return;
@@ -316,14 +331,16 @@ public partial class ProductManagementWindow : Window
     private async void ExportReport_Click(object sender, RoutedEventArgs e)
     {
         if (_product == null || _busy) return;
-        var file = new SaveFileDialog { Filter = "Excel 报告|*.xlsx", FileName = SafeName(_product.Name) + "-产品良率报告.xlsx" };
-        if (file.ShowDialog() != true) return;
         string id = _product.Id;
         if (!ProductYieldService.IsCurrent(_product) && !await CalculateAsync(id)) return;
         if (_product?.Id != id || _product.Snapshot == null || _closed) return;
+        var options = new ManagementReportOptionsWindow(_product, TxtFilter.Text.Trim(), YieldTrend.TargetYield) { Owner = this };
+        if (options.ShowDialog() != true) return;
+        var file = new SaveFileDialog { Filter = "Excel 报告|*.xlsx", FileName = SafeName(_product.Name) + "-产品良率报告.xlsx" };
+        if (file.ShowDialog() != true) return;
         var product = ProductCatalogStore.Clone(_product); string filter = TxtFilter.Text.Trim(); var period = Period;
         var cancellation = new CancellationTokenSource(); _calculation = cancellation; long version = ++_version; SetBusy(true);
-        try { await ManagementReportService.RunStaAsync(() => ManagementReportService.SaveWorkbook(file.FileName, product, filter, cancellation.Token, period)); if (!_closed && version == _version) TxtStatus.Text = "管理报告已导出：" + file.FileName; }
+        try { await ManagementReportService.RunStaAsync(() => ManagementReportService.SaveWorkbook(file.FileName, product, filter, cancellation.Token, period, options.Options)); if (!_closed && version == _version) TxtStatus.Text = "管理报告已导出：" + file.FileName; }
         catch (OperationCanceledException) { }
         catch (Exception ex) { if (!_closed && version == _version) TxtStatus.Text = "导出失败：" + ex.Message; }
         finally { if (ReferenceEquals(_calculation, cancellation)) _calculation = null; cancellation.Dispose(); if (!_closed && version == _version) SetBusy(false); }
