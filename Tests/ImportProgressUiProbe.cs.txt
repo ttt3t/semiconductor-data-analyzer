@@ -90,9 +90,9 @@ static class Probe
             site.IsChecked = true; Call(main, "BtnCombineSite_Click", site, new RoutedEventArgs());
             while ((bool)Field(main, "_isBusy")!) { Pump(); Thread.Sleep(3); }
             var options = new ImportOptions(false, "", false, false);
-            Wait((Task)Call(main, "AppendFilesAsync", new CsvImportSource[] { new(small, options) })!, main);
+            Wait((Task)Call(main, "AppendFilesAsync", (object)new CsvImportSource[] { new(small, options) })!, main);
             Check(((CsvParseResult)Field(main, "_data")!).Records.Count == 30400 && bar.Value == 100 && !bar.IsVisible, "actual append operation shows progress and commits all records");
-            Wait((Task)Call(main, "OpenBatchAsync", new CsvImportSource[] { new(small), new(next, options) })!, main);
+            Wait((Task)Call(main, "OpenBatchAsync", (object)new CsvImportSource[] { new(small), new(next, options) })!, main);
             Check(((CsvParseResult)Field(main, "_data")!).Records.Count == 800 && bar.Value == 100 && !bar.IsVisible, "standalone batch entry uses the progress pipeline");
             Wait(main.OpenManagedFilesAsync(new CsvImportSource[] { new(small), new(next, options) }, config, RetestMode.Last), main);
             Check(((CsvParseResult)Field(main, "_data")!).Records.Count == 800 && bar.Value == 100 && !bar.IsVisible, "management multi-file entry uses the progress pipeline");
