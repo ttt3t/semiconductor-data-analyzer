@@ -21,9 +21,9 @@ static class Probe
         {
             uint Premultiplied(int alpha, int r, int g, int b) => (uint)(alpha << 24 |
                 (r * alpha + 127) / 255 << 16 | (g * alpha + 127) / 255 << 8 | (b * alpha + 127) / 255);
-            Check(ScatterRaster.Pass == Premultiplied(179, 28, 128, 28) &&
-                ScatterRaster.Fail == Premultiplied(179, 220, 60, 60) &&
-                ScatterRaster.Mark == Premultiplied(179, 30, 120, 200), "green/red/blue crosses use 70% alpha and correctly premultiplied RGB");
+            Check(ScatterRaster.Pass == Premultiplied(128, 28, 128, 28) &&
+                ScatterRaster.Fail == Premultiplied(128, 220, 60, 60) &&
+                ScatterRaster.Mark == Premultiplied(128, 30, 120, 200), "green/red/blue crosses use 50% alpha and correctly premultiplied RGB");
             Check(ScatterRaster.Connection == Premultiplied(128, 28, 128, 28), "connections use 50% alpha and retain the same green hue");
             const int w = 128, h = 100;
             var pixels = new uint[w * h + 16];
@@ -138,10 +138,7 @@ static class Probe
                     {
                         int x = (int)Math.Round(Math.FusedMultiplyAdd(p.Index, sx, -sx));
                         int y = (int)Math.Round(p.Value);
-                        int index = y * bw + x;
-                        if (occupancy[index] != 0) continue;
-                        occupancy[index] = 1;
-                        ScatterRaster.StampCross(buffer, bw, bh, x, y, r, cross, p.OutOfSpec ? ScatterRaster.Fail : ScatterRaster.Pass);
+                        ScatterRaster.StampCross(buffer, bw, bh, x, y, r, cross, p.OutOfSpec ? ScatterRaster.Fail : ScatterRaster.Pass, occupancy);
                     }
                 }
                 for (int i = 0; i < 10; i++) Frame(true);

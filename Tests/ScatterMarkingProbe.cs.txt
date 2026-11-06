@@ -101,7 +101,7 @@ static class Probe
             }
             finally { mouse_event(0x0010, 0, 0, 0, 0); }
             Pump();
-            Check(PointPixel(plot, 1, 1) == 0xb3145a14 && PointPixel(plot, 3, 3) == 0xb39a2a2a, "normal grouped points are green and unmarked failures red at 70% opacity");
+            Check(PointPixel(plot, 1, 1) == 0x800e400e && PointPixel(plot, 3, 3) == 0x806e1e1e, "normal grouped points are green and unmarked failures red at 50% opacity");
             var a = At(plot, .8, .8); var b = At(plot, 3.2, 3.2);
             long renders = (long)Field(plot, "_renderCount")!;
             var raster = Field(plot, "_pixelBuffer");
@@ -118,19 +118,19 @@ static class Probe
             int changes = 0; plot.ChipMarksChanged += (_, _) => changes++;
             Mark(plot, 1, 1); Mark(plot, 3, 3);
             Check(plot.ChipMarkCount == 2 && changes == 2, "separate right-drag gestures accumulate chip marks");
-            Check(PointPixel(plot, 1, 1) == 0xb315548c && PointPixel(plot, 3, 3) == 0xb315548c, "marked points are blue in every site, including marked failure");
+            Check(PointPixel(plot, 1, 1) == 0x800f3c64 && PointPixel(plot, 3, 3) == 0x800f3c64, "marked points are blue in every site, including marked failure");
             Save(plot, "marked-site.png");
             plot.SetSeries(ScatterSeries.BuildSorted(values, 0, 2.5, ScatterOrder.Wafer, trackChips: true), 0, 2.5, "V"); Pump();
-            Check(PointPixel(plot, 1, 1) == 0xb315548c && PointPixel(plot, 3, 3) == 0xb315548c, "wafer grouping preserves blue marking");
+            Check(PointPixel(plot, 1, 1) == 0x800f3c64 && PointPixel(plot, 3, 3) == 0x800f3c64, "wafer grouping preserves blue marking");
             plot.SetSeries(ScatterSeries.Empty, null, null, "");
             // A second test uses the same physical identities with different measurements and order.
             var next = values.Select(v => { v.Value *= 10; return v; }).Reverse().ToArray();
             plot.SetSeries(ScatterSeries.BuildSorted(next, 0, 25, ScatterOrder.SerialNumber, trackChips: true), 0, 25, "mV"); Pump();
-            Check(plot.ChipMarkCount == 2 && PointPixel(plot, 1, 10) == 0xb315548c && PointPixel(plot, 3, 30) == 0xb315548c, "marks follow chips to another test item and SN sorting");
+            Check(plot.ChipMarkCount == 2 && PointPixel(plot, 1, 10) == 0x800f3c64 && PointPixel(plot, 3, 30) == 0x800f3c64, "marks follow chips to another test item and SN sorting");
             plot.IsYAxisLocked = true; Call(plot, "ZoomAt", At(plot, 2, 20), 120); Pump();
             Mark(plot, 2, 20); Check(plot.ChipMarkCount == 3, "rectangle uses current zoom and locked-Y coordinates");
             plot.ClearChipMarks(); Pump();
-            Check(plot.ChipMarkCount == 0 && ((bool[])Field(plot, "_markedPoints")!).Length == 0 && PointPixel(plot, 3, 30) == 0xb39a2a2a, "clear restores red/green colors and releases mask");
+            Check(plot.ChipMarkCount == 0 && ((bool[])Field(plot, "_markedPoints")!).Length == 0 && PointPixel(plot, 3, 30) == 0x806e1e1e, "clear restores red/green colors and releases mask");
             // Right clicks/drags only select. Only a double left click resets zoom.
             Call(plot, "ZoomAt", At(plot, 2, 20), 120); double scale = (double)Field(plot, "_scaleX")!;
             Set(plot, "_rightStart", new Point(200, 100)); Call(plot, "CompleteRightGesture", new Point(220, 120));
@@ -157,7 +157,7 @@ static class Probe
             plot.ClearChipMarks();
             var retests = ScatterSeries.BuildSorted(repeated, 0, 25, ScatterOrder.Site, trackChips: true);
             plot.SetSeries(retests, 0, 25, "V"); Pump(); Mark(plot, 1, 10);
-            Check(((bool[])Field(plot, "_markedPoints")!).SequenceEqual(new[] { true, false }) && PointPixel(plot, 2, 30) == 0xb39a2a2a,
+            Check(((bool[])Field(plot, "_markedPoints")!).SequenceEqual(new[] { true, false }) && PointPixel(plot, 2, 30) == 0x806e1e1e,
                 "CP same-XY retest outside rectangle stays unmarked and red");
             var secondTest = repeated.Reverse().Select(v => { v.Value *= 10; return v; }).ToArray();
             plot.SetSeries(ScatterSeries.BuildSorted(secondTest, 0, 250, ScatterOrder.SerialNumber, trackChips: true), 0, 250, "mV"); Pump();

@@ -6,7 +6,7 @@ using SemiconductorCsvAnalyzer.Models;
 namespace SemiconductorCsvAnalyzer.Services;
 
 public sealed record ImportOptions(bool SameWafer, string TargetWafer, bool MatchByNumber, bool UseNewLimits,
-    bool PreserveWaferNames = false, bool AutoMatch = false);
+    bool PreserveWaferNames = false, bool AutoMatch = false, bool AutoWafer = false);
 public sealed record CsvImportSource(string Path, ImportOptions? Options = null,
     StdfImportMode StdfMode = StdfImportMode.Standard, string ConfigText = "", string? WaferOverride = null,
     string? LotOverride = null, bool ShowLotInWafer = false);
@@ -337,10 +337,14 @@ public static partial class DatasetService
         }
         var waferMap = new Dictionary<string, string>(StringComparer.Ordinal);
         var taken = existing.Wafers.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var automaticTargets = options.AutoWafer ? StdfWaferMerge.Targets(existing) : null;
         foreach (string wafer in incoming.Wafers)
         {
             string name = options.SameWafer ? options.TargetWafer : wafer;
-            if (!options.SameWafer && !options.PreserveWaferNames)
+            bool automatic = !options.SameWafer && automaticTargets != null &&
+                incoming.StdfWaferOrigins.TryGetValue(wafer, out var identity) && automaticTargets.TryGetValue(identity, out name!);
+            if (!automatic && !options.SameWafer) name = wafer;
+            if (!options.SameWafer && !automatic && !options.PreserveWaferNames)
             {
                 int suffix = 2;
                 while (!taken.Add(name)) name = $"{wafer} ({suffix++})";
@@ -371,6 +375,7 @@ public static partial class DatasetService
         return new CsvParseResult
         {
             Items = items, Records = records,
+            StdfWaferOrigins = StdfWaferMerge.Merge(existing, incoming, waferMap),
             SerialNumberNotice = string.Join("\n\n", new[] { existing.SerialNumberNotice, incoming.SerialNumberNotice }
                 .Where(notice => notice.Length > 0)),
             ReassignedSerialNumberCount = records.Count(r => r.OriginalSerialNumber != null)
@@ -380,6 +385,7 @@ public static partial class DatasetService
     private static CsvParseResult CompleteMerge(CsvParseResult definitions)
     {
         var merged = Build(definitions.Items, definitions.Records);
+        merged.StdfWaferOrigins = definitions.StdfWaferOrigins;
         MeasurementDisplay.Configure(merged.Items);
         string priorNotice = definitions.SerialNumberNotice;
         merged.ReassignedSerialNumberCount = definitions.ReassignedSerialNumberCount;
@@ -404,6 +410,7 @@ public static partial class DatasetService
             throw new InvalidDataException("含多晶圆的文件不能整体覆盖为一个片号，请在登记中清空晶圆覆盖值。");
         if (source.WaferOverride != null || source.LotOverride != null || source.ShowLotInWafer)
         {
+            data.StdfWaferOrigins = StdfWaferMerge.Empty;
             foreach (var record in data.Records)
             {
                 if (source.LotOverride != null) record.Lot = source.LotOverride;

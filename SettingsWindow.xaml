@@ -167,8 +167,7 @@
                                 <ComboBoxItem Content="93k 模式（优先 TSR 名称）"/>
                             </ComboBox>
                         </StackPanel>
-                        
-
+                        <TextBlock Text="导入时直接使用此模式，不再弹出模式选择；需要切换时在此修改并保存。" FontSize="11" Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" Margin="0,0,0,12"/>
                         <Button x:Name="BtnSavePreferences" Content="保存界面设置" Click="BtnSavePreferences_Click"
                                 HorizontalAlignment="Left" Style="{StaticResource PrimaryButton}"/>
                     </StackPanel>

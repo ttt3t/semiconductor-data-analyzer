@@ -23,6 +23,9 @@ public partial class ImportDataWindow : Window
         FileList.SelectedIndex = files.Count > 0 ? 0 : -1;
         CmbTargetWafer.ItemsSource = wafers;
         CmbTargetWafer.SelectedIndex = wafers.Count > 0 ? 0 : -1;
+        // No pre-scan: import already reads WIR/WRR during its definition pass.
+        AutoWafer.IsChecked = files.Any(path => new[] { ".std", ".stdf", ".std.gz", ".stdf.gz" }
+            .Any(extension => path.EndsWith(extension, StringComparison.OrdinalIgnoreCase)));
         if (initialImport)
         {
             Title = "打开 / 批量导入";
@@ -51,7 +54,8 @@ public partial class ImportDataWindow : Window
         string target = CmbTargetWafer.SelectedItem as string ?? "";
         if (!_initialImport && SameWafer.IsChecked == true && target.Length == 0)
         { TxtError.Text = "请选择要合并到的 wafer。"; return; }
-        Options = new ImportOptions(SameWafer.IsChecked == true, target, MatchNumber.IsChecked == true, NewLimits.IsChecked == true);
+        Options = new ImportOptions(SameWafer.IsChecked == true, target, MatchNumber.IsChecked == true,
+            NewLimits.IsChecked == true, AutoWafer: AutoWafer.IsChecked == true);
         DialogResult = true;
     }
 }

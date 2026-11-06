@@ -13,11 +13,9 @@ public partial class MainWindow
         var choices = new ImportDataWindow(paths, Array.Empty<string>(), initialImport: true) { Owner = this };
         if (choices.ShowDialog() != true) return;
         var ordered = choices.SelectedFiles;
-        var stdf = ordered.Where(DataFileService.IsStdf).ToArray();
-        var mode = stdf.Length == 0 ? StdfImportMode.Standard : SelectStdfMode(stdf[0], stdf.Length);
-        if (!mode.HasValue) return;
+        var mode = _uiPreferences.Value.DefaultStdfMode;
         var sources = ordered.Select((path, index) => new CsvImportSource(path,
-            index == 0 ? null : choices.Options, mode.Value)).ToArray();
+            index == 0 ? null : choices.Options, mode)).ToArray();
         await OpenBatchAsync(sources);
     }
 

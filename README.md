@@ -1,6 +1,6 @@
 # Semiconductor Data Analyzer
 
-**CSV Analyzer V2.0.10 · GYF**
+**CSV Analyzer V2.0.11 · GYF**
 
 A Windows desktop application for semiconductor CSV / STDF test-data analysis, built with .NET 8 and WPF.
 
@@ -21,6 +21,12 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 - 产品目录和统计摘要存于本机用户目录 `SemiconductorCsvAnalyzer/ProductLibrary`；保存时保留上一份备份，不保存完整测量矩阵。
 
 只启动独立分析器可使用 `SemiconductorCsvAnalyzer.exe --analyzer`。详细口径见 [使用手册](Docs/UserGuide.md)。
+
+## V2.0.11 更新
+
+- 散点叉号以 50% 不透明度显示，同色叉线在同一像素重叠会逐渐加深；标记蓝色、不良红色优先，连接虚线保持 50%。继续复用位图与像素缓存，GUI、PNG 复制及报告同步。
+- 批量 / 追加导入增加“自动读取 STDF 文件内 Wafer 并合并”，`.std`、`.stdf`、`.std.gz`、`.stdf.gz` 默认选择此项。按文件内批次及 WIR / WRR Wafer ID 自动归组，缺少批次 / Wafer、不同批次或 CSV 文件保持独立；文件顺序及全部复测记录保留，不额外预扫描测量数据。
+- STDF 单文件、批量及追加导入直接使用设置的默认普通 / 93k 模式，不再弹出模式选择；管理器的新登记也沿用默认模式，已有登记保留原模式。
 
 ## V2.0.10 更新
 

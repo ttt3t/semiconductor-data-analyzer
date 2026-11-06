@@ -64,6 +64,7 @@ public static class StdfParser
                 result = projection != null ? projection.Complete(orderedRecords) : DatasetService.Build(catalog.Items, orderedRecords);
             MeasurementDisplay.Configure(result.Items);
             result.StdfMetadata = catalog.Metadata.Complete();
+            result.StdfWaferOrigins = StdfWaferMerge.ReadOrigins(result.StdfMetadata, result.Wafers);
             result.SourceDescription = "STDF V4" + (mode == StdfImportMode.Advantest93K ? "（93k：TSR 测试名称）" : "") +
                 (catalog.HasFunctional ? "；FTR：0=Pass、1=Fail" : "") +
                 (catalog.Families.Values.Any(f => f.Variants.Count > 1) ? "；不同阈值/单位已拆分测项" : "");

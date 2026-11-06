@@ -7,12 +7,25 @@ namespace SemiconductorCsvAnalyzer.Controls;
 internal static class ScatterRaster
 {
     // Pbgra32: RGB channels are premultiplied by alpha, rounded to the nearest byte.
-    // Crosses use 70% opacity, retaining the existing green/red/blue hues.
-    internal const uint Pass = 0xb3145a14;
-    internal const uint Fail = 0xb39a2a2a;
-    internal const uint Mark = 0xb315548c;
+    // Crosses start at 50%; same-color overlaps accumulate in the coverage buffer.
+    internal const uint Pass = 0x800e400e;
+    internal const uint Fail = 0x806e1e1e;
+    internal const uint Mark = 0x800f3c64;
     // Single-pixel dashed connections use 50% opacity, behind the crosses.
     internal const uint Connection = 0x800e400e;
+    private static readonly uint[][] DensityColors = { Colors(28, 128, 28), Colors(220, 60, 60), Colors(30, 120, 200) };
+
+    private static uint[] Colors(int r, int g, int b)
+    {
+        var colors = new uint[10];
+        for (int n = 1; n < colors.Length; n++)
+        {
+            int alpha = (int)Math.Round(255 * (1 - Math.Pow(.5, n)), MidpointRounding.AwayFromZero);
+            colors[n] = (uint)(alpha << 24 | (r * alpha + 127) / 255 << 16 |
+                (g * alpha + 127) / 255 << 8 | (b * alpha + 127) / 255);
+        }
+        return colors;
+    }
 
     internal static (int X, int Y)[] CrossOffsets(double dpi, out int radius)
     {
@@ -29,21 +42,37 @@ internal static class ScatterRaster
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void StampCross(uint[] pixels, int width, int height, int x, int y,
-        int radius, (int X, int Y)[] offsets, uint color)
+        int radius, (int X, int Y)[] offsets, uint color, byte[]? coverage = null)
     {
+        int kind = color == Mark ? 3 : color == Fail ? 2 : 1;
         if (x >= radius && x < width - radius && y >= radius && y < height - radius)
         {
             int center = y * width + x;
-            foreach (var offset in offsets) pixels[center + offset.Y * width + offset.X] = color;
+            foreach (var offset in offsets) Pixel(pixels, coverage, center + offset.Y * width + offset.X, color, kind);
         }
         else
         {
             foreach (var offset in offsets)
             {
                 int px = x + offset.X, py = y + offset.Y;
-                if ((uint)px < (uint)width && (uint)py < (uint)height) pixels[py * width + px] = color;
+                if ((uint)px < (uint)width && (uint)py < (uint)height) Pixel(pixels, coverage, py * width + px, color, kind);
             }
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void Pixel(uint[] pixels, byte[]? coverage, int index, uint color, int kind)
+    {
+        if (coverage == null) { pixels[index] = color; return; }
+        int old = coverage[index], priority = kind << 4;
+        // A byte stores priority plus a capped overlap count. Blue > red > green,
+        // independent of record order; colors never blend into an ambiguous brown.
+        if ((old & 0xf0) > priority) return;
+        int count = (old & 0xf0) == priority ? Math.Min(9, (old & 15) + 1) : 1;
+        int next = priority | count;
+        if (old == next) return; // Nine 50% layers already round to fully opaque.
+        coverage[index] = (byte)next;
+        pixels[index] = DensityColors[kind - 1][count];
     }
 
     internal static void DrawConnections(uint[] pixels, int width, int height, ScatterSeries series,

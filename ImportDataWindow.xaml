@@ -1,7 +1,7 @@
 <Window x:Class="SemiconductorCsvAnalyzer.ImportDataWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="追加 / 批量导入" Width="560" Height="570" ResizeMode="NoResize" WindowStartupLocation="CenterOwner">
+        Title="追加 / 批量导入" Width="590" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterOwner">
     <DockPanel Margin="20">
         <StackPanel DockPanel.Dock="Bottom">
             <TextBlock x:Name="TxtError" Foreground="Firebrick" TextWrapping="Wrap" Margin="0,0,0,8"/>
@@ -29,6 +29,9 @@
                         <RadioButton x:Name="NewWafer" GroupName="Wafer" Content="不同 wafer" IsChecked="True" Margin="0,0,24,0"/>
                         <RadioButton x:Name="SameWafer" GroupName="Wafer" Content="同 wafer"/>
                     </StackPanel>
+                    <RadioButton x:Name="AutoWafer" GroupName="Wafer" Content="自动读取 STDF 文件内 Wafer 并合并" Margin="0,10,0,0"
+                                 ToolTip="使用 WIR / WRR 中的 Wafer ID；同批次且同 Wafer 自动合并，不同批次或缺少批次 / Wafer 信息的文件保持独立。CSV 沿用不同 wafer。"/>
+                    <TextBlock Text="自动模式：按批次 + Wafer 归组，保留全部复测记录与文件顺序。" FontSize="11" Foreground="#64748B" TextWrapping="Wrap" Margin="0,6,0,0"/>
                     <ComboBox x:Name="CmbTargetWafer" Margin="0,10,0,0" IsEnabled="{Binding IsChecked, ElementName=SameWafer}"/>
                 </StackPanel>
             </GroupBox>

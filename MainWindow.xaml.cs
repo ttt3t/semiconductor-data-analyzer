@@ -267,7 +267,7 @@ public partial class MainWindow : Window
     private void UpdateWindowTitle()
     {
         string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
-        Title = $"CSV Analyzer · V2.0.10 | 当前数据：{_currentDataName} | 配置：{configName}";
+        Title = $"CSV Analyzer · V2.0.11 | 当前数据：{_currentDataName} | 配置：{configName}";
     }
 
     private void UpdateConfigInfo()
@@ -341,18 +341,14 @@ public partial class MainWindow : Window
     {
         if (_isBusy) throw new InvalidOperationException("正在处理数据，请稍后重试。");
         var mode = SelectStdfMode(path);
-        if (!mode.HasValue) throw new OperationCanceledException();
-        await OpenDataAsync(path, mode.Value);
+        await OpenDataAsync(path, mode);
     }
 
-    private StdfImportMode? SelectStdfMode(string path, int fileCount = 1)
+    private StdfImportMode SelectStdfMode(string path)
     {
         if (!File.Exists(path)) throw new FileNotFoundException("找不到数据文件：" + path);
         if (!DataFileService.IsStdf(path)) return StdfImportMode.Standard;
-        var options = new StdfImportWindow(path, fileCount) { Owner = this };
-        if (_uiPreferences.Value.DefaultStdfMode == StdfImportMode.Advantest93K)
-            ((RadioButton)options.FindName("Mode93K")).IsChecked = true;
-        return options.ShowDialog() == true ? options.SelectedMode : null;
+        return _uiPreferences.Value.DefaultStdfMode;
     }
 
     private async Task OpenDataAsync(string path, StdfImportMode mode)
@@ -437,10 +433,8 @@ public partial class MainWindow : Window
         try
         {
             var paths = choices.SelectedFiles;
-            var stdfFiles = paths.Where(DataFileService.IsStdf).ToArray();
-            var mode = stdfFiles.Length == 0 ? StdfImportMode.Standard : SelectStdfMode(stdfFiles[0], stdfFiles.Length);
-            if (!mode.HasValue) return;
-            var sources = paths.Select(path => new CsvImportSource(path, choices.Options, mode.Value)).ToArray();
+            var mode = _uiPreferences.Value.DefaultStdfMode;
+            var sources = paths.Select(path => new CsvImportSource(path, choices.Options, mode)).ToArray();
             await AppendFilesAsync(sources);
         }
         catch (OperationCanceledException) { }

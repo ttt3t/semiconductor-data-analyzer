@@ -185,8 +185,6 @@ public class ScatterPlotControl : CachedPlotControl
     private double _pointBitmapDpi;
     private uint[] _pixelBuffer = Array.Empty<uint>();
     private byte[] _occupancy = Array.Empty<byte>();
-    private readonly List<(int X, int Y)> _failCoords = new(256);
-    private readonly List<(int X, int Y)> _markedCoords = new(256);
     private double _stampDpi;
     private int _stampRadius;
     private (int X, int Y)[] _stampOffsets = Array.Empty<(int X, int Y)>();
@@ -244,10 +242,6 @@ public class ScatterPlotControl : CachedPlotControl
         _pointBitmapDpi = 0;
         _pixelBuffer = Array.Empty<uint>();
         _occupancy = Array.Empty<byte>();
-        _markedCoords.Clear();
-        if (_markedCoords.Capacity > 256) _markedCoords.Capacity = 256;
-        _failCoords.Clear();
-        if (_failCoords.Capacity > 256) _failCoords.Capacity = 256;
     }
 
     public void SetData(IList<TestValue>? values, double? lsl, double? usl, string unit = "")
@@ -544,14 +538,8 @@ public class ScatterPlotControl : CachedPlotControl
         CancelRightGesture();
         _series = series;
         _markedPoints = _chipMarks.CreateMask(series);
-        _markedCoords.Clear();
-        if (_markedCoords.Capacity > Math.Max(256L, (long)series.Points.Length * 4))
-            _markedCoords.Capacity = Math.Max(256, series.Points.Length);
         _groupLabels = Array.Empty<FormattedText>();
         _pointCount = series.SampleCount;
-        _failCoords.Clear();
-        if (_failCoords.Capacity > Math.Max(256L, (long)_pointCount * 4))
-            _failCoords.Capacity = Math.Max(256, _pointCount);
         if (_pointCount == 0) ReleaseRasterBuffers();
         _hoverTimer.Stop();
         _hover = null;
@@ -705,8 +693,6 @@ public class ScatterPlotControl : CachedPlotControl
 
         Array.Clear(_pixelBuffer, 0, pixelCount);
         Array.Clear(_occupancy, 0, pixelCount);
-        _failCoords.Clear();
-        _markedCoords.Clear();
         EnsureStamp(bitmapScale < 1 ? Math.Min(bmpW / _plotW, bmpH / _plotH) : renderDpi);
 
         double pxPerDipX = bmpW / _plotW;
@@ -754,45 +740,12 @@ public class ScatterPlotControl : CachedPlotControl
                 x < -r - .5 || x >= bmpW + r + .5 || y < -r - .5 || y >= bmpH + r + .5) continue;
             int ix = (int)Math.Round(x), iy = (int)Math.Round(y);
 
-            // A clipped point outside the image must not occupy the center of an inside point.
-            bool centerInside = (uint)ix < (uint)bmpW && (uint)iy < (uint)bmpH;
-            int centerIdx = centerInside ? iy * bmpW + ix : -1;
-
-            if (i < markedPoints.Length && markedPoints[i])
-            {
-                if (!centerInside || _occupancy[centerIdx] < 4)
-                {
-                    if (centerInside) _occupancy[centerIdx] = 4;
-                    _markedCoords.Add((ix, iy));
-                }
-                continue;
-            }
-
-            if (point.OutOfSpec)
-            {
-                if (!centerInside || _occupancy[centerIdx] < 3)
-                {
-                    if (centerInside) _occupancy[centerIdx] = 3;
-                    _failCoords.Add((ix, iy));
-                }
-                continue;
-            }
-
-            if (centerInside && _occupancy[centerIdx] != 0) continue;
-            if (centerInside) _occupancy[centerIdx] = 1;
-            ScatterRaster.StampCross(_pixelBuffer, bmpW, bmpH, ix, iy, r, _stampOffsets, ScatterRaster.Pass);
+            uint color = i < markedPoints.Length && markedPoints[i] ? ScatterRaster.Mark
+                : point.OutOfSpec ? ScatterRaster.Fail : ScatterRaster.Pass;
+            // Count crossed pixels, including duplicate centers and partial X intersections.
+            // Reuse the existing coverage byte buffer; no per-point WPF visuals or lists.
+            ScatterRaster.StampCross(_pixelBuffer, bmpW, bmpH, ix, iy, r, _stampOffsets, color, _occupancy);
         }
-
-        // Second pass: stamp out-of-spec red points on top so failures are never hidden behind pass points.
-        for (int i = 0; i < _failCoords.Count; i++)
-        {
-            var (ix, iy) = _failCoords[i];
-            ScatterRaster.StampCross(_pixelBuffer, bmpW, bmpH, ix, iy, r, _stampOffsets, ScatterRaster.Fail);
-        }
-
-        // Marking is a display override, including failed points; specifications/statistics stay intact.
-        foreach (var (ix, iy) in _markedCoords)
-            ScatterRaster.StampCross(_pixelBuffer, bmpW, bmpH, ix, iy, r, _stampOffsets, ScatterRaster.Mark);
 
         _pointBitmap.WritePixels(new Int32Rect(0, 0, bmpW, bmpH), _pixelBuffer, bmpW * sizeof(uint), 0);
         dc.DrawImage(_pointBitmap, plotRect);

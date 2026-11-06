@@ -33,6 +33,7 @@ public partial class ManagedImportWindow : Window
         _commonLot = Files.FirstOrDefault()?.Lot ?? ""; TxtLot.Text = _commonLot;
         SpecifiedMode.IsChecked = specified; SpecifiedMode_Changed(this, new RoutedEventArgs());
         TxtBasis.Text = "当前良品口径：" + (product.IncludePartialPass ? "Pass + PartialPass" : "Pass");
+        Mode93K.IsChecked = UiPreferencesService.Current.Value.DefaultStdfMode == StdfImportMode.Advantest93K;
         if (existing != null)
         {
             StageList.SelectedItem = StageList.Items.OfType<ProductTestStage>().FirstOrDefault(s => s.Id == existing.StageId);
