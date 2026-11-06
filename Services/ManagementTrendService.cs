@@ -45,6 +45,18 @@ public static partial class ManagementTrendService
     }
 
     public static ManagementTrendData FailTrend(ManagedProduct product, string stageId, string type, string filter, ManagementPeriod period)
+        => FailTrend(product, stageId, type, filter, period, null);
+
+    public static ManagementTrendData DefectTrend(ManagedProduct product, string stageId, string filter, ManagementPeriod period)
+    {
+        var categories = ConfigLoader.Parse(product.ConfigText).SBinCategories
+            .SelectMany(c => c.Value.Select(bin => (Bin: BinStatisticsService.NormalizeBin(bin), Category: c.Key)))
+            .ToDictionary(c => c.Bin, c => c.Category, StringComparer.OrdinalIgnoreCase);
+        return FailTrend(product, stageId, "SBIN", filter, period,
+            bin => categories.GetValueOrDefault(BinStatisticsService.NormalizeBin(bin), "未分类"));
+    }
+
+    private static ManagementTrendData FailTrend(ManagedProduct product, string stageId, string type, string filter, ManagementPeriod period, Func<string, string>? classify)
     {
         var rows = product.Snapshot?.FailBins.Where(r => r.StageId == stageId && r.BinType == type && Matches(r.Lot, r.Wafer, filter)).ToArray() ?? Array.Empty<ManagedFailBinCount>();
         string Label(ManagedFailBinCount r) => period == ManagementPeriod.Wafer ? r.Lot + (r.Kind == "FT" ? " / FT" : " / " + r.Wafer) :
@@ -53,9 +65,11 @@ public static partial class ManagementTrendService
         var yields = YieldRows(product, filter, period).Where(r => r.StageId == stageId).ToArray();
         string YieldLabel(ManagedYieldRow r) => period == ManagementPeriod.Wafer ? r.Lot + (r.Kind == "FT" ? " / FT" : " / " + r.Wafer) : period == ManagementPeriod.Lot ? r.Lot : r.PeriodLabel;
         var labels = yields.Select(YieldLabel).Concat(rows.Select(Label)).Distinct().ToArray();
-        var counts = rows.GroupBy(r => (Label: Label(r), r.Bin)).ToDictionary(g => g.Key, g => g.Sum(r => r.Count));
-        var bins = rows.GroupBy(r => r.Bin).OrderByDescending(g => g.Sum(r => r.Count)).Select(g => g.Key).ToArray();
-        return new(labels, bins.Select(bin => new WaferCategorySeries("Bin " + bin, FailColor(bin), labels.Select(label => (double?)counts.GetValueOrDefault((label, bin))).ToArray())).ToList(),
+        string Category(ManagedFailBinCount row) => classify?.Invoke(row.Bin) ?? row.Bin;
+        var counts = rows.GroupBy(r => (Label: Label(r), Category: Category(r))).ToDictionary(g => g.Key, g => g.Sum(r => r.Count));
+        var bins = rows.GroupBy(Category).OrderByDescending(g => g.Sum(r => r.Count)).ThenBy(g => g.Key, StringComparer.Ordinal).Select(g => g.Key).ToArray();
+        return new(labels, bins.Select(bin => new WaferCategorySeries(classify == null ? "Bin " + bin : bin,
+            classify == null ? FailColor(bin) : BinPalette.ColorForCategory(bin), labels.Select(label => (double?)counts.GetValueOrDefault((label, bin))).ToArray())).ToList(),
             ManagementChartMode.StackedCounts, "Fail 芯片数（颗）");
     }
 

@@ -25,7 +25,8 @@ public static class ManagementReportService
     }
     public static byte[] TrendImage(ManagementTrendData data, string title, bool yield = true)
     {
-        const int width = 1440, chartHeight = 440;
+        const int width = 1440;
+        int chartHeight = TrendChartHeight(data);
         double cellWidth = Math.Max(70, (width - 152.0) / Math.Max(1, data.Labels.Length));
         int height = TrendImageHeight(data);
         if (height > 12000) throw new InvalidDataException("报表分类过多，请减少所选分类。");
@@ -68,7 +69,8 @@ public static class ManagementReportService
         var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using var stream = new MemoryStream(); encoder.Save(stream); return stream.ToArray();
     }
-    public static int TrendImageHeight(ManagementTrendData data) => 480 + (data.Series.Count + 1) * 22;
+    private static int TrendChartHeight(ManagementTrendData data) => data.Mode == ManagementChartMode.StackedCounts ? 572 : 440;
+    public static int TrendImageHeight(ManagementTrendData data) => TrendChartHeight(data) + 40 + (data.Series.Count + 1) * 22;
     public static IEnumerable<ManagementTrendData> Pages(ManagementTrendData data)
     {
         for (int start = 0; start < data.Labels.Length; start += 10)
@@ -153,7 +155,7 @@ public static class ManagementReportService
                         Write(timed, row++, c.PeriodLabel, c.Kind, product.Flow.FirstOrDefault(s => s.Id == c.StageId)?.Label, c.Category, c.Count, c.Total, c.Percent / 100);
                     timed.Cell(3, 1).Value = "各分类数量合计 ÷ 对应期间有效 SBIN 总数；只覆盖自动解析的逐颗记录。";
                 }
-                var categoryPlots = Sheet("分类趋势图", new[] { "HBIN Fail 堆叠数量 · 仅自动解析记录" }); row = 6;
+                var categoryPlots = Sheet("Bin分类图", new[] { "HBIN Fail 堆叠数量 · 仅自动解析记录" }); row = 6;
                 foreach (var stage in product.Flow)
                     foreach (var page in Pages(ManagementTrendService.FailTrend(product, stage.Id, "HBIN", filter, period)))
                     {
@@ -161,6 +163,16 @@ public static class ManagementReportService
                         using var stream = new MemoryStream(TrendImage(page, product.Name + " · " + stage.Label + " · HBIN Fail 数量 · " + periodLabel, false));
                         int imageHeight = TrendImageHeight(page);
                         categoryPlots.AddPicture(stream).MoveTo(categoryPlots.Cell(row, 1)).WithSize(1200, (int)(imageHeight * 1200.0 / 1440));
+                        row += (int)Math.Ceiling(imageHeight * 1200.0 / 1440 / 20) + 3;
+                    }
+                var defectPlots = Sheet("不良分类图", new[] { "按配置的 SBIN 分类汇总不良数量 · 未配置的 SBIN 归入未分类" }); row = 6;
+                foreach (var stage in product.Flow)
+                    foreach (var page in Pages(ManagementTrendService.DefectTrend(product, stage.Id, filter, period)))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        using var stream = new MemoryStream(TrendImage(page, product.Name + " · " + stage.Label + " · SBIN 不良分类 · " + periodLabel, false));
+                        int imageHeight = TrendImageHeight(page);
+                        defectPlots.AddPicture(stream).MoveTo(defectPlots.Cell(row, 1)).WithSize(1200, (int)(imageHeight * 1200.0 / 1440));
                         row += (int)Math.Ceiling(imageHeight * 1200.0 / 1440 / 20) + 3;
                     }
                 AddAnalysisSheets(book, product, filter, token);

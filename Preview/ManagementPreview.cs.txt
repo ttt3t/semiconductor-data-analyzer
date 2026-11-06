@@ -73,6 +73,7 @@ static class Preview
             Save(window,"01-yield-bars.png");
             var tabs=(TabControl)window.FindName("MainTabs");tabs.SelectedIndex=1;Pump();Save(window,"02-compact-yield-table.png");
             tabs.SelectedIndex=3;Pump();Save(window,"03-hbin-fail-stacks.png");
+            tabs.SelectedIndex=4;Pump();Save(window,"10-sbin-defect-categories.png");
             var options=new ManagementReportOptionsWindow(product){Owner=window};options.Show();Pump();Save(options,"04-export-selection.png",590,650);options.Close();
             string stage=product.Flow[0].Id;
             Pair("05-pareto-preview.png",ManagementReportService.AnalysisImage(ManagementTrendService.Pareto(product,stage,"HBIN"),"HBIN Fail Pareto",600,440),ManagementReportService.AnalysisImage(ManagementTrendService.Pareto(product,stage,"SBIN",12),"SBIN Fail Pareto · Top 12",600,440));

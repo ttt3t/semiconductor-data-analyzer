@@ -45,8 +45,9 @@ public partial class ProductManagementWindow : Window
             _yieldFilters.Dispose(); _fileFilters.Dispose(); _categoryFilters.Dispose();
             YieldTrend.SetData(new(Array.Empty<string>(), new()));
             CategoryTrend.SetData(new(Array.Empty<string>(), new()));
+            DefectTrend.SetData(new(Array.Empty<string>(), new()));
             DgFiles.ItemsSource = DgYields.ItemsSource = DgCategories.ItemsSource = DgFlow.ItemsSource = null;
-            ProductList.ItemsSource = CategoryStages.ItemsSource = null; _product = null; _store = null;
+            ProductList.ItemsSource = CategoryStages.ItemsSource = DefectStages.ItemsSource = null; _product = null; _store = null;
         };
     }
     private void RefreshProducts(string? select = null)
@@ -69,6 +70,7 @@ public partial class ProductManagementWindow : Window
         ProductActions.IsEnabled = product != null && !_busy;
         DgFlow.ItemsSource = product?.Flow;
         CategoryStages.ItemsSource = product?.Flow; CategoryStages.SelectedIndex = product?.Flow.Count > 0 ? 0 : -1;
+        DefectStages.ItemsSource = product?.Flow; DefectStages.SelectedIndex = product?.Flow.Count > 0 ? 0 : -1;
         TxtRules.Text = product == null ? "" : $"良品口径：{(product.IncludePartialPass ? "Pass + PartialPass" : "Pass")}；复测：{(product.PreferGoodRetest ? "良品优先（无良品取末次）" : product.RetestMode == RetestMode.Last ? "保留末次整条记录" : "保留首测整条记录")}。CP：批次 + 晶圆 + XY；FT：批次 + UUID（Test Num {product.UuidTestNumbers}）。综合分母为必测温度芯片并集，缺温/身份缺失显示未完成。文件登记顺序决定同温跨文件复测的先后。";
         RefreshDetails();
         if (product?.Snapshot is { AnalyticsVersion: < 1 } && product.Files.Count > 0 && _analyticsQueued.Add(product.Id))
@@ -128,7 +130,7 @@ public partial class ProductManagementWindow : Window
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { status = ex.Message; }
             return new FileRow(file, product!.Flow.FirstOrDefault(s => s.Id == file.StageId)?.Label ?? (file.StageId.StartsWith("COMBINED:") ? file.SpecifiedKind + " 综合良率" : "步骤不存在"), status, state?.Records ?? 0);
         }).ToList());
-        RefreshTrend(); RefreshCategories();
+        RefreshTrend(); RefreshCategories(); RefreshDefects();
     }
     private void RefreshTrend()
     {
@@ -145,6 +147,14 @@ public partial class ProductManagementWindow : Window
             ManagementTrendService.FailTrend(_product, id, CategorySbin.IsChecked == true ? "SBIN" : "HBIN", TxtFilter.Text.Trim(), Period));
     }
     private void CategoryBin_Changed(object sender, RoutedEventArgs e) { if (DgCategories != null) RefreshCategories(); }
+    private void RefreshDefects()
+    {
+        if (DefectTrend == null) return;
+        string? id = (DefectStages.SelectedItem as ProductTestStage)?.Id;
+        DefectTrend.SetData(_product == null || id == null ? new(Array.Empty<string>(), new()) :
+            ManagementTrendService.DefectTrend(_product, id, TxtFilter.Text.Trim(), Period));
+    }
+    private void DefectStage_Changed(object sender, SelectionChangedEventArgs e) => RefreshDefects();
     private void Period_Changed(object sender, RoutedEventArgs e)
     {
         if (DgYields == null || YieldPeriodColumn == null) return;

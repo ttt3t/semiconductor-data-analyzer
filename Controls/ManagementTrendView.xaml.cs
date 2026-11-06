@@ -14,6 +14,12 @@ public partial class ManagementTrendView : UserControl
     {
         InitializeComponent();
     }
+    public double ChartMinHeight { get => ChartRow.MinHeight; set => ChartRow.MinHeight = value; }
+    public double TableMaxHeight
+    {
+        get => Table.MaxHeight;
+        set { Table.MaxHeight = value; TableRow.MaxHeight = value; }
+    }
     public void SetData(ManagementTrendData data)
     {
         var previous = _choices.ToDictionary(c => c.Category, c => c.IsVisible);
