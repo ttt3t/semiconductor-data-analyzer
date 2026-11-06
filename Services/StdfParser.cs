@@ -190,7 +190,7 @@ public static class StdfParser
             if (!family.Variants.TryGetValue(limits, out var item))
             {
                 if (!discovering) throw new InvalidDataException("STDF 两次读取的测试阈值不一致。");
-                item = new TestItemData { ColumnIndex = Items.Count, TestNumber = key.Test.Number.ToString(CultureInfo.InvariantCulture),
+                item = new TestItemData { ColumnIndex = Items.Count, TestNumber = key.Test.Number.ToString(CultureInfo.InvariantCulture), StdfChannel = key.Channel,
                     Unit = limits.Unit, LowLimit = limits.Lower, HighLimit = limits.Upper, IsStdfMeasurement = true };
                 family.Variants.Add(limits, item); Items.Add(item);
             }
@@ -239,11 +239,9 @@ public static class StdfParser
                             test.Kind == 20 ? new(0, 0, "0=Pass; 1=Fail") : new(null, null, ""), name, true, out _);
             foreach (var family in Families.Values.Distinct())
             {
-                string kind = family.Key.Test.Kind switch { 10 => "PTR", 15 => "MPR", _ => "FTR" };
                 string description = family.Description.Length > 0 ? family.Description :
                     TestNames.GetValueOrDefault(family.Key.Test, "");
                 string name = description.Length > 0 ? description : $"T{family.Key.Test.Number}";
-                if (family.Key.Test.Kind == 15) name += $" [{kind}{family.Key.Channel}]";
                 int variant = 0;
                 foreach (var item in family.Variants.Values)
                 {

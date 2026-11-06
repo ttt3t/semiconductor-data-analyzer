@@ -311,7 +311,7 @@ public static partial class DatasetService
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var slots = new Dictionary<TestItemData, int>();
         foreach (var list in new[] { existing.Items, incoming.Items })
-            foreach (var group in list.GroupBy(i => (Base: BaseNumber(i), i.Name)))
+            foreach (var group in list.GroupBy(i => (Base: BaseNumber(i), i.Name, i.StdfChannel)))
             {
                 int slot = 0;
                 foreach (var item in group.OrderBy(i => i.ColumnIndex)) slots[item] = ++slot;
@@ -324,7 +324,7 @@ public static partial class DatasetService
             // Match the source number + actual name, rather than assigning B[1] to A[1].
             if (options.MatchByNumber && ambiguousNumbers.Contains(BaseNumber(item)) ||
                 !options.MatchByNumber && duplicateNames.Contains(item.Name))
-                return $"D:{BaseNumber(item)}:{item.Name.Length}:{item.Name}:{slots[item]}";
+                return $"D:{BaseNumber(item)}:{item.Name.Length}:{item.Name}:{item.StdfChannel.Length}:{item.StdfChannel}:{slots[item]}";
             return options.MatchByNumber && long.TryParse(key, out long number) ? number.ToString(CultureInfo.InvariantCulture) : key;
         }
         void CheckUnique(IEnumerable<TestItemData> items)
@@ -519,6 +519,7 @@ public static partial class DatasetService
     {
         Id = item.Id, Focus = item.Focus, ColumnIndex = item.ColumnIndex, Name = item.Name, DisplayName = item.DisplayName,
         TestNumber = item.TestNumber, Unit = item.Unit, SBin = item.SBin, HBin = item.HBin,
+        StdfChannel = item.StdfChannel,
         IsStdfMeasurement = item.IsStdfMeasurement, DisplayFactor = item.DisplayFactor, DisplayUnit = item.DisplayUnit,
         LowLimit = item.LowLimit, HighLimit = item.HighLimit
     };

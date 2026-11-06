@@ -11,6 +11,7 @@ public static partial class TestNumberLabel
         {
             int index = 0;
             foreach (var item in group.OrderBy(i => i.Name, StringComparer.Ordinal)
+                .ThenBy(i => i.StdfChannel, StringComparer.Ordinal)
                 .ThenBy(i => i.LowLimit).ThenBy(i => i.HighLimit).ThenBy(i => i.Unit, StringComparer.Ordinal))
             {
                 bool prefixed = item.DisplayName == $"{item.TestNumber}_{item.Name}";
