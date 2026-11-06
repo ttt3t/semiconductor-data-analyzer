@@ -56,7 +56,7 @@ static class Probe
         string path = Path.Combine(folder, name); using var writer = new StreamWriter(path, false, new UTF8Encoding(false), 65536);
         writer.WriteLine("SN,X,Y,Site,SBIN,HBIN,Wafer," + string.Join(",", Enumerable.Range(0, items).Select(i => "A" + i)));
         string values = "," + string.Join(",", Enumerable.Repeat("1.2345", items));
-        for (int row = 0; row < chips; row++) writer.WriteLine($"S{row},{row},0,{row % 2 + 1},1,1,W{row % 3}" + values);
+        for (int row = 0; row < chips; row++) writer.WriteLine($"{Path.GetFileNameWithoutExtension(name)}-{row},{row},0,{row % 2 + 1},1,1,W{row % 3}" + values);
         return path;
     }
     [STAThread] static int Main(string[] args)
@@ -74,7 +74,7 @@ static class Probe
             var site = (ToggleButton)main.FindName("BtnCombineSite"); var wafer = (ToggleButton)main.FindName("BtnCombineWafer");
             Check(site.IsChecked == true && wafer.IsChecked == true && (bool)Field(main, "_combineSites")! && (bool)Field(main, "_combineWafers")!, "new analyzer defaults both Site and Wafer controls and analysis state to combined");
             Check(!((ProgressBar)main.FindName("ImportProgressBar")).IsVisible, "progress bar starts hidden");
-            var config = Config(); string csv = Csv("large.csv", 30000, 120), small = Csv("small.csv", 400, 120);
+            var config = Config(); string csv = Csv("large.csv", 30000, 120), small = Csv("small.csv", 400, 120), next = Csv("next.csv", 400, 120);
             var observed = Wait(main.OpenManagedFileAsync(csv, config, StdfImportMode.Standard, RetestMode.Last), main, true);
             var bar = (ProgressBar)main.FindName("ImportProgressBar");
             Check(observed.Values.Any(v => v is > 0 and < 100) && observed.Stages.Any(s => s.Contains("CSV")), "actual 30,000-chip import exposes live read progress and stage text");
@@ -92,9 +92,9 @@ static class Probe
             var options = new ImportOptions(false, "", false, false);
             Wait((Task)Call(main, "AppendFilesAsync", new CsvImportSource[] { new(small, options) })!, main);
             Check(((CsvParseResult)Field(main, "_data")!).Records.Count == 30400 && bar.Value == 100 && !bar.IsVisible, "actual append operation shows progress and commits all records");
-            Wait((Task)Call(main, "OpenBatchAsync", new CsvImportSource[] { new(small), new(small, options) })!, main);
+            Wait((Task)Call(main, "OpenBatchAsync", new CsvImportSource[] { new(small), new(next, options) })!, main);
             Check(((CsvParseResult)Field(main, "_data")!).Records.Count == 800 && bar.Value == 100 && !bar.IsVisible, "standalone batch entry uses the progress pipeline");
-            Wait(main.OpenManagedFilesAsync(new CsvImportSource[] { new(small), new(small, options) }, config, RetestMode.Last), main);
+            Wait(main.OpenManagedFilesAsync(new CsvImportSource[] { new(small), new(next, options) }, config, RetestMode.Last), main);
             Check(((CsvParseResult)Field(main, "_data")!).Records.Count == 800 && bar.Value == 100 && !bar.IsVisible, "management multi-file entry uses the progress pipeline");
 
             var original = Field(main, "_data"); string broken = Path.Combine(folder, "broken.csv"); File.WriteAllText(broken, "broken\n");
