@@ -27,7 +27,7 @@ public partial class ManagementTrendView : UserControl
         style.Setters.Add(new Setter(VerticalAlignmentProperty, VerticalAlignment.Center));
         for (int i = 0; i < data.Labels.Length; i++) Table.Columns.Add(new DataGridTextColumn
         {
-            Header = data.Labels[i], Width = 82,
+            Header = data.Labels[i].Replace(" / ", "\n"), Width = 82,
             Binding = new Binding($"Values[{i}]") { Mode = BindingMode.OneTime, StringFormat = data.Mode == ManagementChartMode.StackedCounts ? "{0:N0}" : "{0:F1}%", TargetNullValue = "–" }, ElementStyle = style
         });
         _choices = data.Series.Select(s => new WaferCategoryTrendWindow.CategoryChoice(s.Category, s.LineBrush)).ToList();

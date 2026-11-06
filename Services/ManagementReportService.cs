@@ -223,7 +223,7 @@ public static class ManagementReportService
         var comparison = Sheet("中心边缘对比", "中心区 ≤40%，边缘区 >90%；仅纳入有有效 XY 的 CP 芯片。差值单位为百分点（pp）。");
         int pRow = 4, rootRow = 4, radialRow = 4, comparisonRow = 4;
         var selected = filter.Length == 0 ? product : ManagementAnalytics.Select(product, ManagementAnalytics.Scopes(product).Where(s => ManagementAnalytics.Matches(s.Lot, s.Wafer, filter)).ToHashSet());
-        foreach (var stage in product.Flow)
+        foreach (var stage in product.Flow.Where(s => selected.Snapshot?.Yields.Any(r => r.StageId == s.Id) == true))
         {
             string title = product.Name + " · " + stage.Label;
             Picture(pareto, pRow, 1, ManagementTrendService.Pareto(selected, stage.Id, "HBIN"), title + " · HBIN Pareto", 570, 350);

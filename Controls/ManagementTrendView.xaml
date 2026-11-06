@@ -19,13 +19,14 @@
             <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch" ResizeDirection="Rows" Background="#EEF2F7"/>
             <DataGrid x:Name="Table" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False"
                       CanUserSortColumns="False" CanUserReorderColumns="False" CanUserResizeColumns="False" FrozenColumnCount="1"
-                      HeadersVisibility="Column" ColumnHeaderHeight="30" RowHeight="22" FontSize="11" MaxHeight="180" Background="White" BorderBrush="#E2E8F0"
+                      HeadersVisibility="Column" ColumnHeaderHeight="34" RowHeight="22" FontSize="11" MaxHeight="180" Background="White" BorderBrush="#E2E8F0"
                       EnableRowVirtualization="True" EnableColumnVirtualization="True" VirtualizingPanel.VirtualizationMode="Recycling"
                       ScrollViewer.CanContentScroll="True" ScrollViewer.ScrollChanged="Table_ScrollChanged" SizeChanged="Table_SizeChanged"
                       ClipboardCopyMode="IncludeHeader" HorizontalGridLinesBrush="#E2E8F0" VerticalGridLinesBrush="#E2E8F0" AlternatingRowBackground="#F8FAFC">
                 <DataGrid.ColumnHeaderStyle><Style TargetType="DataGridColumnHeader">
                     <Setter Property="Background" Value="#F1F5F9"/><Setter Property="Padding" Value="4,2"/><Setter Property="HorizontalContentAlignment" Value="Center"/>
-                    <Setter Property="ContentTemplate"><Setter.Value><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="35"/></DataTemplate></Setter.Value></Setter>
+                    <Setter Property="ToolTip" Value="{Binding Content, RelativeSource={RelativeSource Self}}"/>
+                    <Setter Property="ContentTemplate"><Setter.Value><DataTemplate><TextBlock Text="{Binding}" FontSize="10" TextAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" LineHeight="12" LineStackingStrategy="BlockLineHeight" MaxHeight="26"/></DataTemplate></Setter.Value></Setter>
                 </Style></DataGrid.ColumnHeaderStyle>
                 <DataGrid.Columns><DataGridTemplateColumn Header="步骤 / 分类" Width="150">
                     <DataGridTemplateColumn.CellTemplate><DataTemplate><DockPanel Margin="8,0" VerticalAlignment="Center">

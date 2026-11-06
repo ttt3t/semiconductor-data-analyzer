@@ -66,7 +66,9 @@ public sealed class ManagementChartControl : FrameworkElement
         double min = yield ? Math.Max(0, Math.Floor(Math.Min(values.DefaultIfEmpty(0).Min(), _data.Mode == ManagementChartMode.YieldBars ? _data.TargetYield : 100) / 5) * 5 - 5) : 0;
         double max = yield ? 100 : counts ? NiceTop(Enumerable.Range(0, _data.Labels.Length).Select(i => _data.Series.Sum(s => i < s.Values.Length ? s.Values[i] ?? 0 : 0)).DefaultIfEmpty(0).Max() * 1.15) : Math.Min(100, NiceTop(values.DefaultIfEmpty(0).Max() * 1.18));
         if (max <= min) min = Math.Max(0, max - 5);
-        var plot = new Rect(55, top + 13, Math.Max(1, w - (pareto ? 106 : 74)), Math.Max(1, h - top - 58));
+        // Leave room above 100% for the cumulative and center/edge annotations.
+        double annotationSpace = _data.Mode == ManagementChartMode.CenterEdge ? 24 : pareto ? 12 : 0;
+        var plot = new Rect(55, top + 13 + annotationSpace, Math.Max(1, w - (pareto ? 106 : 74)), Math.Max(1, h - top - 58 - annotationSpace));
         double Y(double value) => plot.Bottom - (value - min) / (max - min) * plot.Height;
         double slot = Math.Max(40, plot.Width / _data.Labels.Length);
         if (_data.Labels.Length > 16) slot = Math.Max(slot, ColumnWidth);
@@ -84,7 +86,8 @@ public sealed class ManagementChartControl : FrameworkElement
             foreach (int p in new[] { 0, 20, 40, 60, 80, 100 }) Label(dc, p + "%", plot.Right + 6, plot.Bottom - p * plot.Height / 100 - 7, 9);
         }
         int first = Math.Max(0, (int)(_offset / slot) - 1), last = Math.Min(_data.Labels.Length - 1, (int)((_offset + plot.Width) / slot) + 1);
-        dc.PushClip(new RectangleGeometry(new Rect(plot.Left, plot.Top - 10, plot.Width, plot.Height + 10)));
+        double annotationClip = _data.Mode == ManagementChartMode.CenterEdge ? 30 : 20;
+        dc.PushClip(new RectangleGeometry(new Rect(plot.Left, plot.Top - annotationClip, plot.Width, plot.Height + annotationClip)));
         if (_data.Mode == ManagementChartMode.RadialLines)
         {
             foreach (var series in _data.Series)
