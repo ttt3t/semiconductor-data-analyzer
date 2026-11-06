@@ -15,6 +15,8 @@ public static class SummaryService
         AnalysisOperation.CheckCancellation();
         int itemCount = items.Count;
         if (itemCount == 0) return new List<TestItemSummary>();
+        bool reportProgress = ImportProgress.IsActive;
+        int completedItems = 0;
         string format = $"F{config.DecimalPlaces}";
 
         if (combineSites && combineWafers)
@@ -32,6 +34,7 @@ public static class SummaryService
             {
                 var item = items[i];
                 combinedResults[i] = Create(item, TestItemSummary.CombinedSite, null, item.Values, item.Errors.Count, config, format);
+                if (reportProgress) ImportProgress.Report((double)Interlocked.Increment(ref completedItems) / itemCount);
             });
             return new List<TestItemSummary>(combinedResults);
         }
@@ -75,6 +78,7 @@ public static class SummaryService
                         groups.TryGetValue(key, out var indices) ? indices : Array.Empty<int>()),
                         errors.GetValueOrDefault(key), config, format);
                 }
+            if (reportProgress) ImportProgress.Report((double)Interlocked.Increment(ref completedItems) / itemCount);
         }
 
         if (itemCount == 1) BuildItem(0);

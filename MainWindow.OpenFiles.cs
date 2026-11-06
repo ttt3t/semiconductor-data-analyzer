@@ -28,9 +28,9 @@ public partial class MainWindow
         if (!_managedConfigLoaded && string.IsNullOrEmpty(_lastConfigPath) &&
             sources.Any(s => !DataFileService.IsStdf(s.Path) && !IntegratedCsvService.IsIntegrated(s.Path)))
             throw new InvalidOperationException("普通 CSV 需要先在设置中加载配置，或点击 CSV 格式识别并应用结果。");
-        await RunBusyAsync(async () =>
+        await RunImportAsync(async () =>
         {
-            var result = await Task.Run(() => DatasetService.LoadSources(sources, _config));
+            var result = await ReadImportAsync(() => DatasetService.LoadSources(sources, _config));
             var prepared = await PrepareAnalysisAsync(result, _config);
             _columnValueFilters.Clear(); UpdateValueFilterHeaders();
             CommitAnalysis(result, prepared);
@@ -39,6 +39,24 @@ public partial class MainWindow
             RefreshStdfInformationSources(); UpdateWindowTitle(); RefreshOpenMaps();
             foreach (var source in sources) _recentFiles.RememberCsv(source.Path);
             TxtStatus.Text = $"已按所选顺序打开 {sources.Count} 个文件，原始测试记录全部保留";
+            ShowSerialNumberNotice(_data);
+        });
+    }
+
+    private async Task AppendFilesAsync(IReadOnlyList<CsvImportSource> sources)
+    {
+        await RunImportAsync(async () =>
+        {
+            var merged = await ReadImportAsync(() => DatasetService.AppendSources(_data, sources, _config));
+            var prepared = await PrepareAnalysisAsync(merged, _config);
+            CommitAnalysis(merged, prepared);
+            _sources.AddRange(sources);
+            RefreshStdfInformationSources();
+            _currentDataName = $"整合数据（{_sources.Count} 个文件 / {_data.Wafers.Count} 个 wafer）";
+            UpdateWindowTitle();
+            RefreshOpenMaps();
+            foreach (var source in sources) _recentFiles.RememberCsv(source.Path);
+            TxtStatus.Text = $"已导入 {sources.Count} 个文件，原始测试记录全部保留";
             ShowSerialNumberNotice(_data);
         });
     }

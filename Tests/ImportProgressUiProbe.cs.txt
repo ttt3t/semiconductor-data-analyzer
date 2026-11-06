@@ -1,0 +1,121 @@
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Text;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Threading;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Controls;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static string folder = "";
+    static void Check(bool ok, string text) { if (!ok) throw new Exception(text); checks++; Console.WriteLine("PASS " + text); }
+    static object? Field(object target, string name) => target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target);
+    static object? Call(object target, string name, params object[] args) => target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(target, args);
+    static void Pump() { var f = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => f.Continue = false)); Dispatcher.PushFrame(f); }
+    static void Save(Window window, string name)
+    {
+        window.UpdateLayout(); var root = (FrameworkElement)window.Content;
+        using var png = ChartImage.Png(ChartImage.Capture(root, ChartImage.SizeOf(root)));
+        File.WriteAllBytes(Path.Combine(folder, name), png.ToArray());
+    }
+    static (List<double> Values, List<string> Stages) Wait(Task task, MainWindow main, bool screenshot = false)
+    {
+        var watch = Stopwatch.StartNew(); var values = new List<double>(); var stages = new List<string>();
+        bool saved = false;
+        while (!task.IsCompleted)
+        {
+            Pump();
+            if (((ProgressBar)main.FindName("ImportProgressBar")).IsVisible)
+            {
+                values.Add(((ProgressBar)main.FindName("ImportProgressBar")).Value);
+                stages.Add(((TextBlock)main.FindName("TxtBusyStage")).Text);
+                if (screenshot && !saved && values[^1] is > 0 and < 85)
+                { Save(main, "import-progress.png"); saved = true; }
+            }
+            Thread.Sleep(3); if (watch.Elapsed.TotalSeconds > 120) throw new TimeoutException("import task");
+        }
+        task.GetAwaiter().GetResult(); Pump(); return (values, stages);
+    }
+    static void Idle(MainWindow main)
+    {
+        var watch = Stopwatch.StartNew();
+        while ((bool)Field(main, "_detailPending")!) { Pump(); Thread.Sleep(3); if (watch.Elapsed.TotalSeconds > 30) throw new TimeoutException("detail"); }
+    }
+    static AnalyzerConfig Config() => new() { TestItemRow = 1, TestNumberRow = 0, LowLimitRow = 0, HighLimitRow = 0,
+        UnitRow = 0, SBinRow = 0, HBinRow = 0, DataStartRow = 2, TestItemStartColumn = 8,
+        SerialNumberColumn = 1, XColumn = 2, YColumn = 3, SiteColumn = 4, SBinColumn = 5, HBinColumn = 6, WaferColumn = 7 };
+    static string Csv(string name, int chips, int items)
+    {
+        string path = Path.Combine(folder, name); using var writer = new StreamWriter(path, false, new UTF8Encoding(false), 65536);
+        writer.WriteLine("SN,X,Y,Site,SBIN,HBIN,Wafer," + string.Join(",", Enumerable.Range(0, items).Select(i => "A" + i)));
+        string values = "," + string.Join(",", Enumerable.Repeat("1.2345", items));
+        for (int row = 0; row < chips; row++) writer.WriteLine($"S{row},{row},0,{row % 2 + 1},1,1,W{row % 3}" + values);
+        return path;
+    }
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            var app = new App(); app.InitializeComponent(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            var failures = new List<Exception>(); app.DispatcherUnhandledException += (_, e) => { failures.Add(e.Exception); Console.Error.WriteLine(e.Exception); e.Handled = true; };
+            typeof(AppSettings).GetField("_userDirectory", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, Path.Combine(folder, "user"));
+            MainWindow Window(string suffix) => new(new LayoutSettings(Path.Combine(folder, "layout" + suffix + ".json")),
+                new RecentFilesService(Path.Combine(folder, "recent" + suffix + ".json")), new UiPreferencesService(Path.Combine(folder, "ui" + suffix + ".json")));
+            var main = Window("main"); main.Show(); Pump();
+            var site = (ToggleButton)main.FindName("BtnCombineSite"); var wafer = (ToggleButton)main.FindName("BtnCombineWafer");
+            Check(site.IsChecked == true && wafer.IsChecked == true && (bool)Field(main, "_combineSites")! && (bool)Field(main, "_combineWafers")!, "new analyzer defaults both Site and Wafer controls and analysis state to combined");
+            Check(!((ProgressBar)main.FindName("ImportProgressBar")).IsVisible, "progress bar starts hidden");
+            var config = Config(); string csv = Csv("large.csv", 30000, 120), small = Csv("small.csv", 400, 120);
+            var observed = Wait(main.OpenManagedFileAsync(csv, config, StdfImportMode.Standard, RetestMode.Last), main, true);
+            var bar = (ProgressBar)main.FindName("ImportProgressBar");
+            Check(observed.Values.Any(v => v is > 0 and < 100) && observed.Stages.Any(s => s.Contains("CSV")), "actual 30,000-chip import exposes live read progress and stage text");
+            Check(observed.Values.Zip(observed.Values.Skip(1), (a, b) => b >= a).All(v => v), "displayed progress never goes backwards");
+            Check(bar.Value == 100 && !bar.IsVisible && Field(main, "_importProgress") == null && !(bool)Field(main, "_isBusy")!, "success reaches 100%, stops polling and restores controls");
+            var grid = (DataGrid)main.FindName("DgTestItems");
+            Check(grid.Items.Count == 120 && grid.Items.Cast<TestItemSummary>().All(s => s.Count == 30000 && s.IsWaferCombined && s.Site == TestItemSummary.CombinedSite), "first loaded dataset combines all Sites and Wafers in the real summary");
+            Idle(main); Save(main, "combined-defaults.png");
+
+            site.IsChecked = false; Call(main, "BtnCombineSite_Click", site, new RoutedEventArgs());
+            var watch = Stopwatch.StartNew(); while ((bool)Field(main, "_isBusy")!) { Pump(); Thread.Sleep(3); if (watch.Elapsed.TotalSeconds > 60) throw new TimeoutException(); }
+            Check(grid.Items.Count == 240 && wafer.IsChecked == true && !bar.IsVisible, "user can independently disable Site combination and normal recalculation has no import bar");
+            site.IsChecked = true; Call(main, "BtnCombineSite_Click", site, new RoutedEventArgs());
+            while ((bool)Field(main, "_isBusy")!) { Pump(); Thread.Sleep(3); }
+            var options = new ImportOptions(false, "", false, false);
+            Wait((Task)Call(main, "AppendFilesAsync", new CsvImportSource[] { new(small, options) })!, main);
+            Check(((CsvParseResult)Field(main, "_data")!).Records.Count == 30400 && bar.Value == 100 && !bar.IsVisible, "actual append operation shows progress and commits all records");
+            Wait((Task)Call(main, "OpenBatchAsync", new CsvImportSource[] { new(small), new(small, options) })!, main);
+            Check(((CsvParseResult)Field(main, "_data")!).Records.Count == 800 && bar.Value == 100 && !bar.IsVisible, "standalone batch entry uses the progress pipeline");
+            Wait(main.OpenManagedFilesAsync(new CsvImportSource[] { new(small), new(small, options) }, config, RetestMode.Last), main);
+            Check(((CsvParseResult)Field(main, "_data")!).Records.Count == 800 && bar.Value == 100 && !bar.IsVisible, "management multi-file entry uses the progress pipeline");
+
+            var original = Field(main, "_data"); string broken = Path.Combine(folder, "broken.csv"); File.WriteAllText(broken, "broken\n");
+            bool failed = false; try { Wait(main.OpenManagedFileAsync(broken, config, StdfImportMode.Standard, RetestMode.Last), main); } catch (InvalidDataException) { failed = true; }
+            Check(failed && ReferenceEquals(original, Field(main, "_data")) && !bar.IsVisible && bar.Value < 100 && Field(main, "_importProgress") == null && !(bool)Field(main, "_isBusy")!, "parse failure hides progress, restores controls and retains the previous dataset");
+            var pending = main.OpenManagedFileAsync(csv, config, StdfImportMode.Standard, RetestMode.Last);
+            while (Field(main, "_importProgress") == null && !pending.IsCompleted) Pump();
+            Call(main, "CancelOperation"); bool canceled = false;
+            try { Wait(pending, main); } catch (OperationCanceledException) { canceled = true; }
+            Check(canceled && ReferenceEquals(original, Field(main, "_data")) && !bar.IsVisible && bar.Value < 100 && Field(main, "_importProgress") == null && !(bool)Field(main, "_isBusy")!, "canceling import hides progress and retains the previous valid dataset");
+
+            var other = Window("other"); other.Show(); Pump();
+            var first = main.OpenManagedFileAsync(csv, config, StdfImportMode.Standard, RetestMode.Last);
+            var second = other.OpenManagedFileAsync(small, config, StdfImportMode.Standard, RetestMode.Last);
+            Wait(Task.WhenAll(first, second), main);
+            Check(((CsvParseResult)Field(main, "_data")!).Records.Count == 30000 && ((CsvParseResult)Field(other, "_data")!).Records.Count == 400 &&
+                ((ProgressBar)other.FindName("ImportProgressBar")).Value == 100 && bar.Value == 100, "simultaneous analyzer windows complete their own imports independently");
+            main.Close(); other.Close(); Pump();
+            Check(failures.Count == 0, "progress, cancellation, recalculation and close have no dispatcher exceptions");
+            app.Shutdown(); Console.WriteLine($"PASS {checks} import progress UI checks"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

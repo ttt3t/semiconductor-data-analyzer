@@ -6,11 +6,13 @@ namespace SemiconductorCsvAnalyzer.Controls;
 // The point layer remains one reused Pbgra32 bitmap, with no per-point WPF visuals/geometries.
 internal static class ScatterRaster
 {
-    internal const uint Pass = 0xff1c801c;
-    internal const uint Fail = 0xffdc3c3c;
-    internal const uint Mark = 0xff1e78c8;
-    // Premultiplied, translucent green keeps dense connections behind the opaque crosses.
-    internal const uint Connection = 0x50092809;
+    // Pbgra32: RGB channels are premultiplied by alpha, rounded to the nearest byte.
+    // Crosses use 70% opacity, retaining the existing green/red/blue hues.
+    internal const uint Pass = 0xb3145a14;
+    internal const uint Fail = 0xb39a2a2a;
+    internal const uint Mark = 0xb315548c;
+    // Single-pixel dashed connections use 50% opacity, behind the crosses.
+    internal const uint Connection = 0x800e400e;
 
     internal static (int X, int Y)[] CrossOffsets(double dpi, out int radius)
     {

@@ -29,7 +29,8 @@ public static class StdfParser
         name = Path.GetFileNameWithoutExtension(name);
         var catalog = new Catalog(mode);
         progress?.Invoke("正在读取 STDF 测试定义…");
-        new Pass(catalog, config, name, null, cancellationToken).Read(file);
+        using (ImportProgress.Stage(0, .3, "扫描 STDF 测试定义"))
+            new Pass(catalog, config, name, null, cancellationToken).Read(file);
         stamp.Validate(file);
         catalog.FinishNames();
         cancellationToken.ThrowIfCancellationRequested();
@@ -40,7 +41,8 @@ public static class StdfParser
         try
         {
             var pass = new Pass(catalog, config, name, store, cancellationToken, projection);
-            pass.Read(file);
+            using (ImportProgress.Stage(.3, .8, "读取 STDF 芯片与测量值"))
+                pass.Read(file);
             stamp.Validate(file);
             store?.Seal();
             if (pass.Records.Count == 0) throw new InvalidDataException("STDF 不包含完成的芯片记录（PRR）。");
@@ -57,7 +59,9 @@ public static class StdfParser
                 pass.Records.Sort((a, b) => a.Order.CompareTo(b.Order));
                 for (int i = 0; i < pass.Records.Count; i++) orderedRecords.Add(pass.Records[i].Record);
             }
-            var result = projection != null ? projection.Complete(orderedRecords) : DatasetService.Build(catalog.Items, orderedRecords);
+            CsvParseResult result;
+            using (ImportProgress.Stage(.8, 1, "建立数值列与芯片索引"))
+                result = projection != null ? projection.Complete(orderedRecords) : DatasetService.Build(catalog.Items, orderedRecords);
             MeasurementDisplay.Configure(result.Items);
             result.StdfMetadata = catalog.Metadata.Complete();
             result.SourceDescription = "STDF V4" + (mode == StdfImportMode.Advantest93K ? "（93k：TSR 测试名称）" : "") +
@@ -320,9 +324,12 @@ public static class StdfParser
         public void Read(FileStream file)
         {
             using var reader = new StdfReader(file);
+            int progressRecords = 0;
             while (reader.Next())
             {
                 _token.ThrowIfCancellationRequested();
+                // For gzip, use compressed bytes consumed; no decompression or extra scan for progress.
+                if ((++progressRecords & 4095) == 0) ImportProgress.Report((double)file.Position / Math.Max(1, file.Length));
                 var fields = reader.Fields;
                 try
                 {

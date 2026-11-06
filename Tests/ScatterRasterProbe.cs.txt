@@ -19,6 +19,12 @@ static class Probe
     {
         try
         {
+            uint Premultiplied(int alpha, int r, int g, int b) => (uint)(alpha << 24 |
+                (r * alpha + 127) / 255 << 16 | (g * alpha + 127) / 255 << 8 | (b * alpha + 127) / 255);
+            Check(ScatterRaster.Pass == Premultiplied(179, 28, 128, 28) &&
+                ScatterRaster.Fail == Premultiplied(179, 220, 60, 60) &&
+                ScatterRaster.Mark == Premultiplied(179, 30, 120, 200), "green/red/blue crosses use 70% alpha and correctly premultiplied RGB");
+            Check(ScatterRaster.Connection == Premultiplied(128, 28, 128, 28), "connections use 50% alpha and retain the same green hue");
             const int w = 128, h = 100;
             var pixels = new uint[w * h + 16];
             foreach (double dpi in new[] { 1.0, 1.5, 2.0, 3.0 })
@@ -36,7 +42,7 @@ static class Probe
                 foreach (uint color in new[] { ScatterRaster.Fail, ScatterRaster.Mark })
                 {
                     ScatterRaster.StampCross(pixels, w, h, 30, 30, radius, offsets, color);
-                    Check(pixels[30 * w + 30] == color, "opaque red/blue override is exact at DPI " + dpi);
+                    Check(pixels[30 * w + 30] == color, "translucent red/blue override is exact at DPI " + dpi);
                 }
                 foreach (var point in new[] { (-radius, 0), (0, 0), (w - 1, h - 1), (w + radius - 1, h - 1) })
                     ScatterRaster.StampCross(pixels, w, h, point.Item1, point.Item2, radius, offsets, ScatterRaster.Pass);

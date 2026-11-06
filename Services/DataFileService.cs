@@ -33,15 +33,23 @@ public static class DataFileService
     private static CsvParseResult ParseCore(string path, AnalyzerConfig config, Action<string>? progress,
         CancellationToken cancellationToken, StdfImportMode stdfMode, bool yieldOnly)
     {
+        using var fileProgress = ImportProgress.Stage(0, 1, Path.GetFileName(path));
         if (!cancellationToken.CanBeCanceled) cancellationToken = AnalysisOperation.Token;
         cancellationToken.ThrowIfCancellationRequested();
         bool stdf = IsStdf(path);
         bool integrated = !stdf && IntegratedCsvService.IsIntegrated(path);
-        var result = stdf ? StdfParser.ParseCore(path, config, progress, cancellationToken, stdfMode, yieldOnly)
-            : CsvParser.ParseCore(path, config, progress, cancellationToken, yieldOnly);
-        if (SerialNumberService.Normalize(result, !stdf && !integrated && config.SerialNumberColumn <= 0))
-            result.SerialNumberNotice = $"文件“{Path.GetFileName(path)}”：{result.SerialNumberNotice}";
-        return yieldOnly ? YieldReadProjection.PrepareIdentity(result, config) : RetestIdentityService.Prepare(result, config);
+        CsvParseResult result;
+        using (ImportProgress.Stage(0, .96, ""))
+            result = stdf ? StdfParser.ParseCore(path, config, progress, cancellationToken, stdfMode, yieldOnly)
+                : CsvParser.ParseCore(path, config, progress, cancellationToken, yieldOnly);
+        using (ImportProgress.Stage(.96, 1, "匹配芯片身份"))
+        {
+            if (SerialNumberService.Normalize(result, !stdf && !integrated && config.SerialNumberColumn <= 0))
+                result.SerialNumberNotice = $"文件“{Path.GetFileName(path)}”：{result.SerialNumberNotice}";
+            result = yieldOnly ? YieldReadProjection.PrepareIdentity(result, config) : RetestIdentityService.Prepare(result, config);
+            ImportProgress.Report(1, true);
+            return result;
+        }
     }
 }
 

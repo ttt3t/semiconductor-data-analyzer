@@ -1,0 +1,122 @@
+using System.IO.Compression;
+using System.Text;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static void Check(bool ok, string text) { if (!ok) throw new Exception(text); checks++; Console.WriteLine("PASS " + text); }
+    static AnalyzerConfig Config() => new() { TestItemRow = 1, TestNumberRow = 0, LowLimitRow = 0, HighLimitRow = 0,
+        UnitRow = 0, SBinRow = 0, HBinRow = 0, DataStartRow = 2, TestItemStartColumn = 8,
+        SerialNumberColumn = 1, XColumn = 2, YColumn = 3, SiteColumn = 4, SBinColumn = 5, HBinColumn = 6, WaferColumn = 7 };
+    static string Stdf(string folder)
+    {
+        string path = Path.Combine(folder, "records.stdf");
+        using var file = File.Create(path); using var writer = new BinaryWriter(file);
+        void C(BinaryWriter w, string text) { byte[] bytes = Encoding.ASCII.GetBytes(text); w.Write((byte)bytes.Length); w.Write(bytes); }
+        void R(byte type, byte subtype, Action<BinaryWriter> fill)
+        {
+            using var buffer = new MemoryStream(); using (var w = new BinaryWriter(buffer, Encoding.ASCII, true)) fill(w);
+            writer.Write((ushort)buffer.Length); writer.Write(type); writer.Write(subtype); writer.Write(buffer.ToArray());
+        }
+        R(0, 10, w => { w.Write((byte)2); w.Write((byte)4); });
+        R(1, 10, w => { w.Write((uint)0); w.Write((uint)0); w.Write((byte)1); w.Write((byte)'P'); w.Write((byte)' '); w.Write((byte)' ');
+            w.Write((ushort)0); w.Write((byte)' '); foreach (string value in new[] { "LOT", "PRODUCT", "NODE", "TESTER", "JOB", "REV" }) C(w, value); });
+        for (int i = 0; i < 2000; i++)
+        {
+            R(5, 10, w => { w.Write((byte)1); w.Write((byte)1); });
+            R(15, 10, w => { w.Write((uint)101); w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((byte)0); w.Write(i + .25f); C(w, "STDF voltage"); C(w, ""); });
+            R(5, 20, w => { w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((ushort)1); w.Write((ushort)1); w.Write((ushort)1);
+                w.Write((short)i); w.Write((short)0); w.Write((uint)0); C(w, "S" + i); });
+        }
+        R(1, 20, w => { w.Write((uint)0); w.Write((byte)' '); });
+        return path;
+    }
+    static async Task<int> Main(string[] args)
+    {
+        try
+        {
+            string folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            Check(!ImportProgress.IsActive, "ordinary analysis has no progress session");
+            using (var progress = new ImportProgress())
+            {
+                using (ImportProgress.Stage(.2, .6, "read"))
+                using (ImportProgress.Stage(.5, 1, "values")) ImportProgress.Report(.5, true);
+                Check(Math.Abs(progress.Latest.Fraction - .5) < 1e-9 && progress.Latest.Stage == "read · values", "nested byte/pass ranges map to total progress");
+                ImportProgress.Report(.1, true);
+                Check(progress.Latest.Fraction == .5, "phase transitions cannot move progress backwards");
+                await Task.Run(() => { using var stage = ImportProgress.Stage(.6, .9, "worker"); ImportProgress.Report(.5, true); });
+                Check(Math.Abs(progress.Latest.Fraction - .75) < 1e-9, "progress flows into background import work");
+                Parallel.For(0, 100, i => ImportProgress.Report(i / 100.0, true));
+                Check(progress.Latest.Fraction == .99, "parallel summary completion is synchronized and monotonic");
+                ImportProgress.Report(1, true);
+                Check(progress.Latest.Fraction < 1, "EOF and final statistics cannot show 100% before commit");
+                progress.Complete(); Check(progress.Latest.Fraction == 1, "successful commit explicitly completes progress");
+            }
+            Check(!ImportProgress.IsActive, "disposing an import releases its async context");
+            var sessions = await Task.WhenAll(Enumerable.Range(0, 4).Select(i => Task.Run(() =>
+            {
+                using var progress = new ImportProgress(); using var phase = ImportProgress.Stage(0, 1, "window" + i);
+                for (int n = 0; n < 100; n++) ImportProgress.Report((i + 1) / 10.0, true);
+                return progress.Latest;
+            })));
+            Check(sessions.Select((s, i) => s.Stage == "window" + i && Math.Abs(s.Fraction - (i + 1) / 10.0) < 1e-9).All(b => b), "simultaneous analyzer imports keep independent progress");
+            using (var progress = new ImportProgress())
+            {
+                ImportProgress.Report(.1, true); long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 0; i < 1_000_000; i++) ImportProgress.Report(.5);
+                Check(GC.GetAllocatedBytesForCurrentThread() - before < 65536, "million progress samples allocate only throttled snapshots");
+            }
+
+            using var operation = new AnalysisOperation();
+            var config = Config(); string csv = Path.Combine(folder, "普通.csv");
+            File.WriteAllText(csv, "SN,X,Y,Site,SBIN,HBIN,Wafer,A\n" + string.Concat(Enumerable.Range(0, 10000).Select(i => $"S{i},{i},0,{i % 2 + 1},1,1,W{i % 2},1.25\n")));
+            var baseline = DataFileService.Parse(csv, config);
+            using (var progress = new ImportProgress())
+            {
+                var data = DataFileService.Parse(csv, config);
+                Check(data.Records.Count == 10000 && data.Items[0].Values.Average(v => v.Value) == 1.25 && baseline.Records.Count == data.Records.Count,
+                    "ordinary CSV progress preserves values, records, Site and Wafer data");
+                Check(progress.Latest.Fraction is > .95 and < 1 && progress.Latest.Stage.Contains("普通.csv"), "CSV reading and identity preparation stay below completion");
+            }
+            string integrated = Path.Combine(folder, "integrated.csv"); IntegratedCsvService.Save(integrated, baseline);
+            using (var progress = new ImportProgress())
+                Check(DataFileService.Parse(integrated, config).Records.Count == 10000 && progress.Latest.Fraction is > .95 and < 1, "integrated CSV reports progress through the same import pipeline");
+            string stdf = Stdf(folder), gzip = stdf + ".gz";
+            using (var input = File.OpenRead(stdf)) using (var output = File.Create(gzip)) using (var zip = new GZipStream(output, CompressionLevel.Optimal)) input.CopyTo(zip);
+            foreach (string path in new[] { stdf, gzip }) using (var progress = new ImportProgress())
+            {
+                var data = DataFileService.Parse(path, config);
+                Check(data.Records.Count == 2000 && data.Items.Single().Values[1999].Value == 1999.25 && progress.Latest.Fraction is > .95 and < 1,
+                    "two-pass STDF progress preserves measurements: " + Path.GetExtension(path));
+            }
+            var options = new ImportOptions(false, "", false, false);
+            using (var progress = new ImportProgress())
+            {
+                var data = DatasetService.LoadSources(new[] { new CsvImportSource(csv), new CsvImportSource(stdf, options), new CsvImportSource(integrated, options) }, config);
+                Check(data.Records.Count == 22000 && data.Items.Count == 2 && progress.Latest.Fraction is >= .9 and < 1, "mixed batch covers all files and final merge without altering record count");
+            }
+            using (var progress = new ImportProgress())
+            {
+                var data = DatasetService.AppendSources(baseline, new[] { new CsvImportSource(integrated, options) }, config);
+                Check(data.Records.Count == 20000 && baseline.Records.Count == 10000 && progress.Latest.Fraction is >= .9 and < 1, "append progress retains the existing immutable dataset");
+            }
+            using (var progress = new ImportProgress())
+            using (var cancellation = new CancellationTokenSource())
+            {
+                cancellation.Cancel(); bool canceled = false;
+                try { DataFileService.Parse(csv, config, cancellationToken: cancellation.Token); } catch (OperationCanceledException) { canceled = true; }
+                Check(canceled && progress.Latest.Fraction < 1, "canceled import never reports success");
+            }
+            string broken = Path.Combine(folder, "broken.csv"); File.WriteAllText(broken, "header\n");
+            using (var progress = new ImportProgress())
+            {
+                bool failed = false; try { DataFileService.Parse(broken, config); } catch (InvalidDataException) { failed = true; }
+                Check(failed && progress.Latest.Fraction < 1, "failed import never reports success");
+            }
+            Console.WriteLine($"PASS {checks} import progress checks"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

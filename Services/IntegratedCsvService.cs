@@ -290,9 +290,11 @@ public static class IntegratedCsvService
         var measurements = new string?[items.Count];
         try
         {
+            using (ImportProgress.Stage(0, .75, "读取整合 CSV"))
             while (ReadFields() is { } row)
             {
                 AnalysisOperation.CheckCancellation();
+                if ((records.Count & 255) == 0) ImportProgress.Report((double)file.Position / Math.Max(1, file.Length));
                 if (row.Length != header.Length || string.IsNullOrWhiteSpace(row[0]) || string.IsNullOrEmpty(row[1]) || !ids.Add(row[1]) ||
                     row[9].Length != items.Count || row[9].Any(c => c != '0' && c != '1') ||
                     sourceSerial && (row[14] is not ("0" or "1") || row[14] == "0" && row[13].Length > 0))
@@ -317,6 +319,7 @@ public static class IntegratedCsvService
             }
             stamp.Validate(file);
             rawStore?.Seal();
+            using var buildProgress = ImportProgress.Stage(.75, 1, "建立数值列与芯片索引");
             return projection != null ? projection.Complete(records) : DatasetService.Build(items, records);
         }
         catch { rawStore?.Dispose(); throw; }

@@ -63,11 +63,13 @@ public static class CsvParser
         var definitionSignatures = new List<ulong>();
         var rows = new Dictionary<int, string[]>();
         int rowCount = 0, maxCols = 0;
+        using (ImportProgress.Stage(0, .25, "扫描 CSV 定义"))
         using (var reader = new StreamReader(input, encoding, true, 65536, leaveOpen: true))
             foreach (string line in CsvText.ReadRecords(reader, config.HasQuotedFields, cancellationToken))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 rowCount++;
+                if ((rowCount & 255) == 0) ImportProgress.Report((double)input.Position / Math.Max(1, input.Length));
                 maxCols = Math.Max(maxCols, CountColumns(line, config.Delimiter, config.HasQuotedFields));
                 if (headerRows.Contains(rowCount) || (config.SkipRepeatedHeaders && rowCount < config.DataStartRow))
                 {
@@ -165,6 +167,7 @@ public static class CsvParser
         var rawStore = yieldOnly ? null : new RawMeasurementStore();
         try
         {
+            using var readProgress = ImportProgress.Stage(.25, 1, "");
             progress?.Invoke("正在读取数据行...");
             stamp.Validate(input);
             input.Position = 0;
@@ -182,9 +185,11 @@ public static class CsvParser
                 if (dataRows.MoveNext()) { line = dataRows.Current; return true; }
                 line = ""; return false;
             }
+            using (ImportProgress.Stage(0, .65, "读取 CSV 测量值"))
             while (Next(out string line))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if ((records.Count & 255) == 0) ImportProgress.Report((double)input.Position / Math.Max(1, input.Length));
                 ParseLineInto(line, config.Delimiter, config.HasQuotedFields, rowCells, quoteBuffer);
                 if (config.SkipRepeatedHeaders)
                 {
@@ -261,7 +266,9 @@ public static class CsvParser
 
             stamp.Validate(input);
             rawStore?.Seal();
-            var parsed = projection != null ? projection.Complete(records) : DatasetService.Build(items, records);
+            CsvParseResult parsed;
+            using (ImportProgress.Stage(.65, 1, "建立数值列与芯片索引"))
+                parsed = projection != null ? projection.Complete(records) : DatasetService.Build(items, records);
             if (skippedHeaders > 0) parsed.SourceDescription = $"已跳过 {skippedHeaders} 行重复表头";
             progress?.Invoke($"解析完成，共 {items.Count} 个测试项，{parsed.Devices.Count} 颗唯一芯片");
             return parsed;

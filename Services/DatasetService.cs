@@ -142,6 +142,7 @@ public static partial class DatasetService
             for (int row = 0; row < records.Count; row++)
             {
                 AnalysisOperation.CheckCancellation();
+                if ((row & 255) == 0) ImportProgress.Report((double)row / records.Count);
                 var record = records[row];
                 bool rawBlank = true;
                 var measurements = record.Measurements;
@@ -233,11 +234,7 @@ public static partial class DatasetService
     public static CsvParseResult LoadSources(IReadOnlyList<CsvImportSource> sources, AnalyzerConfig config)
     {
         if (sources.Count == 0) throw new InvalidDataException("没有可重新读取的数据文件。");
-        CsvParseResult result;
-        try { result = ParseSource(sources[0], config); }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        { throw new InvalidDataException($"文件“{sources[0].Path}”导入失败：{ex.Message}", ex); }
-        return sources.Count == 1 ? result : AppendSources(result, sources.Skip(1).ToArray(), config);
+        return ReadSources(null, sources, config);
     }
 
     /// <summary>Append in explicit order, then build columns once. The active dataset is never mutated.</summary>
@@ -245,20 +242,44 @@ public static partial class DatasetService
         AnalyzerConfig config)
     {
         if (sources.Count == 0) throw new InvalidDataException("请至少选择一个追加文件。");
-        var result = existing;
-        foreach (var source in sources)
+        return ReadSources(existing, sources, config);
+    }
+
+    private static CsvParseResult ReadSources(CsvParseResult? existing, IReadOnlyList<CsvImportSource> sources,
+        AnalyzerConfig config)
+    {
+        bool merge = existing != null || sources.Count > 1;
+        // Weight batch reading by input bytes, rather than letting a tiny file count as much as a large one.
+        double[] weights = sources.Select(s =>
         {
+            if (!ImportProgress.IsActive) return 1.0;
+            try { return (double)Math.Max(1, new FileInfo(s.Path).Length); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return 1.0; }
+        }).ToArray();
+        double total = weights.Sum(), consumed = 0, readEnd = merge ? .9 : 1;
+        var result = existing;
+        for (int i = 0; i < sources.Count; i++)
+        {
+            var source = sources[i];
             AnalysisOperation.CheckCancellation();
             try
             {
-                var incoming = ParseSource(source, config);
-                result = MergeDefinitions(result, incoming, source.Options ??
-                    throw new InvalidDataException("追加文件缺少导入选项。"));
+                using var fileProgress = ImportProgress.Stage(readEnd * consumed / total,
+                    i + 1 == sources.Count ? readEnd : readEnd * (consumed + weights[i]) / total, $"文件 {i + 1}/{sources.Count}");
+                CsvParseResult incoming;
+                using (ImportProgress.Stage(0, .96, "")) incoming = ParseSource(source, config);
+                using (ImportProgress.Stage(.96, 1, "合并文件定义"))
+                    result = result == null ? incoming : MergeDefinitions(result, incoming, source.Options ??
+                        throw new InvalidDataException("追加文件缺少导入选项。"));
+                ImportProgress.Report(1, true);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             { throw new InvalidDataException($"文件“{Path.GetFileName(source.Path)}”导入失败：{ex.Message}", ex); }
+            consumed += weights[i];
         }
-        return CompleteMerge(result);
+        if (!merge) return result!;
+        using var mergeProgress = ImportProgress.Stage(.9, 1, "建立合并数据列与索引");
+        return CompleteMerge(result!);
     }
 
     public static CsvParseResult Merge(CsvParseResult existing, CsvParseResult incoming, ImportOptions options)

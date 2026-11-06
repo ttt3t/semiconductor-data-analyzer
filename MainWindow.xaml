@@ -172,10 +172,10 @@
             <DockPanel ClipToBounds="True">
                 <StackPanel DockPanel.Dock="Top" Margin="8,5,8,3">
                     <WrapPanel>
-                        <ToggleButton x:Name="BtnCombineSite" Click="BtnCombineSite_Click" Style="{StaticResource SiteToggle}" Margin="0,0,10,3">
+                        <ToggleButton x:Name="BtnCombineSite" IsChecked="True" Click="BtnCombineSite_Click" Style="{StaticResource SiteToggle}" Margin="0,0,10,3">
                             <StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Combine" Width="14" Height="14" Margin="0,0,5,0" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/><TextBlock Text="Combine Site"/></StackPanel>
                         </ToggleButton>
-                        <ToggleButton x:Name="BtnCombineWafer" Click="BtnCombineWafer_Click" Style="{StaticResource SiteToggle}" Margin="0,0,10,3"
+                        <ToggleButton x:Name="BtnCombineWafer" IsChecked="True" Click="BtnCombineWafer_Click" Style="{StaticResource SiteToggle}" Margin="0,0,10,3"
                                       AutomationProperties.HelpText="合并所有晶圆；关闭时按晶圆分行，可与 Combine Site 独立切换">
                             <StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Combine" Width="14" Height="14" Margin="0,0,5,0" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"/><TextBlock Text="Combine Wafer"/></StackPanel>
                         </ToggleButton>
@@ -229,8 +229,10 @@
                         <Button x:Name="CopyStatsButton" Click="BtnCopyAllStats_Click" Style="{StaticResource ToolbarAction}" Margin="0,0,0,3"><StackPanel Orientation="Horizontal"><controls:ActionIcon Kind="Copy" Style="{StaticResource ButtonIcon}"/><TextBlock Text="复制" VerticalAlignment="Center"/></StackPanel></Button>
                     </WrapPanel>
                 </StackPanel>
-                <Border x:Name="BusyIndicator" DockPanel.Dock="Bottom" Visibility="Collapsed" Height="34" Background="#EFF6FF">
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Border x:Name="BusyIndicator" DockPanel.Dock="Bottom" Visibility="Collapsed" MinHeight="34" Padding="10,7" Background="#EFF6FF">
+                    <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                         <Path x:Name="BusySpinner" Data="M 10,2 A 8,8 0 1 1 2,10" Width="20" Height="20" Stroke="#2563EB" StrokeThickness="2.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round">
                             <Path.RenderTransform><RotateTransform CenterX="10" CenterY="10"/></Path.RenderTransform>
                             <Path.Style><Style TargetType="Path"><Style.Triggers><Trigger Property="IsVisible" Value="True">
@@ -238,8 +240,16 @@
                                 <Trigger.ExitActions><StopStoryboard BeginStoryboardName="Spin"/></Trigger.ExitActions>
                             </Trigger></Style.Triggers></Style></Path.Style>
                         </Path>
-                        <TextBlock Text="处理中…" Margin="9,0,0,0" VerticalAlignment="Center" Foreground="#426186"/>
-                    </StackPanel>
+                        <TextBlock x:Name="TxtBusyStage" Grid.Column="1" Text="处理中…" TextTrimming="CharacterEllipsis" Margin="9,0,5,0" VerticalAlignment="Center" Foreground="#426186"/>
+                        <TextBlock x:Name="TxtImportPercent" Grid.Column="2" Visibility="Collapsed" VerticalAlignment="Center" Foreground="#426186"/>
+                        <ProgressBar x:Name="ImportProgressBar" Grid.Row="1" Grid.ColumnSpan="3" Visibility="Collapsed" Minimum="0" Maximum="100" Height="7" Margin="0,6,0,0" Foreground="#2563EB" Background="#DCE6F5" AutomationProperties.Name="文件导入进度">
+                            <ProgressBar.Template><ControlTemplate TargetType="ProgressBar">
+                                <Grid x:Name="PART_Track" ClipToBounds="True" Background="{TemplateBinding Background}">
+                                    <Border x:Name="PART_Indicator" HorizontalAlignment="Left" Background="{TemplateBinding Foreground}"/>
+                                </Grid>
+                            </ControlTemplate></ProgressBar.Template>
+                        </ProgressBar>
+                    </Grid>
                 </Border>
                 <controls:FastDataGrid x:Name="DgTestItems" BorderThickness="0" Background="White"
                           AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False"

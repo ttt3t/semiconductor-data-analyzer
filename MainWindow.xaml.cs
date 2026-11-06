@@ -37,8 +37,8 @@ public partial class MainWindow : Window
     private List<CsvImportSource> _sources = new();
     private readonly List<(WaferMapWindow Window, Func<CsvParseResult, IReadOnlyList<WaferMapPage>> Pages)> _openMaps = new();
     private int _binMode;
-    private bool _combineSites;
-    private bool _combineWafers;
+    private bool _combineSites = true;
+    private bool _combineWafers = true;
     private ScatterOrder _scatterOrder;
     private RetestMode _retestMode = RetestMode.Last;
     private bool _isBusy;
@@ -242,10 +242,10 @@ public partial class MainWindow : Window
 
     private async Task ApplySettings(AnalyzerConfig config)
     {
-        await RunBusyAsync(async () =>
+        bool reload = !string.IsNullOrEmpty(_currentCsvPath) && ConfigLoader.CsvDefinitionChanged(_config, config);
+        async Task ApplyAsync()
         {
-            bool reload = !string.IsNullOrEmpty(_currentCsvPath) && ConfigLoader.CsvDefinitionChanged(_config, config);
-            var data = reload ? await Task.Run(() => _sources.Count > 0
+            var data = reload ? await ReadImportAsync(() => _sources.Count > 0
                 ? DatasetService.LoadSources(_sources, config) : DataFileService.Parse(_currentCsvPath, config)) : _data;
             var prepared = await PrepareAnalysisAsync(data, config);
             AnalysisOperation.CheckCancellation();
@@ -259,7 +259,9 @@ public partial class MainWindow : Window
             TxtStatus.Text = "设置已保存，统计已重算" + (reload ? "，数据文件已重新解析" : "");
             if (reload) ShowSerialNumberNotice(_data);
             else ShowRetestIdentityNotice(_data);
-        });
+        }
+        if (reload) await RunImportAsync(ApplyAsync);
+        else await RunBusyAsync(ApplyAsync);
     }
 
     private void UpdateWindowTitle()
@@ -359,10 +361,10 @@ public partial class MainWindow : Window
         if (!File.Exists(path)) throw new FileNotFoundException("找不到数据文件：" + path);
         if (!_managedConfigLoaded && string.IsNullOrEmpty(_lastConfigPath) && !DataFileService.IsStdf(path) && !IntegratedCsvService.IsIntegrated(path))
             throw new InvalidOperationException("普通 CSV 需要先在设置中加载行列配置；STDF 可直接打开。");
-        await RunBusyAsync(async () =>
+        await RunImportAsync(async () =>
         {
-            TxtStatus.Text = "处理中…";
-            var result = await Task.Run(() => DataFileService.Parse(path, _config, stdfMode: mode));
+            TxtStatus.Text = "正在导入文件…";
+            var result = await ReadImportAsync(() => DataFileService.Parse(path, _config, stdfMode: mode));
             var prepared = await PrepareAnalysisAsync(result, _config);
             _columnValueFilters.Clear();
             UpdateValueFilterHeaders();
@@ -401,10 +403,10 @@ public partial class MainWindow : Window
     {
         if (_isBusy) throw new InvalidOperationException("正在处理数据。");
         if (sources.Count == 0) throw new InvalidOperationException("未选择数据文件。");
-        await RunBusyAsync(async () =>
+        await RunImportAsync(async () =>
         {
             var activeConfig = ConfigLoader.Parse(ConfigLoader.Serialize(config), config.ConfigFileName);
-            var result = await Task.Run(() => DatasetService.LoadSources(sources, activeConfig));
+            var result = await ReadImportAsync(() => DatasetService.LoadSources(sources, activeConfig));
             var oldRetestMode = _retestMode;
             _retestMode = retestMode;
             PreparedAnalysis prepared;
@@ -439,20 +441,7 @@ public partial class MainWindow : Window
             var mode = stdfFiles.Length == 0 ? StdfImportMode.Standard : SelectStdfMode(stdfFiles[0], stdfFiles.Length);
             if (!mode.HasValue) return;
             var sources = paths.Select(path => new CsvImportSource(path, choices.Options, mode.Value)).ToArray();
-            await RunBusyAsync(async () =>
-            {
-                var merged = await Task.Run(() => DatasetService.AppendSources(_data, sources, _config));
-                var prepared = await PrepareAnalysisAsync(merged, _config);
-                CommitAnalysis(merged, prepared);
-                _sources.AddRange(sources);
-                RefreshStdfInformationSources();
-                _currentDataName = $"整合数据（{_sources.Count} 个文件 / {_data.Wafers.Count} 个 wafer）";
-                UpdateWindowTitle();
-                RefreshOpenMaps();
-                foreach (string path in paths) _recentFiles.RememberCsv(path);
-                TxtStatus.Text = $"已导入 {paths.Length} 个文件，原始测试记录全部保留";
-                ShowSerialNumberNotice(_data);
-            });
+            await AppendFilesAsync(sources);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { MessageBox.Show(ex.Message, "导入失败", MessageBoxButton.OK, MessageBoxImage.Error); }
@@ -583,13 +572,22 @@ public partial class MainWindow : Window
         var cachedScope = ReferenceEquals(data, _scopeSource) && _scopeRetestDefinition == definition && _scopeMode == mode && _scopeMatch == match && _scopeRanges.SequenceEqual(ranges) ? _scopeData : null;
         return Task.Run(() =>
         {
+            using var progress = ImportProgress.Stage(.85, .99, "计算统计");
             AnalysisOperation.CheckCancellation();
-            data = RetestIdentityService.Prepare(data, config);
-            var scope = ReferenceEquals(data, _scopeSource) && cachedScope != null ? cachedScope : SampleFilterService.Apply(data, ranges, mode, match, config);
-            var analysis = DatasetService.SelectRetests(scope, mode, config);
-            var sites = CollectSites(scope.Items, scope.Records);
-            return new PreparedAnalysis(analysis, sites,
-                SummaryService.Build(analysis.Items, sites, scope.Wafers, combine, combineWafers, config), data, scope, ranges, match);
+            using (ImportProgress.Stage(0, .1, "匹配芯片身份"))
+                data = RetestIdentityService.Prepare(data, config);
+            CsvParseResult scope, analysis;
+            using (ImportProgress.Stage(.1, .3, "筛选数据"))
+                scope = ReferenceEquals(data, _scopeSource) && cachedScope != null ? cachedScope : SampleFilterService.Apply(data, ranges, mode, match, config);
+            using (ImportProgress.Stage(.3, .65, "整理复测记录"))
+                analysis = DatasetService.SelectRetests(scope, mode, config);
+            using (ImportProgress.Stage(.65, 1, "生成测试项统计"))
+            {
+                var sites = CollectSites(scope.Items, scope.Records);
+                var summaries = SummaryService.Build(analysis.Items, sites, scope.Wafers, combine, combineWafers, config);
+                ImportProgress.Report(1, true);
+                return new PreparedAnalysis(analysis, sites, summaries, data, scope, ranges, match);
+            }
         });
     }
 
@@ -603,6 +601,7 @@ public partial class MainWindow : Window
 
     private void CommitAnalysis(CsvParseResult data, PreparedAnalysis prepared)
     {
+        using var progress = ImportProgress.Stage(.99, 1, "更新界面");
         AnalysisOperation.CheckCancellation();
         data = prepared.Source;
         var lease = new DatasetLease(data.Records);
