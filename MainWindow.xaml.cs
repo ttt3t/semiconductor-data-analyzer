@@ -782,7 +782,7 @@ public partial class MainWindow : Window
     private static string ColumnText(TestItemSummary s, string key) => key switch
     {
         "Focus" => s.Data.Focus.IsFocused ? "1" : "0",
-        "TestNumber" => s.TestNumberValue.ToString(),
+        "TestNumber" => s.TestNumber,
         "DisplayName" => s.DisplayName ?? "",
         "Site" => s.Site ?? "",
         "Wafer" => s.Wafer ?? "",
@@ -1065,7 +1065,7 @@ public partial class MainWindow : Window
 
         foreach (var s in list)
         {
-            sb.Append(s.TestNumberValue).Append('\t')
+            sb.Append(s.TestNumber).Append('\t')
               .Append(s.DisplayName).Append('\t')
               .Append(s.Site).Append('\t')
               .Append(s.Wafer).Append('\t')

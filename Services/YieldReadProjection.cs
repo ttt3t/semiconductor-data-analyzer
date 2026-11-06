@@ -21,7 +21,7 @@ internal sealed class YieldReadProjection
         var numbers = RetestIdentityService.ParseTestNumbers(string.Join(",", config.UuidTestNumbers))
             .ToHashSet(StringComparer.Ordinal);
         _columns = Enumerable.Range(0, items.Count).Where(i =>
-            ulong.TryParse(items[i].TestNumber.Trim(), out ulong number) &&
+            ulong.TryParse(items[i].BaseTestNumber, out ulong number) &&
             numbers.Contains(number.ToString(CultureInfo.InvariantCulture))).ToArray();
     }
 

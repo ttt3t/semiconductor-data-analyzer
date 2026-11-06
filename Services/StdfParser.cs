@@ -78,7 +78,7 @@ public static class StdfParser
     {
         public TestKey Unscoped => new(Kind, Number);
     }
-    private readonly record struct FamilyKey(TestKey Test, string Channel, int Occurrence);
+    private readonly record struct FamilyKey(TestKey Test, string Channel, int Occurrence, string Name = "");
     private readonly record struct Limits(double? Lower, double? Upper, string Unit);
     private struct Defaults
     {
@@ -107,10 +107,11 @@ public static class StdfParser
         public readonly Dictionary<FamilyKey, Family> Families = new();
         public readonly Dictionary<TestKey, string> TestNames = new();
         public readonly Dictionary<TestKey, string> ScopedTestNames = new();
+        public readonly HashSet<TestKey> AmbiguousTsrNames = new();
         public readonly HashSet<(byte Head, byte Site)> Sites = new();
         public readonly Dictionary<(byte Head, byte Site), int[]> NotApplicableColumns = new();
         public readonly Dictionary<FamilyKey, (Limits Limits, string Description)> Declarations = new();
-        public readonly Dictionary<(TestKey Test, int Occurrence, Limits Limits), string> EmptyMprs = new();
+        public readonly Dictionary<(TestKey Test, int Occurrence, Limits Limits, string Name), string> EmptyMprs = new();
         public readonly List<WaferScope> Wafers = new();
         public readonly HashSet<byte> Heads = new();
         public bool HasFunctional;
@@ -125,18 +126,25 @@ public static class StdfParser
             // summary. Exact site metadata wins; never borrow a different site's name.
             foreach (var key in new[] { test, test with { Site = 0 }, test with { Site = 255 },
                 test with { Head = 255 }, test with { Head = 255, Site = 0 }, test with { Head = 255, Site = 255 } })
+            {
+                if (AmbiguousTsrNames.Contains(key)) return "";
                 if (ScopedTestNames.TryGetValue(key, out var name)) return name;
+            }
             return "";
         }
 
         private void ConsolidateSiteNames()
         {
             var combined = new Dictionary<(TestKey Test, string Channel, int Occurrence, string Name), Family>();
+            // A single TSR label cannot replace several distinct PTR/MPR names on one site.
+            var useRecordNames = Families.Keys.GroupBy(k => k.Test)
+                .Where(g => g.Select(k => k.Name).Distinct(StringComparer.Ordinal).Skip(1).Any())
+                .Select(g => g.Key.Unscoped).ToHashSet();
             Items.Clear();
             foreach (var (key, family) in Families.ToArray())
             {
                 string tsrName = ResolveTsrName(key.Test);
-                string description = tsrName.Length > 0 ? tsrName : family.Description;
+                string description = !useRecordNames.Contains(key.Test.Unscoped) && tsrName.Length > 0 ? tsrName : family.Description;
                 var identity = (key.Test.Unscoped, key.Channel, key.Occurrence, description);
                 if (!combined.TryGetValue(identity, out var target))
                 {
@@ -159,16 +167,13 @@ public static class StdfParser
                 foreach (var group in combined.Values.GroupBy(f => f.Key.Test.Unscoped))
                 {
                     if (group.Select(f => f.Description).Distinct(StringComparer.Ordinal).Take(2).Count() < 2) continue;
-                    string name = ResolveTsrName(group.Key with { Head = site.Head, Site = site.Site });
-                    if (name.Length == 0)
-                    {
-                        var observed = Families.Where(f => f.Key.Test.Unscoped == group.Key &&
-                            f.Key.Test.Head == site.Head && f.Key.Test.Site == site.Site)
-                            .Select(f => f.Value.Description).Distinct(StringComparer.Ordinal).ToArray();
-                        if (observed.Length == 1) name = observed[0];
-                    }
-                    if (name.Length == 0) continue;
-                    excluded.AddRange(group.Where(f => f.Description != name).SelectMany(f => f.Variants.Values).Select(i => i.ColumnIndex));
+                    var observed = Families.Where(f => f.Key.Test.Unscoped == group.Key &&
+                        f.Key.Test.Head == site.Head && f.Key.Test.Site == site.Site)
+                        .Select(f => f.Value.Description).ToHashSet(StringComparer.Ordinal);
+                    if (observed.Count == 0 && ResolveTsrName(group.Key with { Head = site.Head, Site = site.Site }) is { Length: > 0 } name)
+                        observed.Add(name);
+                    if (observed.Count == 0) continue;
+                    excluded.AddRange(group.Where(f => !observed.Contains(f.Description)).SelectMany(f => f.Variants.Values).Select(i => i.ColumnIndex));
                 }
                 if (excluded.Count > 0) NotApplicableColumns[site] = excluded.ToArray();
             }
@@ -197,18 +202,21 @@ public static class StdfParser
         {
             foreach (var (empty, description) in EmptyMprs)
             {
-                var keys = Families.Keys.Where(k => k.Test == empty.Test && k.Occurrence == empty.Occurrence).ToArray();
+                var keys = Families.Keys.Where(k => k.Test == empty.Test && k.Occurrence == empty.Occurrence && k.Name == empty.Name).ToArray();
                 if (keys.Length == 0 && Mode == StdfImportMode.Advantest93K)
+                {
+                    string tsrName = ResolveTsrName(empty.Test);
                     keys = Families.Keys.Where(k => k.Test.Unscoped == empty.Test.Unscoped && k.Occurrence == empty.Occurrence &&
-                        ResolveTsrName(k.Test) == ResolveTsrName(empty.Test))
-                        .Select(k => k with { Test = empty.Test }).Distinct().ToArray();
-                if (keys.Length == 0) keys = new[] { new FamilyKey(empty.Test, " 无结果", empty.Occurrence) };
+                        (k.Name == empty.Name || tsrName.Length > 0 && ResolveTsrName(k.Test) == tsrName))
+                        .Select(k => k with { Test = empty.Test, Name = empty.Name }).Distinct().ToArray();
+                }
+                if (keys.Length == 0) keys = new[] { new FamilyKey(empty.Test, " 无结果", empty.Occurrence, empty.Name) };
                 foreach (var key in keys) Item(key, empty.Limits, description, true, out _);
             }
             foreach (var (key, declaration) in Declarations)
                 if (!Families.ContainsKey(key) && (Mode != StdfImportMode.Advantest93K ||
-                    !Families.Keys.Any(k => k.Test.Unscoped == key.Test.Unscoped && k.Channel == key.Channel && k.Occurrence == key.Occurrence)) &&
-                    (key.Channel != " 无结果" || !Families.Keys.Any(k => k.Test == key.Test)))
+                    !Families.Keys.Any(k => k.Test.Unscoped == key.Test.Unscoped && k.Channel == key.Channel && k.Occurrence == key.Occurrence && k.Name == key.Name)) &&
+                    (key.Channel != " 无结果" || !Families.Keys.Any(k => k.Test == key.Test && k.Name == key.Name)))
                     Item(key, declaration.Limits, declaration.Description, true, out _);
             // TSR may explicitly identify tests that were never executed at all.
             if (Mode == StdfImportMode.Advantest93K)
@@ -235,8 +243,7 @@ public static class StdfParser
                 string description = family.Description.Length > 0 ? family.Description :
                     TestNames.GetValueOrDefault(family.Key.Test, "");
                 string name = description.Length > 0 ? description : $"T{family.Key.Test.Number}";
-                if (family.Key.Test.Kind != 10) name += $" [{kind}{family.Key.Channel}]";
-                if (family.Key.Occurrence > 1) name += $" [重复 {family.Key.Occurrence}]";
+                if (family.Key.Test.Kind == 15) name += $" [{kind}{family.Key.Channel}]";
                 int variant = 0;
                 foreach (var item in family.Variants.Values)
                 {
@@ -245,6 +252,7 @@ public static class StdfParser
                     item.Name = item.DisplayName = name + suffix;
                 }
             }
+            TestNumberLabel.Disambiguate(Items);
             foreach (var group in Items.GroupBy(i => i.Name).Where(g => g.Count() > 1))
                 foreach (var item in group) item.DisplayName = $"{item.TestNumber}_{item.Name}";
         }
@@ -255,7 +263,7 @@ public static class StdfParser
         public long Order;
         public WaferScope Wafer = null!;
         public string Product = "", Program = "", Lot = "";
-        public readonly Dictionary<TestKey, int> Occurrences = new();
+        public readonly Dictionary<(TestKey Test, string Name), int> Occurrences = new();
         public readonly byte[] States;
         public readonly double[] Numbers;
         public Dictionary<int, string>? InvalidTexts;
@@ -479,20 +487,21 @@ public static class StdfParser
                 var key = new TestKey(kind, number, head, site);
                 if (_catalog.Mode == StdfImportMode.Advantest93K &&
                     _catalog.ScopedTestNames.TryGetValue(key, out var previous) && previous != name)
-                    throw new InvalidDataException($"TSR 测试 {number} 的 Head {head} / Site {site} 存在冲突名称，无法安全匹配 93k 测试项。");
+                    _catalog.AmbiguousTsrNames.Add(key);
                 _catalog.ScopedTestNames.TryAdd(key, name);
             }
         }
 
-        private (Part? Part, int Occurrence) Execution(TestKey key, byte head, byte site, byte flags, byte parameterFlags = 0)
+        private (Part? Part, int Occurrence) Execution(TestKey key, byte head, byte site, byte flags, byte parameterFlags = 0, string name = "")
         {
             if (!_parts.TryGetValue((head, site), out var part))
             {
                 if ((flags & 0x10) == 0 || parameterFlags != 0) throw new InvalidDataException("测试结果不在对应 Head/Site 的 PIR/PRR 内。");
                 return (null, 1); // Definition-only PTR/MPR outside a part.
             }
-            int count = part.Occurrences.GetValueOrDefault(key) + 1;
-            part.Occurrences[key] = count;
+            var identity = (key, name);
+            int count = part.Occurrences.GetValueOrDefault(identity) + 1;
+            part.Occurrences[identity] = count;
             return (part, count);
         }
 
@@ -585,8 +594,8 @@ public static class StdfParser
             var initial = Default(key); var definition = ReadLimits(ref f, initial, false, 0);
             definition.Description = Inherit(text, initial.Description);
             _defaults.TryAdd(key.Unscoped, definition); // Overrides apply only to this record, never replace the defaults.
-            var execution = Execution(key, head, site, flags, parm);
-            Value(execution.Part, new(key, "", execution.Occurrence), Bounds(definition, execution.Part == null ? (byte)0xc0 : parm), definition.Description, flags, parm, result);
+            var execution = Execution(key, head, site, flags, parm, definition.Description);
+            Value(execution.Part, new(key, "", execution.Occurrence, definition.Description), Bounds(definition, execution.Part == null ? (byte)0xc0 : parm), definition.Description, flags, parm, result);
         }
 
         private void Mpr(ref StdfFields f)
@@ -602,13 +611,13 @@ public static class StdfParser
             var initial = Default(key); var definition = ReadLimits(ref f, initial, true, pins);
             definition.Description = Inherit(text, initial.Description);
             _defaults.TryAdd(key.Unscoped, definition);
-            var execution = Execution(key, head, site, flags, parm);
+            var execution = Execution(key, head, site, flags, parm, definition.Description);
             var limits = Bounds(definition, execution.Part == null ? (byte)0xc0 : parm);
             if (count == 0 && execution.Part != null)
             {
-                if (Discovering) _catalog.EmptyMprs.TryAdd((key, execution.Occurrence, limits), definition.Description);
+                if (Discovering) _catalog.EmptyMprs.TryAdd((key, execution.Occurrence, limits, definition.Description), definition.Description);
                 else
-                    foreach (var family in _catalog.Families.Keys.Where(k => k.Test == key && k.Occurrence == execution.Occurrence))
+                    foreach (var family in _catalog.Families.Keys.Where(k => k.Test == key && k.Occurrence == execution.Occurrence && k.Name == definition.Description))
                         Value(execution.Part, family, limits, definition.Description, flags, parm, null);
                 return;
             }
@@ -625,7 +634,7 @@ public static class StdfParser
                 else if (count == 0) channel = " 无结果";
                 else if (definition.StartInput is double start && definition.IncrementInput is double increment)
                     channel += " @ " + (start + i * increment).ToString("R", CultureInfo.InvariantCulture) + " " + definition.InputUnit;
-                Value(execution.Part, new(key, channel, execution.Occurrence), limits, definition.Description, flags, parm,
+                Value(execution.Part, new(key, channel, execution.Occurrence, definition.Description), limits, definition.Description, flags, parm,
                     count == 0 ? null : results[i]);
             }
         }
@@ -644,9 +653,9 @@ public static class StdfParser
             var initial = Default(key);
             string description = Inherit(text, Inherit(vector, initial.Description));
             _defaults.TryAdd(key.Unscoped, new Defaults { Description = description });
-            var execution = Execution(key, head, site, flags);
+            var execution = Execution(key, head, site, flags, name: description);
             _catalog.HasFunctional = true;
-            Value(execution.Part, new(key, "", execution.Occurrence), new Limits(0, 0, "0=Pass; 1=Fail"),
+            Value(execution.Part, new(key, "", execution.Occurrence, description), new Limits(0, 0, "0=Pass; 1=Fail"),
                 description, flags, 0, (flags & 0x80) != 0 ? 1 : 0, functional: true);
         }
     }

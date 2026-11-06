@@ -94,7 +94,7 @@ public static class SummaryService
     {
         var (stats, robust, median) = StatisticsService.CalculateSummaryMetrics(
             values, item.LowLimit, item.HighLimit, config.RemoveOutliers, config.OutlierSigma);
-        long.TryParse(item.TestNumber, out long testNumber);
+        long.TryParse(item.BaseTestNumber, out long testNumber);
         double factor = item.DisplayFactor;
         return new TestItemSummary
         {

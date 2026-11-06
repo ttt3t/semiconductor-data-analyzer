@@ -8,7 +8,7 @@ namespace SemiconductorCsvAnalyzer.Services;
 public sealed class ColumnSearchRule
 {
     public const string Help = "勾选后搜索。数字：X、>X、<X、X..Y（含边界）、%X（整数整除）、?（一位数字）、NAN / ***（无有效数值）、!NAN / !***（有效数值）。文本：关键字；main*test 同时包含 main 和 test（不限顺序）；?、[abc]。";
-    private enum Kind { All, Text, Pattern, Keywords, Equal, Greater, GreaterOrEqual, Less, LessOrEqual, NotEqual, Range, Modulo, Missing, Present, Invalid }
+    private enum Kind { All, Text, ExactText, Pattern, Keywords, Equal, Greater, GreaterOrEqual, Less, LessOrEqual, NotEqual, Range, Modulo, Missing, Present, Invalid }
     private Kind _kind;
     private string _text = "";
     private double _first, _last;
@@ -24,6 +24,7 @@ public sealed class ColumnSearchRule
         if (text.Length == 0) return rule;
         if (numeric)
         {
+            if (TestNumberLabel.IsQualified(text)) { rule._kind = Kind.ExactText; return rule; }
             if (text.Equals("NAN", StringComparison.OrdinalIgnoreCase) || text == "***")
             { rule._kind = Kind.Missing; return rule; }
             if (text.Equals("!NAN", StringComparison.OrdinalIgnoreCase) || text == "!***")
@@ -146,10 +147,11 @@ public sealed class ColumnSearchRule
         {
             Kind.All => true,
             Kind.Text => text.Contains(_text, StringComparison.OrdinalIgnoreCase),
+            Kind.ExactText => text.Equals(_text, StringComparison.OrdinalIgnoreCase),
             Kind.Keywords => MatchesKeywords(text),
             // A copied full test name containing literal brackets remains directly searchable.
             Kind.Pattern => (!_numeric && text.Contains(_text, StringComparison.OrdinalIgnoreCase)) ||
-                ((!_numeric || valid) && _pattern!.IsMatch(text)),
+                ((!_numeric || valid) && _pattern!.IsMatch(_numeric ? TestNumberLabel.Base(text) : text)),
             Kind.Missing => !valid,
             Kind.Present => valid,
             Kind.Equal => valid && number!.Value == _first,

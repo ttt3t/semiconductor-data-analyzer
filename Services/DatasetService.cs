@@ -302,10 +302,29 @@ public static partial class DatasetService
         }
         if (options.SameWafer && (!existing.Wafers.Contains(options.TargetWafer) || incoming.Wafers.Count != 1))
             throw new InvalidDataException("同 wafer 导入需要选择已有 wafer，且新文件只能包含一个 wafer。");
+        string BaseNumber(TestItemData item) => long.TryParse(item.BaseTestNumber, out long number)
+            ? number.ToString(CultureInfo.InvariantCulture) : item.BaseTestNumber;
+        var ambiguousNumbers = existing.Items.Concat(incoming.Items).Where(i => TestNumberLabel.IsQualified(i.TestNumber))
+            .Select(BaseNumber).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var duplicateNames = new[] { existing.Items, incoming.Items }.SelectMany(list =>
+                list.GroupBy(i => i.Name, StringComparer.OrdinalIgnoreCase).Where(g => g.Skip(1).Any()).Select(g => g.Key))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var slots = new Dictionary<TestItemData, int>();
+        foreach (var list in new[] { existing.Items, incoming.Items })
+            foreach (var group in list.GroupBy(i => (Base: BaseNumber(i), i.Name)))
+            {
+                int slot = 0;
+                foreach (var item in group.OrderBy(i => i.ColumnIndex)) slots[item] = ++slot;
+            }
         string Key(TestItemData item)
         {
             string key = (options.MatchByNumber ? item.TestNumber : item.Name).Trim();
             if (key.Length == 0) throw new InvalidDataException("匹配依据存在空值，请改用另一种测试项匹配方式。");
+            // Qualified numbers may differ across files containing only a subset of names.
+            // Match the source number + actual name, rather than assigning B[1] to A[1].
+            if (options.MatchByNumber && ambiguousNumbers.Contains(BaseNumber(item)) ||
+                !options.MatchByNumber && duplicateNames.Contains(item.Name))
+                return $"D:{BaseNumber(item)}:{item.Name.Length}:{item.Name}:{slots[item]}";
             return options.MatchByNumber && long.TryParse(key, out long number) ? number.ToString(CultureInfo.InvariantCulture) : key;
         }
         void CheckUnique(IEnumerable<TestItemData> items)
@@ -315,6 +334,8 @@ public static partial class DatasetService
         }
         CheckUnique(existing.Items); CheckUnique(incoming.Items);
         var items = existing.Items.Select(CloneItem).ToList();
+        // Clones retain the same name slots, without changing raw measurements.
+        for (int i = 0; i < items.Count; i++) slots[items[i]] = slots[existing.Items[i]];
         var byKey = items.ToDictionary(Key, StringComparer.OrdinalIgnoreCase);
         var itemMap = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var source in incoming.Items)
@@ -328,6 +349,7 @@ public static partial class DatasetService
             else
             {
                 target = CloneItem(source); target.Id = Guid.NewGuid().ToString("N");
+                slots[target] = slots[source];
                 string displayName = target.DisplayName;
                 int suffix = 2;
                 while (items.Any(i => i.DisplayName == target.DisplayName)) target.DisplayName = $"{displayName} ({suffix++})";
@@ -335,6 +357,7 @@ public static partial class DatasetService
             }
             itemMap.Add(source.Id, target.Id);
         }
+        TestNumberLabel.Disambiguate(items);
         var waferMap = new Dictionary<string, string>(StringComparer.Ordinal);
         var taken = existing.Wafers.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var automaticTargets = options.AutoWafer ? StdfWaferMerge.Targets(existing) : null;

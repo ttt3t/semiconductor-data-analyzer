@@ -32,8 +32,8 @@ public static class RetestIdentityService
             var numbers = ParseTestNumbers(string.Join(",", config.UuidTestNumbers));
             if (numbers.Count == 0) throw new InvalidDataException("请指定至少一个 UUID Test Num。");
             Recipe = string.Join(",", numbers);
-            var byNumber = items.Where(i => ulong.TryParse(i.TestNumber.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out _))
-                .GroupBy(i => ulong.Parse(i.TestNumber.Trim(), CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture))
+            var byNumber = items.Where(i => ulong.TryParse(i.BaseTestNumber, NumberStyles.None, CultureInfo.InvariantCulture, out _))
+                .GroupBy(i => ulong.Parse(i.BaseTestNumber, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture))
                 .ToDictionary(g => g.Key, g => g.ToArray());
             var missingTests = new List<string>();
             _ids = numbers.Select(number =>
@@ -86,6 +86,7 @@ public static class RetestIdentityService
             Items = data.Items, Records = records, Devices = DatasetService.BuildDevices(records),
             SourceDescription = data.SourceDescription, SerialNumberNotice = data.SerialNumberNotice,
             StdfMetadata = data.StdfMetadata,
+            StdfWaferOrigins = data.StdfWaferOrigins,
             ReassignedSerialNumberCount = data.ReassignedSerialNumberCount,
             RetestIdentitySignature = signature, MissingUuidCount = missing
         };

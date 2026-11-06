@@ -1,0 +1,59 @@
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Media;
+using System.Windows.Threading;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Controls;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static void Check(bool ok, string text) { if (!ok) throw new Exception(text); checks++; Console.WriteLine("PASS " + text); }
+    static object? Call(object target, string name, params object[] args) => target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(target, args);
+    static Pen Pen(string name) => (Pen)typeof(ScatterPlotControl).GetField(name, BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+    static void Pump() { var f = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => f.Continue = false)); Dispatcher.PushFrame(f); }
+    static void Wait(Task task) { var w = Stopwatch.StartNew(); while (!task.IsCompleted) { Pump(); Thread.Sleep(2); if (w.Elapsed.TotalSeconds > 30) throw new TimeoutException(); } task.GetAwaiter().GetResult(); Pump(); }
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            string folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            var app = new App(); app.InitializeComponent(); app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            typeof(AppSettings).GetField("_userDirectory", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, Path.Combine(folder, "user"));
+            var errors = new List<Exception>(); app.DispatcherUnhandledException += (_, e) => { errors.Add(e.Exception); e.Handled = true; };
+            var main = new MainWindow(new LayoutSettings(Path.Combine(folder, "layout.json")), new RecentFilesService(Path.Combine(folder, "recent.json")), new UiPreferencesService(Path.Combine(folder, "ui.json")));
+            main.Show(); Wait(main.OpenManagedFileAsync(Path.GetFullPath(args[1]), new(), StdfImportMode.Standard, RetestMode.All));
+            var grid = (DataGrid)main.FindName("DgTestItems");
+            var column = (DataGridTextColumn)grid.Columns.Single(c => c.SortMemberPath == "TestNumberValue");
+            Check(((Binding)column.Binding).Path.Path == "TestNumber" && grid.Items.Cast<TestItemSummary>().Any(s => s.TestNumber == "100[2]" && s.TestNumberValue == 100), "real main table displays qualified numbers while retaining numeric sort keys");
+            var row = grid.Items.Cast<TestItemSummary>().Single(s => s.TestNumber == "100[2]");
+            Check((string)typeof(MainWindow).GetMethod("ColumnText", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, new object[] { row, "TestNumber" })! == "100[2]", "header checklist and copied cell text include the suffix");
+            Call(main, "BtnCopyAllStats_Click", main, new RoutedEventArgs());
+            Check(Clipboard.GetText().Contains("100[2]\t") && !Clipboard.GetText().Contains("[重复") && !Clipboard.GetText().Contains("[FTR"), "copied statistics preserve suffixes and remove obsolete name tags");
+            Check(((SolidColorBrush)Pen("MeanPen").Brush).Color == Colors.Blue && Pen("MeanPen").Thickness == 1.5, "scatter mean is blue and one thickness step finer");
+            Check(Pen("RedPen").Thickness == 1 && Pen("SigmaPen").Thickness == 1 && new[] { "AxisPen", "GridPen", "GroupPen", "CrossPen", "SelectionPen", "LabelBorder" }.All(p => Pen(p).Thickness == .5), "reference, axis, grid and auxiliary lines are all finer");
+            var plot = new ScatterPlotControl { Width = 700, Height = 320 };
+            plot.SetData(new List<TestValue> { new(new CsvRecord { SerialNumber = "1" }, 0), new(new CsvRecord { SerialNumber = "2" }, 100) }, 10, 90);
+            plot.SetReferenceLines(50, 10, true, true, true, true);
+            var window = new Window { Content = plot, SizeToContent = SizeToContent.WidthAndHeight }; window.Show(); Pump();
+            var image = ChartImage.Capture(plot, ChartImage.SizeOf(plot));
+            var pixels = new byte[image.PixelWidth * image.PixelHeight * 4]; image.CopyPixels(pixels, image.PixelWidth * 4, 0);
+            int y = (int)Math.Round((double)Call(plot, "MapY", 50.0)!); int blue = 0;
+            for (int x = 60; x < image.PixelWidth - 20; x++)
+                if (Enumerable.Range(Math.Max(0, y - 2), 5).Any(r => { int p = (r * image.PixelWidth + x) * 4; return pixels[p] > pixels[p + 1] + 80 && pixels[p] > pixels[p + 2] + 80; })) blue++;
+            Check(blue > 300, "PNG capture contains a visible continuous blue mean line");
+            using (var png = ChartImage.Png(image)) File.WriteAllBytes(Path.Combine(folder, "blue-mean-thin-lines.png"), png.ToArray());
+            using (var png = ChartImage.Png(ChartImage.Capture((FrameworkElement)main.Content, ChartImage.SizeOf((FrameworkElement)main.Content)))) File.WriteAllBytes(Path.Combine(folder, "qualified-test-numbers.png"), png.ToArray());
+            window.Close(); main.Close(); Pump(); Check(errors.Count == 0, "small UI scenario closes without dispatcher errors");
+            app.Shutdown(); Console.WriteLine($"PASS {checks} STDF style UI checks"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

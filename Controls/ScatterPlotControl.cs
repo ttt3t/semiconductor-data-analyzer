@@ -115,19 +115,19 @@ public class ScatterPlotControl : CachedPlotControl
 
     private static readonly Color MarkColor = Color.FromRgb(30, 120, 200);
     private static readonly Brush SelectionFill = Freeze(new SolidColorBrush(Color.FromArgb(48, 30, 120, 200)));
-    private static readonly Pen SelectionPen = Freeze(new Pen(Freeze(new SolidColorBrush(MarkColor)), 1));
+    private static readonly Pen SelectionPen = Freeze(new Pen(Freeze(new SolidColorBrush(MarkColor)), .5));
 
     private static readonly Brush GridBrush = Freeze(new SolidColorBrush(Color.FromRgb(210, 210, 210)));
     private static readonly Brush CrossBrush = Freeze(new SolidColorBrush(Color.FromRgb(168, 168, 168)));
     private static readonly Brush LabelBg = Freeze(new SolidColorBrush(Color.FromArgb(235, 255, 255, 255)));
-    private static readonly Pen AxisPen = Freeze(new Pen(Brushes.Black, 1));
-    private static readonly Pen GridPen = Freeze(new Pen(GridBrush, 1));
-    private static readonly Pen GroupPen = Freeze(new Pen(Freeze(new SolidColorBrush(Color.FromRgb(218, 223, 230))), 1));
-    private static readonly Pen CrossPen = Freeze(new Pen(CrossBrush, 1));
-    private static readonly Pen RedPen = Freeze(new Pen(Brushes.Red, 1.5));
-    private static readonly Pen MeanPen = Freeze(new Pen(Brushes.DarkGreen, 2));
-    private static readonly Pen SigmaPen = Freeze(new Pen(Brushes.Orange, 1.5) { DashStyle = DashStyles.Dash });
-    private static readonly Pen LabelBorder = Freeze(new Pen(Freeze(new SolidColorBrush(Color.FromRgb(180, 180, 180))), 0.8));
+    private static readonly Pen AxisPen = Freeze(new Pen(Brushes.Black, .5));
+    private static readonly Pen GridPen = Freeze(new Pen(GridBrush, .5));
+    private static readonly Pen GroupPen = Freeze(new Pen(Freeze(new SolidColorBrush(Color.FromRgb(218, 223, 230))), .5));
+    private static readonly Pen CrossPen = Freeze(new Pen(CrossBrush, .5));
+    private static readonly Pen RedPen = Freeze(new Pen(Brushes.Red, 1));
+    private static readonly Pen MeanPen = Freeze(new Pen(Brushes.Blue, 1.5));
+    private static readonly Pen SigmaPen = Freeze(new Pen(Brushes.Orange, 1) { DashStyle = DashStyles.Dash });
+    private static readonly Pen LabelBorder = Freeze(new Pen(Freeze(new SolidColorBrush(Color.FromRgb(180, 180, 180))), .5));
     private static readonly Typeface UiTypeface = new("Segoe UI");
     private const string InteractionHelp = "滚轮缩放 · 左键平移 · 右键拖动框选 · 双击左键重置";
     private double Dpi => VisualTreeHelper.GetDpi(this).PixelsPerDip;

@@ -8,6 +8,7 @@ public sealed class TestItemData
     public string Name { get; set; } = "";
     public string DisplayName { get; set; } = "";
     public string TestNumber { get; set; } = "";
+    public string BaseTestNumber => Services.TestNumberLabel.Base(TestNumber);
     public string SBin { get; set; } = "";
     public string HBin { get; set; } = "";
     public string Unit { get; set; } = "";

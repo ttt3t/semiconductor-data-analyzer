@@ -330,7 +330,7 @@
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding TestNumberValue, Mode=OneTime}" SortMemberPath="TestNumberValue" Width="78">
+                        <DataGridTextColumn ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding TestNumber, Mode=OneTime}" SortMemberPath="TestNumberValue" Width="110">
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="Test Num" Style="{StaticResource ColHeaderLabel}"/>

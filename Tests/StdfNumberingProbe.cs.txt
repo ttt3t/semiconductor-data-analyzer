@@ -1,0 +1,85 @@
+using System.IO.Compression;
+using System.Text;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static void Check(bool ok, string text) { if (!ok) throw new Exception(text); checks++; Console.WriteLine("PASS " + text); }
+    static string Fixture(string folder, string file, string[] names, bool full = false)
+    {
+        string path = Path.Combine(folder, file); using var stream = File.Create(path); using var writer = new BinaryWriter(stream);
+        void C(BinaryWriter w, string text) { byte[] bytes = Encoding.ASCII.GetBytes(text); w.Write((byte)bytes.Length); w.Write(bytes); }
+        void R(byte type, byte sub, Action<BinaryWriter> body)
+        { using var b = new MemoryStream(); using (var w = new BinaryWriter(b, Encoding.ASCII, true)) body(w); writer.Write((ushort)b.Length); writer.Write(type); writer.Write(sub); writer.Write(b.ToArray()); }
+        void Ptr(uint number, string name, float value) => R(15, 10, w => { w.Write(number); w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((byte)0xc0); w.Write(value); C(w, name); C(w, ""); });
+        void Mpr(string name, float[] values, byte flags = 0) => R(15, 15, w => { w.Write((uint)400); w.Write((byte)1); w.Write((byte)1); w.Write(flags); w.Write((byte)0xc0); w.Write((ushort)0); w.Write((ushort)values.Length); foreach (float value in values) w.Write(value); C(w, name); C(w, ""); });
+        R(0, 10, w => { w.Write((byte)2); w.Write((byte)4); });
+        R(1, 10, w => { w.Write((uint)0); w.Write((uint)0); w.Write((byte)1); w.Write((byte)'P'); w.Write((byte)' '); w.Write((byte)' '); w.Write((ushort)0); w.Write((byte)' '); foreach (string s in new[] { "LOT", "PRODUCT", "NODE", "TESTER", "JOB", "REV" }) C(w, s); });
+        for (int chip = 0; chip < (full ? 3 : 1); chip++)
+        {
+            R(5, 10, w => { w.Write((byte)1); w.Write((byte)1); });
+            var order = chip == 1 ? names.Reverse() : chip == 2 ? names.Where(n => n == "B") : names;
+            foreach (string name in order) Ptr(100, name, chip * 10 + name[0] - 'A' + 1);
+            if (full && chip < 2)
+            {
+                Ptr(300, "Repeated", chip * 10 + 3); Ptr(300, "Repeated", chip * 10 + 4);
+                Mpr("ArrayA", new[] { chip * 10 + 4.25f, chip * 10 + 4.5f });
+                Mpr("ArrayB", new[] { chip * 10 + 8.25f, chip * 10 + 8.5f });
+                Ptr(500, "Solo", chip + .5f);
+                R(15, 20, w => { w.Write((uint)200); w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((byte)0); for (int i = 0; i < 6; i++) w.Write((uint)0); w.Write((short)0); w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0); C(w, ""); C(w, ""); C(w, ""); C(w, "Functional"); });
+            }
+            if (full && chip == 2) Mpr("ArrayA", Array.Empty<float>(), 0x10);
+            R(5, 20, w => { w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((ushort)1); w.Write((ushort)1); w.Write((ushort)1); w.Write((short)chip); w.Write((short)0); w.Write((uint)0); C(w, "S" + chip); });
+        }
+        if (full)
+        {
+            foreach (string name in new[] { "TSR-A", "TSR-B" }) R(10, 30, w => { w.Write((byte)1); w.Write((byte)1); w.Write((byte)'P'); w.Write((uint)100); for (int i = 0; i < 3; i++) w.Write((uint)0); C(w, name); });
+            R(10, 30, w => { w.Write((byte)1); w.Write((byte)1); w.Write((byte)'P'); w.Write((uint)500); for (int i = 0; i < 3; i++) w.Write((uint)0); C(w, "Full TSR Solo"); });
+        }
+        R(1, 20, w => { w.Write((uint)0); w.Write((byte)' '); }); return path;
+    }
+    static int Main(string[] args)
+    {
+        try
+        {
+            string folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder); using var operation = new AnalysisOperation();
+            string file = Fixture(folder, "numbering.std", new[] { "A", "B" }, true), gzip = file + ".gz";
+            using (var input = File.OpenRead(file)) using (var output = File.Create(gzip)) using (var zip = new GZipStream(output, CompressionLevel.Optimal)) input.CopyTo(zip);
+            foreach (var mode in new[] { StdfImportMode.Standard, StdfImportMode.Advantest93K })
+            {
+                var data = DataFileService.Parse(file, new(), stdfMode: mode);
+                var a = data.Items.Single(i => i.Name == "A"); var b = data.Items.Single(i => i.Name == "B");
+                Check(a.TestNumber == "100[1]" && b.TestNumber == "100[2]", "PTR names share a source number but receive distinct suffixes: " + mode);
+                Check(a.Values.Select(v => v.Value).SequenceEqual(new[] { 1.0, 11.0 }) && b.Values.Select(v => v.Value).SequenceEqual(new[] { 2.0, 12.0, 22.0 }), "reordered and missing PTRs retain the correct name/value association: " + mode);
+                var array = data.Items.Where(i => i.BaseTestNumber == "400").OrderBy(i => i.TestNumber).ToArray();
+                Check(array.Length == 4 && array.Select(i => i.TestNumber).SequenceEqual(new[] { "400[1]", "400[2]", "400[3]", "400[4]" }) && array[0].Values[0].Value == 4.25 && array[3].Values[1].Value == 18.5, "MPR names and individual results keep separate numbered columns: " + mode);
+                Check(data.Records[2].Measurements[array[0].Id] == "" && data.Records[2].Measurements[array[1].Id] == "", "empty MPR applies only to its matching name/channels: " + mode);
+                Check(data.Items.Count(i => i.Name == "Repeated") == 2 && data.Items.All(i => !i.Name.Contains("[重复") && !i.Name.Contains("[FTR")) && data.Items.Single(i => i.BaseTestNumber == "200").Name == "Functional", "repeated and functional tags are removed without merging measurements: " + mode);
+                Check(data.Items.Single(i => i.BaseTestNumber == "500").TestNumber == "500" && data.Items.Single(i => i.BaseTestNumber == "500").Name == (mode == StdfImportMode.Standard ? "Solo" : "Full TSR Solo"), "unique numbers and ordinary 93k TSR naming remain unchanged: " + mode);
+                var summaries = SummaryService.Build(data.Items, new[] { "1" }, true, new());
+                Check(summaries.Single(s => s.TestNumber == "100[2]").TestNumberValue == 100, "numeric comparison and sorting retain the original number: " + mode);
+                var ft = new AnalyzerConfig { TestMode = TestAnalysisMode.FT, UuidTestNumbers = new() { "100" } }; bool ambiguous = false;
+                try { _ = new RetestIdentityService.Reader(data.Items, ft); } catch (InvalidDataException) { ambiguous = true; }
+                Check(ambiguous, "ambiguous UUID definitions are rejected rather than silently losing chip identity: " + mode);
+                string integrated = Path.Combine(folder, "integrated-" + mode + ".csv"); IntegratedCsvService.Save(integrated, data);
+                var restored = IntegratedCsvService.Load(integrated);
+                Check(restored.Items.Select(i => i.TestNumber).SequenceEqual(data.Items.Select(i => i.TestNumber)), "integrated CSV round trip preserves qualified numbers: " + mode);
+            }
+            Check(DataFileService.Parse(gzip, new()).Items.Single(i => i.Name == "B").TestNumber == "100[2]", "compressed STD uses the same numbering rules");
+            string first = Fixture(folder, "first.stdf", new[] { "A", "B" }), next = Fixture(folder, "next.stdf", new[] { "B", "C" });
+            foreach (bool byNumber in new[] { false, true })
+            {
+                var merged = DatasetService.LoadSources(new CsvImportSource[] { new(first), new(next, new(false, "", byNumber, false)) }, new());
+                Check(merged.Items.Count == 3 && merged.Items.Single(i => i.Name == "B").Values.Count == 2 && merged.Items.Select(i => i.TestNumber).Distinct().Count() == 3 && merged.Items.Single(i => i.Name == "C").TestNumber == "100[3]", "partial-schema files merge by actual test identity and renumber the union: " + byNumber);
+            }
+            string repeatedA = Fixture(folder, "repeatedA.std", new[] { "A", "A" }), repeatedB = Fixture(folder, "repeatedB.std", new[] { "A", "A" });
+            var repeats = DatasetService.LoadSources(new CsvImportSource[] { new(repeatedA), new(repeatedB, new(false, "", false, false)) }, new());
+            Check(repeats.Items.Count == 2 && repeats.Items.All(i => i.Values.Count == 2), "name-based batch merge distinguishes repeated names using their source number and execution slot");
+            Check(ColumnSearchRule.Compile("100[2]", true).Matches("100[2]", 100) && !ColumnSearchRule.Compile("100[2]", true).Matches("100[1]", 100) && ColumnSearchRule.Compile(">99", true).Matches("100[2]", 100) && ColumnSearchRule.Compile("10?", true).Matches("100[2]", 100), "qualified number search is literal while numeric comparisons and digit patterns use the base number");
+            Console.WriteLine($"PASS {checks} STDF numbering checks"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}
