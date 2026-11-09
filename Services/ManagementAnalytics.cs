@@ -8,7 +8,8 @@ public sealed record ManagementChartLayout(double ColumnWidth, double HeaderWidt
     double RowHeight = 22, double HeaderHeight = 34, double RightPadding = 18);
 public sealed record ManagementReportOptions(HashSet<ManagementScope> Scopes, double TargetYield = 85,
     ManagementCountDisplay BinDisplay = ManagementCountDisplay.Count, ManagementCountDisplay DefectDisplay = ManagementCountDisplay.Count,
-    string BinType = "HBIN", ManagementChartLayout? BinLayout = null, ManagementChartLayout? DefectLayout = null);
+    string BinType = "HBIN", ManagementChartLayout? BinLayout = null, ManagementChartLayout? DefectLayout = null,
+    ManagementChartLayout? YieldLayout = null);
 
 public static class ManagementAnalytics
 {

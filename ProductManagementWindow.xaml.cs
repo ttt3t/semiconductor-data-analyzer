@@ -350,7 +350,8 @@ public partial class ProductManagementWindow : Window
         if (file.ShowDialog() != true) return;
         var product = ProductCatalogStore.Clone(_product); string filter = TxtFilter.Text.Trim(); var period = Period;
         var reportOptions = options.Options with { BinDisplay = CategoryTrend.CountDisplay, DefectDisplay = DefectTrend.CountDisplay,
-            BinType = CategorySbin.IsChecked == true ? "SBIN" : "HBIN", BinLayout = CategoryTrend.ReportLayout, DefectLayout = DefectTrend.ReportLayout };
+            BinType = CategorySbin.IsChecked == true ? "SBIN" : "HBIN", BinLayout = CategoryTrend.ReportLayout, DefectLayout = DefectTrend.ReportLayout,
+            YieldLayout = YieldTrend.ReportLayout };
         var cancellation = new CancellationTokenSource(); _calculation = cancellation; long version = ++_version; SetBusy(true);
         try { await ManagementReportService.RunStaAsync(() => ManagementReportService.SaveWorkbook(file.FileName, product, filter, cancellation.Token, period, reportOptions)); if (!_closed && version == _version) TxtStatus.Text = "管理报告已导出：" + file.FileName; }
         catch (OperationCanceledException) { }
@@ -366,7 +367,8 @@ public partial class ProductManagementWindow : Window
         string id = _product.Id;
         if (!ProductYieldService.IsCurrent(_product) && !await CalculateAsync(id)) return;
         if (_product?.Id != id || _closed) return;
-        var data = YieldTrend.SelectedData; string title = _product.Name + (FtMode.IsChecked == true ? " · FT 良率" : " · CP 良率");
+        var data = YieldTrend.SelectedData; var layout = YieldTrend.ReportLayout;
+        string title = _product.Name + (FtMode.IsChecked == true ? " · FT 良率" : " · CP 良率");
         title += Period == ManagementPeriod.Year ? "（按年）" : Period == ManagementPeriod.Month ? "（按月）" : Period == ManagementPeriod.Lot ? "（按批次）" : "（按晶圆）";
         var cancellation = new CancellationTokenSource(); _calculation = cancellation; long version = ++_version; SetBusy(true);
         try
@@ -378,7 +380,7 @@ public partial class ProductManagementWindow : Window
                 {
                     cancellation.Token.ThrowIfCancellationRequested();
                     string path = pages == 0 ? file.FileName : Path.Combine(Path.GetDirectoryName(file.FileName)!, Path.GetFileNameWithoutExtension(file.FileName) + $"-{pages + 1}-{Guid.NewGuid():N}.png");
-                    File.WriteAllBytes(path, ManagementReportService.TrendImage(page, title)); pages++;
+                    File.WriteAllBytes(path, ManagementReportService.TrendImage(page, title, layout: layout)); pages++;
                 }
             });
             if (!_closed && version == _version) TxtStatus.Text = $"已导出 {pages} 张趋势图（每张最多 10 个晶圆 / 批次）。";

@@ -15,6 +15,7 @@ public partial class ManagementTrendView : UserControl
     private double _widthZoom = 1, _columnWidth, _headerWidth, _rightPadding;
     private double? _pendingOffset;
     private ManagementChartLayout? _lastLayout;
+    private bool CanZoom => _data.IsStacked || _data.Mode == ManagementChartMode.YieldBars;
     public ManagementTrendView()
     {
         InitializeComponent();
@@ -92,7 +93,7 @@ public partial class ManagementTrendView : UserControl
     }
     public void ZoomWidth(double factor, double anchor = 0)
     {
-        if (!_data.IsStacked || !double.IsFinite(factor) || factor <= 0) return;
+        if (!CanZoom || !double.IsFinite(factor) || factor <= 0) return;
         double zoom = Math.Clamp(_widthZoom * factor, .1, 8);
         var scroll = FindScrollViewer(Table);
         double offset = _pendingOffset ?? scroll?.HorizontalOffset ?? 0;
@@ -103,7 +104,7 @@ public partial class ManagementTrendView : UserControl
     }
     private void WidthZoom_MouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if (!_data.IsStacked || (Keyboard.Modifiers & ModifierKeys.Control) == 0 || e.Delta == 0) return;
+        if (!CanZoom || (Keyboard.Modifiers & ModifierKeys.Control) == 0 || e.Delta == 0) return;
         ZoomWidth(Math.Pow(1.15, e.Delta / 120.0), Math.Max(0, e.GetPosition(Chart).X - _headerWidth - 1));
         e.Handled = true;
     }
@@ -121,7 +122,7 @@ public partial class ManagementTrendView : UserControl
     }
     private void CaptureLayout()
     {
-        if (_data.IsStacked && _columnWidth > 0 && Chart.ActualHeight >= 100)
+        if (CanZoom && _columnWidth > 0 && Chart.ActualHeight >= 100)
             _lastLayout = new(_columnWidth, _headerWidth, Chart.ActualHeight, Table.RowHeight, Table.ColumnHeaderHeight, _rightPadding);
     }
     private void ResizeColumns()
@@ -132,11 +133,11 @@ public partial class ManagementTrendView : UserControl
         double header = Math.Min(150, Table.ActualWidth * .25);
         double available = Table.ActualWidth - header - 2 - SystemParameters.VerticalScrollBarWidth;
         if (available <= 0) return;
-        double width = available / _data.Labels.Length * (_data.IsStacked ? _widthZoom : 1);
+        double width = available / _data.Labels.Length * (CanZoom ? _widthZoom : 1);
         Table.Columns[0].Width = header;
         foreach (var column in Table.Columns.Skip(1)) column.Width = width;
         _columnWidth = width; _headerWidth = header; _rightPadding = 1 + SystemParameters.VerticalScrollBarWidth;
-        if (_data.IsStacked) Chart.SetColumnLayout(width, header + 1, _rightPadding);
+        if (CanZoom) Chart.SetColumnLayout(width, header + 1, _rightPadding);
         else Chart.SetColumnLayout();
         CaptureLayout();
         Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>

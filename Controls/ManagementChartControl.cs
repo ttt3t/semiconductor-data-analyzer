@@ -25,11 +25,11 @@ public sealed class ManagementChartControl : FrameworkElement
     private static readonly Brush[] Ranked = { Brushes.IndianRed, Brushes.Gold, Brushes.DarkOrange, Brushes.SteelBlue, Brushes.MediumPurple, Brushes.SeaGreen };
     private static T Frozen<T>(T value) where T : Freezable { value.Freeze(); return value; }
     public void SetData(ManagementTrendData data) { _data = data; InvalidateVisual(); }
-    private void Label(DrawingContext dc, string text, double x, double y, double size = 10, Brush? brush = null, double maxWidth = double.PositiveInfinity, bool center = false)
+    private void Label(DrawingContext dc, string text, double x, double y, double size = 10, Brush? brush = null, double maxWidth = double.PositiveInfinity, bool center = false, int maxLines = 2)
     {
         if (maxWidth <= 0) return;
         var label = ChartAxis.Text(this, text, size, brush ?? Text);
-        if (double.IsFinite(maxWidth)) { label.MaxTextWidth = maxWidth; label.MaxLineCount = 2; label.Trimming = TextTrimming.CharacterEllipsis; }
+        if (double.IsFinite(maxWidth)) { label.MaxTextWidth = maxWidth; label.MaxLineCount = maxLines; label.Trimming = TextTrimming.CharacterEllipsis; }
         dc.DrawText(label, new Point(center ? x - label.Width / 2 : x, y));
     }
     private static double NiceTop(double value)
@@ -75,13 +75,14 @@ public sealed class ManagementChartControl : FrameworkElement
         if (max <= min) min = Math.Max(0, max - 5);
         // Leave room above 100% for the cumulative and center/edge annotations.
         double annotationSpace = _data.Mode == ManagementChartMode.CenterEdge ? 24 : _data.Mode == ManagementChartMode.StackedPercentages ? 18 : pareto ? 12 : 0;
+        double descriptionSpace = pareto && _data.Descriptions?.Any(s => !string.IsNullOrWhiteSpace(s)) == true ? 64 : 0;
         double left = _headerWidth ?? Math.Min(55, w * .18), right = _headerWidth.HasValue ? _rightPadding : Math.Min(pareto ? 51 : 19, w * (pareto ? .17 : .06));
         double plotWidth = Math.Max(1, w - left - right);
         if (_columnWidth is double columnWidth) plotWidth = Math.Min(plotWidth, columnWidth * _data.Labels.Length);
-        var plot = new Rect(left, top + 13 + annotationSpace, plotWidth, Math.Max(1, h - top - 58 - annotationSpace));
+        var plot = new Rect(left, top + 13 + annotationSpace, plotWidth, Math.Max(1, h - top - 58 - annotationSpace - descriptionSpace));
         double Y(double value) => plot.Bottom - (value - min) / (max - min) * plot.Height;
         double slot = _columnWidth ?? plot.Width / _data.Labels.Length;
-        int labelStride = (int)Math.Clamp(Math.Ceiling(52 / slot), 1, _data.Labels.Length);
+        int labelStride = pareto ? 1 : (int)Math.Clamp(Math.Ceiling(52 / slot), 1, _data.Labels.Length);
         double X(int index) => plot.Left + (index + .5) * slot - _offset;
         foreach (double tick in ChartAxis.Ticks(min, max, Math.Max(3, (int)(plot.Height / 48)), integers: counts))
         {
@@ -145,7 +146,7 @@ public sealed class ManagementChartControl : FrameworkElement
         }
         if (pareto)
         {
-            double cumulative = 0; Point? previous = null;
+            double cumulative = _data.CumulativeStart; Point? previous = null;
             for (int i = 0; i < _data.Labels.Length; i++)
             {
                 cumulative += _data.Series[0].Values[i] ?? 0;
@@ -169,7 +170,9 @@ public sealed class ManagementChartControl : FrameworkElement
         for (int i = first; i <= last; i++)
         {
             double x = X(i); if (x < plot.Left || x > plot.Right || i % labelStride != 0) continue;
-            Label(dc, _data.Labels[i], x, plot.Bottom + 5, 9, maxWidth: Math.Max(1, slot * labelStride - 3), center: true);
+            Label(dc, _data.Labels[i], x, plot.Bottom + 5, 9, maxWidth: Math.Max(1, slot * labelStride - 3), center: true, maxLines: pareto ? 1 : 2);
+            if (pareto && _data.Descriptions is { } descriptions && i < descriptions.Length)
+                Label(dc, descriptions[i], x, plot.Bottom + 19, 9, maxWidth: Math.Max(1, slot - 6), center: true, maxLines: 5);
         }
     }
     private void Horizontal(DrawingContext dc, double w, double h, double top)

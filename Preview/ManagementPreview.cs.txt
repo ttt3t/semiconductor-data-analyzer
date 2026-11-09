@@ -84,14 +84,14 @@ static class Preview
     static ManagedProduct Product()
     {
         var config=new AnalyzerConfig { TestItemRow=1,TestNumberRow=0,LowLimitRow=0,HighLimitRow=0,UnitRow=0,SBinRow=0,HBinRow=0,DataStartRow=2,TestItemStartColumn=8,SerialNumberColumn=1,XColumn=2,YColumn=3,SiteColumn=4,SBinColumn=5,HBinColumn=6,WaferColumn=7 };
-        int[] sbins={12,381,10,13,403,384,15,385,979,383,525,1247};
-        string[] descriptions={"Standby 电流超标 / 电源与漏电流","Dark 信号与噪声 / shading 采集缺陷","OS 电流与电压异常 / 接触与短路","DVDD 动态电流超标","Light 环路与坏列 / 曝光缺陷","Dark 噪声与暗场采集异常","模拟模块参数 / VPP 与 NTH","Dark 采集异常与 shading","全 0 值 / 电源与全功能失效","Light-Dark 坏点与采集缺陷","Light 采集缺陷","其他 OTP 相关异常"};
+        int[] sbins={12,381,10,13,403,384,15,385,979,383,525,1247,700,701,702,703,704};
+        string[] descriptions={"Standby 电流超标 / 电源与漏电流","Dark 信号与噪声 / shading 采集缺陷","OS 电流与电压异常 / 接触与短路","DVDD 动态电流超标","Light 环路与坏列 / 曝光缺陷","Dark 噪声与暗场采集异常","模拟模块参数 / VPP 与 NTH","Dark 采集异常与 shading","全 0 值 / 电源与全功能失效","Light-Dark 坏点与采集缺陷","Light 采集缺陷","其他 OTP 相关异常","参考电压异常","时钟频率异常","接口通信异常","增益一致性异常","偏置电流异常"};
         config.SBinDescriptions=sbins.Select((bin,i)=>(bin,i)).ToDictionary(v=>v.bin.ToString(),v=>descriptions[v.i]);
         config.SBinCategories=new() { ["良品"]=new(){"1"},["电源 / 电流"]=new(){"12","10","13"},["成像 / 采集"]=new(){"381","403","384","385","383","525"},["逻辑 / 模拟"]=new(){"15","979","1247"} };
         var stage=new ProductTestStage {Kind="CP",Name="常温 CP",Temperature=25,Required=true};
         var product=new ManagedProduct {Name="CIS CP · 样式预览（模拟数据）",Flow=new(){stage},ConfigText=ConfigLoader.Serialize(config),RetestMode=RetestMode.Last};
         int[] wafers={1,2,4,6,8,10,12,14,16,18,20,22,24,25};double[] targets={.906,.931,.918,.851,.932,.944,.928,.924,.930,.905,.940,.944,.914,.938};
-        double[] weights={.204,.167,.113,.09,.086,.073,.042,.033,.025,.025,.025,.017};
+        double[] weights={.204,.167,.113,.09,.086,.073,.042,.033,.025,.025,.025,.017,.02,.02,.02,.02,.02};
         Directory.CreateDirectory(Path.Combine(folder,"data"));
         for(int index=0;index<wafers.Length;index++)
         {
@@ -140,17 +140,27 @@ static class Preview
             window.Width=1440;Pump();
             var binLayout=CheckWidthZoom(window,tabs,3,binView,"16-bin-width");
             var defectLayout=CheckWidthZoom(window,tabs,4,defectView,"17-defect-width");
+            var yieldView=(ManagementTrendView)window.FindName("YieldTrend");
+            var yieldLayout=CheckWidthZoom(window,tabs,0,yieldView,"18-yield-width");
             if(Math.Abs(binView.WidthZoom-.5)>.001||Math.Abs(defectView.WidthZoom-.5)>.001)throw new Exception("View zoom state changed unexpectedly");
             var options=new ManagementReportOptionsWindow(product){Owner=window};options.Show();Pump();Save(options,"04-export-selection.png",590,650);options.Close();
             string stage=product.Flow[0].Id;
             var actual=ManagementTrendService.DisplayCounts(ManagementTrendService.FailTrend(product,stage,"HBIN","",ManagementPeriod.Wafer),ManagementCountDisplay.PercentOfTotal);
             if(Math.Abs(actual.Series.Sum(s=>s.Values[0]??0)-17900.0/1793)>1e-9)throw new Exception("Wafer sample denominator is incorrect");
-            Pair("05-pareto-preview.png",ManagementReportService.AnalysisImage(ManagementTrendService.Pareto(product,stage,"HBIN"),"HBIN Fail Pareto",600,440),ManagementReportService.AnalysisImage(ManagementTrendService.Pareto(product,stage,"SBIN",12),"SBIN Fail Pareto · Top 12",600,440));
+            var allBins=ManagementAnalytics.Bins(product,stage,"SBIN");
+            var pareto=ManagementTrendService.Pareto(product,stage,"SBIN",12);var paretoPages=ManagementReportService.Pages(pareto,13).ToArray();
+            if(allBins.Length!=17||pareto.Labels.Length!=12||pareto.Descriptions?.Length!=12||paretoPages.Length!=1)throw new Exception("Pareto must display exactly the Top 12 numbers and descriptions");
+            double expectedShare=allBins.Take(12).Sum(b=>b.Count)*100.0/allBins.Sum(b=>b.Count),shownShare=pareto.Series[0].Values.Sum(v=>v??0);
+            if(shownShare>=100||Math.Abs(shownShare-expectedShare)>1e-9)throw new Exception("Top 12 must retain the full failure denominator");
+            var categoryPages=ManagementReportService.Pages(ManagementTrendService.FailTrend(product,stage,"HBIN","",ManagementPeriod.Wafer),13).ToArray();
+            if(categoryPages.Length!=2||categoryPages[0].Labels.Length!=13||categoryPages[1].Labels.Length!=1)throw new Exception("Classification report must use 13 columns");
+            for(int i=0;i<paretoPages.Length;i++)File.WriteAllBytes(Path.Combine(folder,$"05-sbin-pareto-{i+1:00}.png"),ManagementReportService.AnalysisImage(paretoPages[i],"SBIN Fail Pareto Top 12",1150,430));
+            Console.WriteLine("All Top 12 SBIN labels/descriptions rendered; cumulative retains all 17 bins as denominator; classification pages contain 13 + 1 wafers.");
             var radial=ManagementTrendService.RadialTrend(product,stage);radial=radial with {Series=radial.Series.Take(12).ToList()};
             Pair("06-radial-center-edge-preview.png",ManagementReportService.AnalysisImage(radial,"各晶圆径向良率分布",600,440),ManagementReportService.AnalysisImage(ManagementTrendService.CenterEdge(product,stage),"中心区 vs 边缘区",600,440));
             File.WriteAllBytes(Path.Combine(folder,"07-sbin-root-causes.png"),ManagementReportService.AnalysisImage(ManagementTrendService.RootCause(product,stage),"SBIN Fail 分类 · 释义来自产品配置",1200,530));
             ManagementReportService.SaveWorkbook(Path.Combine(folder,"management-report-preview.xlsx"),product,options:new ManagementReportOptions(ManagementAnalytics.Scopes(product).ToHashSet()));
-            ManagementReportService.SaveWorkbook(Path.Combine(folder,"management-report-percent-preview.xlsx"),product,options:new ManagementReportOptions(ManagementAnalytics.Scopes(product).ToHashSet(),BinDisplay:ManagementCountDisplay.PercentOfTotal,DefectDisplay:ManagementCountDisplay.PercentOfFailures,BinType:"SBIN",BinLayout:binLayout,DefectLayout:defectLayout));
+            ManagementReportService.SaveWorkbook(Path.Combine(folder,"management-report-percent-preview.xlsx"),product,options:new ManagementReportOptions(ManagementAnalytics.Scopes(product).ToHashSet(),BinDisplay:ManagementCountDisplay.PercentOfTotal,DefectDisplay:ManagementCountDisplay.PercentOfFailures,BinType:"SBIN",BinLayout:binLayout,DefectLayout:defectLayout,YieldLayout:yieldLayout));
             window.Close();Pump();app.Shutdown();Console.WriteLine("Preview screenshots and XLSX generated from simulated data.");return 0;
         }
         catch(Exception ex){Console.Error.WriteLine(ex);return 1;}

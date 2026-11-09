@@ -8,7 +8,7 @@ public enum ManagementChartMode { YieldBars, StackedCounts, Pareto, RadialLines,
 public enum ManagementCountDisplay { Count, PercentOfTotal, PercentOfFailures }
 public sealed record ManagementTrendData(string[] Labels, List<WaferCategorySeries> Series,
     ManagementChartMode Mode = ManagementChartMode.YieldBars, string AxisTitle = "良率（%）", double TargetYield = 85,
-    double?[]? SampleCounts = null)
+    double?[]? SampleCounts = null, string[]? Descriptions = null, double CumulativeStart = 0)
 {
     public bool IsStacked => Mode is ManagementChartMode.StackedCounts or ManagementChartMode.StackedPercentages;
 }
@@ -103,7 +103,8 @@ public static partial class ManagementTrendService
     {
         var bins = ManagementAnalytics.Bins(product, stageId, type).Take(take).ToArray();
         return new(bins.Select(b => "Bin " + b.Bin).ToArray(), new() { new(type + " Fail", type == "SBIN" ? Brushes.SteelBlue : Brushes.IndianRed,
-            bins.Select(b => (double?)b.Percent).ToArray(), Counts: bins.Select(b => b.Count).ToArray()) }, ManagementChartMode.Pareto, "Fail 占比（%）");
+            bins.Select(b => (double?)b.Percent).ToArray(), Counts: bins.Select(b => b.Count).ToArray()) }, ManagementChartMode.Pareto, "Fail 占比（%）",
+            Descriptions: type == "SBIN" ? bins.Select(b => b.Description).ToArray() : null);
     }
 
     public static ManagementTrendData RadialTrend(ManagedProduct product, string stageId)

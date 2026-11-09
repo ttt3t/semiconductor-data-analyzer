@@ -78,12 +78,15 @@ public static class ManagementReportService
         checked((int)Math.Ceiling(layout.HeaderWidth + 1 + data.Labels.Length * layout.ColumnWidth + layout.RightPadding));
     public static int TrendImageHeight(ManagementTrendData data, ManagementChartLayout? layout = null) =>
         checked((int)Math.Ceiling((layout?.ChartHeight ?? TrendChartHeight(data)) + 40 + (layout?.HeaderHeight ?? 22) + data.Series.Count * (layout?.RowHeight ?? 22)));
-    public static IEnumerable<ManagementTrendData> Pages(ManagementTrendData data)
+    public static IEnumerable<ManagementTrendData> Pages(ManagementTrendData data, int columnsPerPage = 10)
     {
-        for (int start = 0; start < data.Labels.Length; start += 10)
-            yield return data with { Labels = data.Labels.Skip(start).Take(10).ToArray(),
-                Series = data.Series.Select(s => s with { Values = s.Values.Skip(start).Take(10).ToArray(), Counts = s.Counts?.Skip(start).Take(10).ToArray() }).ToList(),
-                SampleCounts = data.SampleCounts?.Skip(start).Take(10).ToArray() };
+        if (columnsPerPage <= 0) throw new ArgumentOutOfRangeException(nameof(columnsPerPage));
+        for (int start = 0; start < data.Labels.Length; start += columnsPerPage)
+            yield return data with { Labels = data.Labels.Skip(start).Take(columnsPerPage).ToArray(),
+                Series = data.Series.Select(s => s with { Values = s.Values.Skip(start).Take(columnsPerPage).ToArray(), Counts = s.Counts?.Skip(start).Take(columnsPerPage).ToArray() }).ToList(),
+                SampleCounts = data.SampleCounts?.Skip(start).Take(columnsPerPage).ToArray(),
+                Descriptions = data.Descriptions?.Skip(start).Take(columnsPerPage).ToArray(),
+                CumulativeStart = data.CumulativeStart + (data.Mode == ManagementChartMode.Pareto && data.Series.Count > 0 ? data.Series[0].Values.Take(start).Sum(v => v ?? 0) : 0) };
     }
     public static void SaveWorkbook(string path, ManagedProduct product, string filter = "", CancellationToken token = default, ManagementPeriod period = ManagementPeriod.Wafer, ManagementReportOptions? options = null)
     {
@@ -146,11 +149,13 @@ public static class ManagementReportService
                         foreach (var page in Pages(ManagementTrendService.Create(product, kind, filter, period: period)))
                         {
                             token.ThrowIfCancellationRequested();
-                            byte[] image = TrendImage(page with { TargetYield = options?.TargetYield ?? 85 }, product.Name + " · " + kind + " " + periodLabel + "良率");
+                            var layout = options?.YieldLayout;
+                            byte[] image = TrendImage(page with { TargetYield = options?.TargetYield ?? 85 }, product.Name + " · " + kind + " " + periodLabel + "良率", layout: layout);
                             using var stream = new MemoryStream(image);
-                            int imageHeight = TrendImageHeight(page);
-                            trend.AddPicture(stream).MoveTo(trend.Cell(row, 1)).WithSize(1200, (int)(imageHeight * 1200.0 / 1440));
-                            row += (int)Math.Ceiling(imageHeight * 1200.0 / 1440 / 20) + 3;
+                            int imageHeight = TrendImageHeight(page, layout), imageWidth = TrendImageWidth(page, layout);
+                            int displayWidth = layout == null ? 1200 : imageWidth, displayHeight = (int)Math.Ceiling(imageHeight * (double)displayWidth / imageWidth);
+                            trend.AddPicture(stream).MoveTo(trend.Cell(row, 1)).WithSize(displayWidth, displayHeight);
+                            row += (int)Math.Ceiling(displayHeight / 20.0) + 3;
                         }
                 var cats = Sheet("SBIN 分类占比", new[] { "类型", "批次", "晶圆", "测试步骤", "分类", "数量", "有效 SBIN", "占比" }); row = 5;
                 foreach (var c in ManagementTrendService.CategoryRows(product, filter, period == ManagementPeriod.Lot ? ManagementPeriod.Lot : ManagementPeriod.Wafer))
@@ -164,9 +169,9 @@ public static class ManagementReportService
                     timed.Cell(3, 1).Value = "各分类数量合计 ÷ 对应期间有效 SBIN 总数；只覆盖自动解析的逐颗记录。";
                 }
                 string binType = options?.BinType == "SBIN" ? "SBIN" : "HBIN";
-                var categoryPlots = Sheet("Bin分类图", new[] { binType + " Fail 堆叠图 · 数量 / 百分比口径跟随界面 · 仅自动解析记录" }); row = 6;
+                var categoryPlots = Sheet("Bin分类图", new[] { binType + " Fail 堆叠图 · 每张最多 13 列 · 数量 / 百分比口径跟随界面 · 仅自动解析记录" }); row = 6;
                 foreach (var stage in product.Flow)
-                    foreach (var page in Pages(ManagementTrendService.DisplayCounts(ManagementTrendService.FailTrend(product, stage.Id, binType, filter, period), options?.BinDisplay ?? ManagementCountDisplay.Count)))
+                    foreach (var page in Pages(ManagementTrendService.DisplayCounts(ManagementTrendService.FailTrend(product, stage.Id, binType, filter, period), options?.BinDisplay ?? ManagementCountDisplay.Count), 13))
                     {
                         token.ThrowIfCancellationRequested();
                         var layout = options?.BinLayout;
@@ -176,9 +181,9 @@ public static class ManagementReportService
                         categoryPlots.AddPicture(stream).MoveTo(categoryPlots.Cell(row, 1)).WithSize(displayWidth, displayHeight);
                         row += (int)Math.Ceiling(displayHeight / 20.0) + 3;
                     }
-                var defectPlots = Sheet("不良分类图", new[] { "按配置的 SBIN 分类汇总不良 · 显示口径与界面一致 · 未配置的 SBIN 归入未分类" }); row = 6;
+                var defectPlots = Sheet("不良分类图", new[] { "按配置的 SBIN 分类汇总不良 · 每张最多 13 列 · 显示口径与界面一致 · 未配置的 SBIN 归入未分类" }); row = 6;
                 foreach (var stage in product.Flow)
-                    foreach (var page in Pages(ManagementTrendService.DisplayCounts(ManagementTrendService.DefectTrend(product, stage.Id, filter, period), options?.DefectDisplay ?? ManagementCountDisplay.Count)))
+                    foreach (var page in Pages(ManagementTrendService.DisplayCounts(ManagementTrendService.DefectTrend(product, stage.Id, filter, period), options?.DefectDisplay ?? ManagementCountDisplay.Count), 13))
                     {
                         token.ThrowIfCancellationRequested();
                         var layout = options?.DefectLayout;
@@ -242,7 +247,7 @@ public static class ManagementReportService
         Table(scopeSheet, 4, "类型", "批次", "晶圆"); int scopeRow = 5;
         foreach (var scope in ManagementAnalytics.Scopes(product).Where(s => ManagementAnalytics.Matches(s.Lot, s.Wafer, filter)))
         { scopeSheet.Cell(scopeRow, 1).Value = scope.Kind; scopeSheet.Cell(scopeRow, 2).Value = scope.Lot; scopeSheet.Cell(scopeRow++, 3).Value = scope.Wafer; }
-        var pareto = Sheet("Fail Pareto", "Fail 按已配置 HBIN 良品口径判定，先按产品复测规则选取记录；SBIN 图显示 Top 12，累计占比保留真实分母。");
+        var pareto = Sheet("Fail Pareto", "SBIN 图显示 Top 12，每个编号下方为配置释义，完整释义见下表；累计占比保留全体不良分母。HBIN 较多时分图。");
         var root = Sheet("SBIN Fail 归因", "显示数量最多的 12 个 SBIN；说明来自产品中配置的 SBIN 释义，不自动推断芯片失效原因。");
         var radial = Sheet("晶圆径向良率", "分区为 r/R：≤40%、40–70%、70–90%、>90%；中心和半径根据已测 XY 估算，局部测试不等同物理晶圆边缘。无样本分区留空。");
         var comparison = Sheet("中心边缘对比", "中心区 ≤40%，边缘区 >90%；仅纳入有有效 XY 的 CP 芯片。差值单位为百分点（pp）。");
@@ -251,9 +256,16 @@ public static class ManagementReportService
         foreach (var stage in product.Flow.Where(s => selected.Snapshot?.Yields.Any(r => r.StageId == s.Id) == true))
         {
             string title = product.Name + " · " + stage.Label;
-            Picture(pareto, pRow, 1, ManagementTrendService.Pareto(selected, stage.Id, "HBIN"), title + " · HBIN Pareto", 570, 350);
-            Picture(pareto, pRow, 8, ManagementTrendService.Pareto(selected, stage.Id, "SBIN", 12), title + " · SBIN Pareto Top 12", 570, 350);
-            pRow += 20;
+            var hbinPages = Pages(ManagementTrendService.Pareto(selected, stage.Id, "HBIN"), 8).ToArray();
+            var sbinPages = Pages(ManagementTrendService.Pareto(selected, stage.Id, "SBIN", 12), 13).ToArray();
+            int pageCount = Math.Max(hbinPages.Length, sbinPages.Length);
+            if (pageCount == 0) { pareto.Cell(pRow, 1).Value = stage.Label + "：当前范围没有不良数据。"; pRow += 2; }
+            for (int index = 0; index < pageCount; index++)
+            {
+                if (index < hbinPages.Length) Picture(pareto, pRow, 1, hbinPages[index], title + $" · HBIN Pareto（{index + 1}/{hbinPages.Length}）", 570, 430);
+                if (index < sbinPages.Length) Picture(pareto, pRow, 8, sbinPages[index], title + " · SBIN Pareto Top 12", 1150, 430);
+                pRow += 25;
+            }
             Table(pareto, pRow++, "步骤", "类型", "Bin", "说明", "Fail 数量", "Fail 占比", "累计占比");
             foreach (string type in new[] { "HBIN", "SBIN" }) foreach (var bin in ManagementAnalytics.Bins(selected, stage.Id, type))
             {
