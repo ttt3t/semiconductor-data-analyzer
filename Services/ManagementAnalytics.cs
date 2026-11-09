@@ -4,7 +4,9 @@ using SemiconductorCsvAnalyzer.Models;
 namespace SemiconductorCsvAnalyzer.Services;
 
 public sealed record ManagementBinSummary(string Bin, string Description, int Count, double Percent, double Cumulative);
-public sealed record ManagementReportOptions(HashSet<ManagementScope> Scopes, double TargetYield = 85);
+public sealed record ManagementReportOptions(HashSet<ManagementScope> Scopes, double TargetYield = 85,
+    ManagementCountDisplay BinDisplay = ManagementCountDisplay.Count, ManagementCountDisplay DefectDisplay = ManagementCountDisplay.Count,
+    string BinType = "HBIN");
 
 public static class ManagementAnalytics
 {

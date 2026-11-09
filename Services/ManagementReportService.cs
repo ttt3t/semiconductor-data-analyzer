@@ -27,10 +27,10 @@ public static class ManagementReportService
     {
         const int width = 1440;
         int chartHeight = TrendChartHeight(data);
-        double cellWidth = Math.Max(70, (width - 152.0) / Math.Max(1, data.Labels.Length));
+        double cellWidth = (width - 152.0) / Math.Max(1, data.Labels.Length);
         int height = TrendImageHeight(data);
         if (height > 12000) throw new InvalidDataException("报表分类过多，请减少所选分类。");
-        var chart = new ManagementChartControl { Width = width, Height = chartHeight, ColumnWidth = cellWidth };
+        var chart = new ManagementChartControl { Width = width, Height = chartHeight };
         chart.SetData(data);
         chart.Measure(new Size(width, chartHeight)); chart.Arrange(new Rect(0, 0, width, chartHeight)); chart.UpdateLayout();
         var visual = new DrawingVisual();
@@ -69,13 +69,14 @@ public static class ManagementReportService
         var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using var stream = new MemoryStream(); encoder.Save(stream); return stream.ToArray();
     }
-    private static int TrendChartHeight(ManagementTrendData data) => data.Mode == ManagementChartMode.StackedCounts ? 572 : 440;
+    private static int TrendChartHeight(ManagementTrendData data) => data.IsStacked ? 572 : 440;
     public static int TrendImageHeight(ManagementTrendData data) => TrendChartHeight(data) + 40 + (data.Series.Count + 1) * 22;
     public static IEnumerable<ManagementTrendData> Pages(ManagementTrendData data)
     {
         for (int start = 0; start < data.Labels.Length; start += 10)
             yield return data with { Labels = data.Labels.Skip(start).Take(10).ToArray(),
-                Series = data.Series.Select(s => s with { Values = s.Values.Skip(start).Take(10).ToArray(), Counts = s.Counts?.Skip(start).Take(10).ToArray() }).ToList() };
+                Series = data.Series.Select(s => s with { Values = s.Values.Skip(start).Take(10).ToArray(), Counts = s.Counts?.Skip(start).Take(10).ToArray() }).ToList(),
+                SampleCounts = data.SampleCounts?.Skip(start).Take(10).ToArray() };
     }
     public static void SaveWorkbook(string path, ManagedProduct product, string filter = "", CancellationToken token = default, ManagementPeriod period = ManagementPeriod.Wafer, ManagementReportOptions? options = null)
     {
@@ -155,19 +156,20 @@ public static class ManagementReportService
                         Write(timed, row++, c.PeriodLabel, c.Kind, product.Flow.FirstOrDefault(s => s.Id == c.StageId)?.Label, c.Category, c.Count, c.Total, c.Percent / 100);
                     timed.Cell(3, 1).Value = "各分类数量合计 ÷ 对应期间有效 SBIN 总数；只覆盖自动解析的逐颗记录。";
                 }
-                var categoryPlots = Sheet("Bin分类图", new[] { "HBIN Fail 堆叠数量 · 仅自动解析记录" }); row = 6;
+                string binType = options?.BinType == "SBIN" ? "SBIN" : "HBIN";
+                var categoryPlots = Sheet("Bin分类图", new[] { binType + " Fail 堆叠图 · 数量 / 百分比口径跟随界面 · 仅自动解析记录" }); row = 6;
                 foreach (var stage in product.Flow)
-                    foreach (var page in Pages(ManagementTrendService.FailTrend(product, stage.Id, "HBIN", filter, period)))
+                    foreach (var page in Pages(ManagementTrendService.DisplayCounts(ManagementTrendService.FailTrend(product, stage.Id, binType, filter, period), options?.BinDisplay ?? ManagementCountDisplay.Count)))
                     {
                         token.ThrowIfCancellationRequested();
-                        using var stream = new MemoryStream(TrendImage(page, product.Name + " · " + stage.Label + " · HBIN Fail 数量 · " + periodLabel, false));
+                        using var stream = new MemoryStream(TrendImage(page, product.Name + " · " + stage.Label + " · " + binType + " Fail · " + periodLabel, false));
                         int imageHeight = TrendImageHeight(page);
                         categoryPlots.AddPicture(stream).MoveTo(categoryPlots.Cell(row, 1)).WithSize(1200, (int)(imageHeight * 1200.0 / 1440));
                         row += (int)Math.Ceiling(imageHeight * 1200.0 / 1440 / 20) + 3;
                     }
-                var defectPlots = Sheet("不良分类图", new[] { "按配置的 SBIN 分类汇总不良数量 · 未配置的 SBIN 归入未分类" }); row = 6;
+                var defectPlots = Sheet("不良分类图", new[] { "按配置的 SBIN 分类汇总不良 · 显示口径与界面一致 · 未配置的 SBIN 归入未分类" }); row = 6;
                 foreach (var stage in product.Flow)
-                    foreach (var page in Pages(ManagementTrendService.DefectTrend(product, stage.Id, filter, period)))
+                    foreach (var page in Pages(ManagementTrendService.DisplayCounts(ManagementTrendService.DefectTrend(product, stage.Id, filter, period), options?.DefectDisplay ?? ManagementCountDisplay.Count)))
                     {
                         token.ThrowIfCancellationRequested();
                         using var stream = new MemoryStream(TrendImage(page, product.Name + " · " + stage.Label + " · SBIN 不良分类 · " + periodLabel, false));

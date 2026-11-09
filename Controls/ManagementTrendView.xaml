@@ -5,6 +5,12 @@
             <TextBlock Text="参考良率 %" VerticalAlignment="Center" Foreground="#64748B" Margin="0,0,5,0"/>
             <TextBox x:Name="TxtTarget" Text="85" Width="43" Height="21" Padding="3,0" VerticalContentAlignment="Center" LostFocus="Target_Changed" ToolTip="低于参考值为红色，高于加权均值为绿色，其余为黄色。"/>
         </StackPanel>
+        <WrapPanel x:Name="CountDisplayPanel" DockPanel.Dock="Top" Visibility="Collapsed" Margin="5,2,5,3">
+            <TextBlock Text="显示" VerticalAlignment="Center" Foreground="#64748B" Margin="0,0,8,0"/>
+            <RadioButton x:Name="CountMode" Content="数量" IsChecked="True" Checked="DisplayMode_Changed" Margin="0,0,12,0"/>
+            <RadioButton x:Name="TotalPercentMode" Content="占总芯片数 %" Checked="DisplayMode_Changed" Margin="0,0,12,0" ToolTip="分类不良数 ÷ 当前晶圆、批次或期间的总芯片数。"/>
+            <RadioButton x:Name="FailPercentMode" Content="占不良芯片数 %" Checked="DisplayMode_Changed" ToolTip="分类不良数 ÷ 当前范围的不良芯片数；全部分类合计 100%。隐藏分类不改变分母。"/>
+        </WrapPanel>
         <ItemsControl x:Name="Legend" DockPanel.Dock="Top" Margin="5,2">
             <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate><DataTemplate>
@@ -18,7 +24,7 @@
             <local:ManagementChartControl x:Name="Chart"/>
             <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch" ResizeDirection="Rows" Background="#EEF2F7"/>
             <DataGrid x:Name="Table" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False"
-                      CanUserSortColumns="False" CanUserReorderColumns="False" CanUserResizeColumns="False" FrozenColumnCount="1"
+                      CanUserSortColumns="False" CanUserReorderColumns="False" CanUserResizeColumns="False" FrozenColumnCount="1" MinColumnWidth="0"
                       HeadersVisibility="Column" ColumnHeaderHeight="34" RowHeight="22" FontSize="11" MaxHeight="180" Background="White" BorderBrush="#E2E8F0"
                       EnableRowVirtualization="True" EnableColumnVirtualization="True" VirtualizingPanel.VirtualizationMode="Recycling"
                       ScrollViewer.CanContentScroll="True" ScrollViewer.ScrollChanged="Table_ScrollChanged" SizeChanged="Table_SizeChanged"

@@ -28,6 +28,27 @@ static class Preview
         var v=new DrawingVisual();using(var dc=v.RenderOpen()){dc.DrawRectangle(Brushes.White,null,new Rect(0,0,1200,440));dc.DrawImage(Read(left),new Rect(0,0,600,440));dc.DrawImage(Read(right),new Rect(600,0,600,440));}
         var b=new RenderTargetBitmap(1200,440,96,96,PixelFormats.Pbgra32);b.Render(v);using var png=ChartImage.Png(b);File.WriteAllBytes(Path.Combine(folder,name),png.ToArray());
     }
+    static void CheckPercentages()
+    {
+        var counts=new ManagementTrendData(new[]{"A","B","C"},new()
+        {
+            new("Bin 2",Brushes.Red,new double?[]{10,0,5}),
+            new("Bin 5",Brushes.Gold,new double?[]{15,0,5})
+        },ManagementChartMode.StackedCounts,SampleCounts:new double?[]{100,200,null});
+        void Close(double? value,double expected) { if(value is not double actual||Math.Abs(actual-expected)>1e-9)throw new Exception("Incorrect classification percentage"); }
+        var total=ManagementTrendService.DisplayCounts(counts,ManagementCountDisplay.PercentOfTotal);
+        Close(total.Series[0].Values[0],10);Close(total.Series[1].Values[0],15);Close(total.Series[0].Values[1],0);
+        if(total.Series[0].Values[2].HasValue)throw new Exception("Missing sample count must remain unknown");
+        var fail=ManagementTrendService.DisplayCounts(counts,ManagementCountDisplay.PercentOfFailures);
+        Close(fail.Series[0].Values[0],40);Close(fail.Series[1].Values[0],60);Close(fail.Series[0].Values[2],50);
+        if(fail.Series[0].Values[1].HasValue)throw new Exception("Zero failures must not produce a fictitious percentage");
+        var view=new ManagementTrendView();view.SetData(counts);view.CountDisplay=ManagementCountDisplay.PercentOfFailures;
+        var choices=(IEnumerable<WaferCategoryTrendWindow.CategoryChoice>)((ItemsControl)view.FindName("Legend")).ItemsSource;
+        choices.Last().IsVisible=false;Close(view.SelectedData.Series.Single().Values[0],40);
+        view.SetData(counts);Close(view.SelectedData.Series.Single().Values[0],40);
+        Close(counts.Series[0].Values[0],10);
+        Console.WriteLine("Percentage denominators, zero/missing samples, and stable hidden-series percentages verified.");
+    }
     static ManagedProduct Product()
     {
         var config=new AnalyzerConfig { TestItemRow=1,TestNumberRow=0,LowLimitRow=0,HighLimitRow=0,UnitRow=0,SBinRow=0,HBinRow=0,DataStartRow=2,TestItemStartColumn=8,SerialNumberColumn=1,XColumn=2,YColumn=3,SiteColumn=4,SBinColumn=5,HBinColumn=6,WaferColumn=7 };
@@ -68,19 +89,31 @@ static class Preview
             folder=Path.GetFullPath(args[0]);Directory.CreateDirectory(folder);
             var app=new App();app.InitializeComponent();app.ShutdownMode=ShutdownMode.OnExplicitShutdown;
             SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            CheckPercentages();
             var product=Product();var store=new ProductCatalogStore(Path.Combine(folder,"catalog.json"));store.Save(new ProductCatalog {Products=new(){product}});
             var window=new ProductManagementWindow(store){Width=1440,Height=900};window.Show();Pump();
             Save(window,"01-yield-bars.png");
             var tabs=(TabControl)window.FindName("MainTabs");tabs.SelectedIndex=1;Pump();Save(window,"02-compact-yield-table.png");
             tabs.SelectedIndex=3;Pump();Save(window,"03-hbin-fail-stacks.png");
             tabs.SelectedIndex=4;Pump();Save(window,"10-sbin-defect-categories.png");
+            var binView=(ManagementTrendView)window.FindName("CategoryTrend");var defectView=(ManagementTrendView)window.FindName("DefectTrend");
+            tabs.SelectedIndex=3;binView.CountDisplay=ManagementCountDisplay.PercentOfTotal;Pump();Save(window,"11-bin-percent-total.png");
+            binView.CountDisplay=ManagementCountDisplay.PercentOfFailures;Pump();Save(window,"12-bin-percent-fail.png");
+            tabs.SelectedIndex=4;defectView.CountDisplay=ManagementCountDisplay.PercentOfTotal;Pump();Save(window,"13-defect-percent-total.png");
+            defectView.CountDisplay=ManagementCountDisplay.PercentOfFailures;Pump();Save(window,"14-defect-percent-fail.png");
+            window.Width=820;Pump();Save(window,"15-narrow-management-window.png",820,850);
+            if(window.ActualWidth>840)throw new Exception("Management minimum width is still locked");
+            window.Width=1440;Pump();
             var options=new ManagementReportOptionsWindow(product){Owner=window};options.Show();Pump();Save(options,"04-export-selection.png",590,650);options.Close();
             string stage=product.Flow[0].Id;
+            var actual=ManagementTrendService.DisplayCounts(ManagementTrendService.FailTrend(product,stage,"HBIN","",ManagementPeriod.Wafer),ManagementCountDisplay.PercentOfTotal);
+            if(Math.Abs(actual.Series.Sum(s=>s.Values[0]??0)-17900.0/1793)>1e-9)throw new Exception("Wafer sample denominator is incorrect");
             Pair("05-pareto-preview.png",ManagementReportService.AnalysisImage(ManagementTrendService.Pareto(product,stage,"HBIN"),"HBIN Fail Pareto",600,440),ManagementReportService.AnalysisImage(ManagementTrendService.Pareto(product,stage,"SBIN",12),"SBIN Fail Pareto · Top 12",600,440));
             var radial=ManagementTrendService.RadialTrend(product,stage);radial=radial with {Series=radial.Series.Take(12).ToList()};
             Pair("06-radial-center-edge-preview.png",ManagementReportService.AnalysisImage(radial,"各晶圆径向良率分布",600,440),ManagementReportService.AnalysisImage(ManagementTrendService.CenterEdge(product,stage),"中心区 vs 边缘区",600,440));
             File.WriteAllBytes(Path.Combine(folder,"07-sbin-root-causes.png"),ManagementReportService.AnalysisImage(ManagementTrendService.RootCause(product,stage),"SBIN Fail 分类 · 释义来自产品配置",1200,530));
             ManagementReportService.SaveWorkbook(Path.Combine(folder,"management-report-preview.xlsx"),product,options:new ManagementReportOptions(ManagementAnalytics.Scopes(product).ToHashSet()));
+            ManagementReportService.SaveWorkbook(Path.Combine(folder,"management-report-percent-preview.xlsx"),product,options:new ManagementReportOptions(ManagementAnalytics.Scopes(product).ToHashSet(),BinDisplay:ManagementCountDisplay.PercentOfTotal,DefectDisplay:ManagementCountDisplay.PercentOfFailures,BinType:"SBIN"));
             window.Close();Pump();app.Shutdown();Console.WriteLine("Preview screenshots and XLSX generated from simulated data.");return 0;
         }
         catch(Exception ex){Console.Error.WriteLine(ex);return 1;}

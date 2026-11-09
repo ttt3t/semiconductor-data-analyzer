@@ -11,7 +11,6 @@ public sealed class ManagementChartControl : FrameworkElement
     private ManagementTrendData _data = new(Array.Empty<string>(), new());
     public string Title { get; set; } = "";
     public bool ShowLegend { get; set; }
-    public double ColumnWidth { get; set; } = 80;
     private double _offset;
     public double HorizontalOffset { get => _offset; set { _offset = Math.Max(0, value); InvalidateVisual(); } }
     private static readonly Brush Text = Brushes.DimGray;
@@ -39,7 +38,7 @@ public sealed class ManagementChartControl : FrameworkElement
         base.OnRender(dc);
         double w = ActualWidth, h = ActualHeight;
         dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, Math.Max(0, w), Math.Max(0, h)));
-        if (w < 160 || h < 100) return;
+        if (w <= 0 || h < 100) return;
         Label(dc, Title, w / 2, 2, 12, Brushes.DimGray, w - 24, true);
         double top = Title.Length == 0 ? 18 : 28;
         if (ShowLegend)
@@ -59,24 +58,27 @@ public sealed class ManagementChartControl : FrameworkElement
         }
         if (_data.Mode == ManagementChartMode.HorizontalBars) { Horizontal(dc, w, h, top); return; }
         bool counts = _data.Mode == ManagementChartMode.StackedCounts;
+        bool stacked = _data.IsStacked;
         bool pareto = _data.Mode == ManagementChartMode.Pareto;
         bool yield = _data.Mode is ManagementChartMode.YieldBars or ManagementChartMode.RadialLines or ManagementChartMode.CenterEdge;
         var values = _data.Series.SelectMany(s => s.Values).Where(v => v.HasValue && double.IsFinite(v.Value)).Select(v => v!.Value).ToArray();
         if (values.Length == 0) { Label(dc, "当前范围无有效样本数", w / 2, h / 2, 12, center: true); return; }
         double min = yield ? Math.Max(0, Math.Floor(Math.Min(values.DefaultIfEmpty(0).Min(), _data.Mode == ManagementChartMode.YieldBars ? _data.TargetYield : 100) / 5) * 5 - 5) : 0;
-        double max = yield ? 100 : counts ? NiceTop(Enumerable.Range(0, _data.Labels.Length).Select(i => _data.Series.Sum(s => i < s.Values.Length ? s.Values[i] ?? 0 : 0)).DefaultIfEmpty(0).Max() * 1.15) : Math.Min(100, NiceTop(values.DefaultIfEmpty(0).Max() * 1.18));
+        double stackedMax = NiceTop(Enumerable.Range(0, _data.Labels.Length).Select(i => _data.Series.Sum(s => i < s.Values.Length ? s.Values[i] ?? 0 : 0)).DefaultIfEmpty(0).Max() * 1.15);
+        double max = yield ? 100 : stacked ? counts ? stackedMax : Math.Min(100, stackedMax) : Math.Min(100, NiceTop(values.DefaultIfEmpty(0).Max() * 1.18));
         if (max <= min) min = Math.Max(0, max - 5);
         // Leave room above 100% for the cumulative and center/edge annotations.
         double annotationSpace = _data.Mode == ManagementChartMode.CenterEdge ? 24 : pareto ? 12 : 0;
-        var plot = new Rect(55, top + 13 + annotationSpace, Math.Max(1, w - (pareto ? 106 : 74)), Math.Max(1, h - top - 58 - annotationSpace));
+        double left = Math.Min(55, w * .18), right = Math.Min(pareto ? 51 : 19, w * (pareto ? .17 : .06));
+        var plot = new Rect(left, top + 13 + annotationSpace, Math.Max(1, w - left - right), Math.Max(1, h - top - 58 - annotationSpace));
         double Y(double value) => plot.Bottom - (value - min) / (max - min) * plot.Height;
-        double slot = Math.Max(40, plot.Width / _data.Labels.Length);
-        if (_data.Labels.Length > 16) slot = Math.Max(slot, ColumnWidth);
+        double slot = plot.Width / _data.Labels.Length;
+        int labelStride = (int)Math.Clamp(Math.Ceiling(52 / slot), 1, _data.Labels.Length);
         double X(int index) => plot.Left + (index + .5) * slot - _offset;
         foreach (double tick in ChartAxis.Ticks(min, max, Math.Max(3, (int)(plot.Height / 48)), integers: counts))
         {
             double y = Y(tick); dc.DrawLine(Grid, new Point(plot.Left, y), new Point(plot.Right, y));
-            Label(dc, counts ? tick.ToString("N0") : tick.ToString("0.#"), plot.Left - 25, y - 7, 9, maxWidth: 45, center: true);
+            Label(dc, counts ? tick.ToString("N0") : tick.ToString("0.#"), plot.Left / 2, y - 7, 9, maxWidth: Math.Max(1, plot.Left - 6), center: true);
         }
         Label(dc, _data.AxisTitle, plot.Left, top - 2, 9);
         dc.DrawLine(Axis, plot.TopLeft, plot.BottomLeft); dc.DrawLine(Axis, plot.BottomLeft, plot.BottomRight);
@@ -115,19 +117,21 @@ public sealed class ManagementChartControl : FrameworkElement
             for (int s = 0; s < _data.Series.Count; s++)
             {
                 var series = _data.Series[s]; if (i >= series.Values.Length || series.Values[i] is not double value) continue;
-                double width = counts ? groupWidth : groupWidth / _data.Series.Count;
-                double x = X(i) - groupWidth / 2 + (counts ? 0 : s * width), bottom = counts ? Y(accumulated) : plot.Bottom;
-                double y = Y(counts ? accumulated + value : value);
+                double width = stacked ? groupWidth : groupWidth / _data.Series.Count;
+                double x = X(i) - groupWidth / 2 + (stacked ? 0 : s * width), bottom = stacked ? Y(accumulated) : plot.Bottom;
+                double y = Y(stacked ? accumulated + value : value);
                 Brush brush = series.LineBrush;
                 if (_data.Mode == ManagementChartMode.YieldBars && _data.Series.Count == 1)
                     brush = value < _data.TargetYield ? Brushes.IndianRed : value >= (series.Mean ?? series.Values.Where(v => v.HasValue).Average(v => v!.Value)) ? Brushes.ForestGreen : Brushes.Goldenrod;
                 if (pareto && series.Category.StartsWith("HBIN")) brush = Ranked[i % Ranked.Length];
-                if (bottom > y) dc.DrawRectangle(brush, null, new Rect(x + .6, y, Math.Max(1, width - 1.2), bottom - y));
-                if (counts) accumulated += value;
-                else Label(dc, value.ToString(pareto ? "F1" : "F1", CultureInfo.InvariantCulture), x + width / 2, y - 14, 9, brush, center: true);
+                double padding = Math.Min(.6, width * .08);
+                if (bottom > y) dc.DrawRectangle(brush, null, new Rect(x + padding, y, Math.Max(0, width - padding * 2), bottom - y));
+                if (stacked) accumulated += value;
+                else if (width >= 28) Label(dc, value.ToString("F1", CultureInfo.InvariantCulture), x + width / 2, y - 14, 9, brush, center: true);
             }
-            if (counts) Label(dc, accumulated.ToString("N0"), X(i), Y(accumulated) - 14, 9, center: true);
-            if (_data.Mode == ManagementChartMode.CenterEdge && _data.Series.Count == 2 &&
+            if (stacked && slot >= 45 && _data.Series.Any(s => i < s.Values.Length && s.Values[i].HasValue))
+                Label(dc, counts ? accumulated.ToString("N0") : accumulated.ToString("F1") + "%", X(i), Y(accumulated) - 14, 9, center: true);
+            if (_data.Mode == ManagementChartMode.CenterEdge && slot >= 52 && _data.Series.Count == 2 &&
                 _data.Series[0].Values[i] is double center && _data.Series[1].Values[i] is double edge)
                 Label(dc, (edge - center).ToString("+0.0;-0.0;0.0") + "pp", X(i), Y(Math.Max(center, edge)) - 27, 8, Brushes.IndianRed, center: true);
         }
@@ -140,7 +144,7 @@ public sealed class ManagementChartControl : FrameworkElement
                 var point = new Point(X(i), plot.Bottom - cumulative / 100 * plot.Height);
                 if (previous.HasValue) dc.DrawLine(new Pen(Brushes.SlateGray, 1.25), previous.Value, point);
                 dc.DrawEllipse(Brushes.SlateGray, null, point, 2.5, 2.5);
-                if (i >= first && i <= last) Label(dc, cumulative.ToString("F1") + "%", point.X, point.Y - 16, 8, center: true);
+                if (i >= first && i <= last && i % labelStride == 0) Label(dc, cumulative.ToString("F1") + "%", point.X, point.Y - 16, 8, center: true);
                 previous = point;
             }
         }
@@ -156,13 +160,13 @@ public sealed class ManagementChartControl : FrameworkElement
         dc.Pop();
         for (int i = first; i <= last; i++)
         {
-            double x = X(i); if (x < plot.Left || x > plot.Right) continue;
-            Label(dc, _data.Labels[i], x, plot.Bottom + 5, 9, maxWidth: Math.Max(25, slot - 3), center: true);
+            double x = X(i); if (x < plot.Left || x > plot.Right || i % labelStride != 0) continue;
+            Label(dc, _data.Labels[i], x, plot.Bottom + 5, 9, maxWidth: Math.Max(1, slot * labelStride - 3), center: true);
         }
     }
     private void Horizontal(DrawingContext dc, double w, double h, double top)
     {
-        double left = Math.Clamp(w * .25, 150, 310);
+        double left = Math.Min(Math.Clamp(w * .25, 150, 310), w * .4);
         var plot = new Rect(left, top + 8, Math.Max(1, w - left - 22), Math.Max(1, h - top - 46));
         var series = _data.Series[0]; double max = NiceTop(series.Values.Where(v => v.HasValue).Select(v => v!.Value).DefaultIfEmpty(1).Max() * 1.35);
         foreach (double tick in ChartAxis.Ticks(0, max, 6))

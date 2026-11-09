@@ -349,8 +349,10 @@ public partial class ProductManagementWindow : Window
         var file = new SaveFileDialog { Filter = "Excel 报告|*.xlsx", FileName = SafeName(_product.Name) + "-产品良率报告.xlsx" };
         if (file.ShowDialog() != true) return;
         var product = ProductCatalogStore.Clone(_product); string filter = TxtFilter.Text.Trim(); var period = Period;
+        var reportOptions = options.Options with { BinDisplay = CategoryTrend.CountDisplay, DefectDisplay = DefectTrend.CountDisplay,
+            BinType = CategorySbin.IsChecked == true ? "SBIN" : "HBIN" };
         var cancellation = new CancellationTokenSource(); _calculation = cancellation; long version = ++_version; SetBusy(true);
-        try { await ManagementReportService.RunStaAsync(() => ManagementReportService.SaveWorkbook(file.FileName, product, filter, cancellation.Token, period, options.Options)); if (!_closed && version == _version) TxtStatus.Text = "管理报告已导出：" + file.FileName; }
+        try { await ManagementReportService.RunStaAsync(() => ManagementReportService.SaveWorkbook(file.FileName, product, filter, cancellation.Token, period, reportOptions)); if (!_closed && version == _version) TxtStatus.Text = "管理报告已导出：" + file.FileName; }
         catch (OperationCanceledException) { }
         catch (Exception ex) { if (!_closed && version == _version) TxtStatus.Text = "导出失败：" + ex.Message; }
         finally { if (ReferenceEquals(_calculation, cancellation)) _calculation = null; cancellation.Dispose(); if (!_closed && version == _version) SetBusy(false); }
