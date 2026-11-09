@@ -376,7 +376,7 @@ public partial class ProductManagementWindow : Window
             int pages = 0;
             await ManagementReportService.RunStaAsync(() =>
             {
-                foreach (var page in ManagementReportService.Pages(data))
+                foreach (var page in ManagementReportService.Pages(data, layout: layout))
                 {
                     cancellation.Token.ThrowIfCancellationRequested();
                     string path = pages == 0 ? file.FileName : Path.Combine(Path.GetDirectoryName(file.FileName)!, Path.GetFileNameWithoutExtension(file.FileName) + $"-{pages + 1}-{Guid.NewGuid():N}.png");

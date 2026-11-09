@@ -143,6 +143,11 @@ static class Preview
             var yieldView=(ManagementTrendView)window.FindName("YieldTrend");
             var yieldLayout=CheckWidthZoom(window,tabs,0,yieldView,"18-yield-width");
             if(Math.Abs(binView.WidthZoom-.5)>.001||Math.Abs(defectView.WidthZoom-.5)>.001)throw new Exception("View zoom state changed unexpectedly");
+            binView.ZoomWidth(1_000_000);Pump();
+            if(binView.WidthZoom!=100)throw new Exception("Maximum zoom must be 10000%");
+            binView.ZoomWidth(.00000001);Pump();
+            if(binView.WidthZoom!=.01)throw new Exception("Minimum zoom must be 1%");
+            binView.ZoomWidth(.5/binView.WidthZoom);Pump();
             var options=new ManagementReportOptionsWindow(product){Owner=window};options.Show();Pump();Save(options,"04-export-selection.png",590,650);options.Close();
             string stage=product.Flow[0].Id;
             var actual=ManagementTrendService.DisplayCounts(ManagementTrendService.FailTrend(product,stage,"HBIN","",ManagementPeriod.Wafer),ManagementCountDisplay.PercentOfTotal);
@@ -154,6 +159,16 @@ static class Preview
             if(shownShare>=100||Math.Abs(shownShare-expectedShare)>1e-9)throw new Exception("Top 12 must retain the full failure denominator");
             var categoryPages=ManagementReportService.Pages(ManagementTrendService.FailTrend(product,stage,"HBIN","",ManagementPeriod.Wafer),13).ToArray();
             if(categoryPages.Length!=2||categoryPages[0].Labels.Length!=13||categoryPages[1].Labels.Length!=1)throw new Exception("Classification report must use 13 columns");
+            var wideLayout=new ManagementChartLayout(40000,150,220);
+            var widePages=ManagementReportService.Pages(categoryPages[0],13,wideLayout).ToArray();
+            if(widePages.Length!=13||widePages.Any(p=>p.Labels.Length!=1))throw new Exception("Extreme zoom must split report columns without dropping data");
+            var widePng=ManagementReportService.TrendImage(widePages[0],"Extreme width export",false,wideLayout);
+            using(var wideStream=new MemoryStream(widePng))
+            {
+                var bitmap=BitmapFrame.Create(wideStream,BitmapCreateOptions.PreservePixelFormat,BitmapCacheOption.OnLoad);
+                if(bitmap.PixelWidth>16384||ManagementReportService.TrendImageWidth(widePages[0],wideLayout)<=bitmap.PixelWidth)throw new Exception("Extreme report bitmap must remain bounded while preserving logical width");
+            }
+            Console.WriteLine("Zoom range 1%..10000% and oversized single-column PNG export verified.");
             for(int i=0;i<paretoPages.Length;i++)File.WriteAllBytes(Path.Combine(folder,$"05-sbin-pareto-{i+1:00}.png"),ManagementReportService.AnalysisImage(paretoPages[i],"SBIN Fail Pareto Top 12",1150,430));
             Console.WriteLine("All Top 12 SBIN labels/descriptions rendered; cumulative retains all 17 bins as denominator; classification pages contain 13 + 1 wafers.");
             var radial=ManagementTrendService.RadialTrend(product,stage);radial=radial with {Series=radial.Series.Take(12).ToList()};
@@ -161,6 +176,7 @@ static class Preview
             File.WriteAllBytes(Path.Combine(folder,"07-sbin-root-causes.png"),ManagementReportService.AnalysisImage(ManagementTrendService.RootCause(product,stage),"SBIN Fail 分类 · 释义来自产品配置",1200,530));
             ManagementReportService.SaveWorkbook(Path.Combine(folder,"management-report-preview.xlsx"),product,options:new ManagementReportOptions(ManagementAnalytics.Scopes(product).ToHashSet()));
             ManagementReportService.SaveWorkbook(Path.Combine(folder,"management-report-percent-preview.xlsx"),product,options:new ManagementReportOptions(ManagementAnalytics.Scopes(product).ToHashSet(),BinDisplay:ManagementCountDisplay.PercentOfTotal,DefectDisplay:ManagementCountDisplay.PercentOfFailures,BinType:"SBIN",BinLayout:binLayout,DefectLayout:defectLayout,YieldLayout:yieldLayout));
+            ManagementReportService.SaveWorkbook(Path.Combine(folder,"management-report-wide-preview.xlsx"),product,options:new ManagementReportOptions(new(){ManagementAnalytics.Scopes(product).First()},BinLayout:wideLayout,DefectLayout:wideLayout,YieldLayout:wideLayout));
             window.Close();Pump();app.Shutdown();Console.WriteLine("Preview screenshots and XLSX generated from simulated data.");return 0;
         }
         catch(Exception ex){Console.Error.WriteLine(ex);return 1;}

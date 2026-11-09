@@ -32,7 +32,11 @@ public static class ManagementReportService
         double cellWidth = layout?.ColumnWidth ?? (width - 152.0) / Math.Max(1, data.Labels.Length);
         int height = TrendImageHeight(data, layout);
         if (height > 12000) throw new InvalidDataException("报表分类过多，请减少所选分类。");
-        new ChartImageSize(width, height).Validate();
+        // Keep the requested logical size in XLSX. Very wide individual columns
+        // use a bounded raster width so extreme zoom cannot allocate huge bitmaps.
+        double rasterWidth = Math.Min(16000, Math.Floor(63_000_000.0 / height));
+        var imageSize = new ChartImageSize(width, height, 96 * Math.Min(1, rasterWidth / width), 96);
+        imageSize.Validate();
         var chart = new ManagementChartControl { Width = width, Height = chartHeight };
         if (layout != null) chart.SetColumnLayout(cellWidth, headerWidth + 1, layout.RightPadding);
         chart.SetData(data);
@@ -69,7 +73,7 @@ public static class ManagementReportService
                 }
             }
         }
-        var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32); bitmap.Render(visual);
+        var bitmap = new RenderTargetBitmap(imageSize.PixelWidth, imageSize.PixelHeight, imageSize.DpiX, imageSize.DpiY, PixelFormats.Pbgra32); bitmap.Render(visual);
         var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using var stream = new MemoryStream(); encoder.Save(stream); return stream.ToArray();
     }
@@ -78,9 +82,11 @@ public static class ManagementReportService
         checked((int)Math.Ceiling(layout.HeaderWidth + 1 + data.Labels.Length * layout.ColumnWidth + layout.RightPadding));
     public static int TrendImageHeight(ManagementTrendData data, ManagementChartLayout? layout = null) =>
         checked((int)Math.Ceiling((layout?.ChartHeight ?? TrendChartHeight(data)) + 40 + (layout?.HeaderHeight ?? 22) + data.Series.Count * (layout?.RowHeight ?? 22)));
-    public static IEnumerable<ManagementTrendData> Pages(ManagementTrendData data, int columnsPerPage = 10)
+    public static IEnumerable<ManagementTrendData> Pages(ManagementTrendData data, int columnsPerPage = 10, ManagementChartLayout? layout = null)
     {
         if (columnsPerPage <= 0) throw new ArgumentOutOfRangeException(nameof(columnsPerPage));
+        if (layout is { ColumnWidth: > 0 })
+            columnsPerPage = (int)Math.Clamp(Math.Floor((16000 - layout.HeaderWidth - 1 - layout.RightPadding) / layout.ColumnWidth), 1, columnsPerPage);
         for (int start = 0; start < data.Labels.Length; start += columnsPerPage)
             yield return data with { Labels = data.Labels.Skip(start).Take(columnsPerPage).ToArray(),
                 Series = data.Series.Select(s => s with { Values = s.Values.Skip(start).Take(columnsPerPage).ToArray(), Counts = s.Counts?.Skip(start).Take(columnsPerPage).ToArray() }).ToList(),
@@ -146,7 +152,7 @@ public static class ManagementReportService
                 }
                 var trend = Sheet("良率趋势图", new[] { "分温度与综合良率 · " + periodLabel + " · 每页最多 10 列" }); row = 6;
                 foreach (string kind in new[] { "CP", "FT" })
-                        foreach (var page in Pages(ManagementTrendService.Create(product, kind, filter, period: period)))
+                        foreach (var page in Pages(ManagementTrendService.Create(product, kind, filter, period: period), layout: options?.YieldLayout))
                         {
                             token.ThrowIfCancellationRequested();
                             var layout = options?.YieldLayout;
@@ -171,7 +177,7 @@ public static class ManagementReportService
                 string binType = options?.BinType == "SBIN" ? "SBIN" : "HBIN";
                 var categoryPlots = Sheet("Bin分类图", new[] { binType + " Fail 堆叠图 · 每张最多 13 列 · 数量 / 百分比口径跟随界面 · 仅自动解析记录" }); row = 6;
                 foreach (var stage in product.Flow)
-                    foreach (var page in Pages(ManagementTrendService.DisplayCounts(ManagementTrendService.FailTrend(product, stage.Id, binType, filter, period), options?.BinDisplay ?? ManagementCountDisplay.Count), 13))
+                    foreach (var page in Pages(ManagementTrendService.DisplayCounts(ManagementTrendService.FailTrend(product, stage.Id, binType, filter, period), options?.BinDisplay ?? ManagementCountDisplay.Count), 13, options?.BinLayout))
                     {
                         token.ThrowIfCancellationRequested();
                         var layout = options?.BinLayout;
@@ -183,7 +189,7 @@ public static class ManagementReportService
                     }
                 var defectPlots = Sheet("不良分类图", new[] { "按配置的 SBIN 分类汇总不良 · 每张最多 13 列 · 显示口径与界面一致 · 未配置的 SBIN 归入未分类" }); row = 6;
                 foreach (var stage in product.Flow)
-                    foreach (var page in Pages(ManagementTrendService.DisplayCounts(ManagementTrendService.DefectTrend(product, stage.Id, filter, period), options?.DefectDisplay ?? ManagementCountDisplay.Count), 13))
+                    foreach (var page in Pages(ManagementTrendService.DisplayCounts(ManagementTrendService.DefectTrend(product, stage.Id, filter, period), options?.DefectDisplay ?? ManagementCountDisplay.Count), 13, options?.DefectLayout))
                     {
                         token.ThrowIfCancellationRequested();
                         var layout = options?.DefectLayout;

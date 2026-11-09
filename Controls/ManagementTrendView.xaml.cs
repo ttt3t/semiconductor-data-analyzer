@@ -94,7 +94,7 @@ public partial class ManagementTrendView : UserControl
     public void ZoomWidth(double factor, double anchor = 0)
     {
         if (!CanZoom || !double.IsFinite(factor) || factor <= 0) return;
-        double zoom = Math.Clamp(_widthZoom * factor, .1, 8);
+        double zoom = Math.Clamp(_widthZoom * factor, .01, 100);
         var scroll = FindScrollViewer(Table);
         double offset = _pendingOffset ?? scroll?.HorizontalOffset ?? 0;
         _pendingOffset = Math.Max(0, (offset + Math.Max(0, anchor)) * zoom / _widthZoom - Math.Max(0, anchor));
