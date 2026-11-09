@@ -13,6 +13,7 @@ public partial class ManagementTrendView : UserControl
     public ManagementTrendView()
     {
         InitializeComponent();
+        Loaded += (_, _) => ResizeColumns();
     }
     public double ChartMinHeight { get => ChartRow.MinHeight; set => ChartRow.MinHeight = value; }
     public double TableMaxHeight
@@ -81,9 +82,14 @@ public partial class ManagementTrendView : UserControl
     }
     private void ResizeColumns()
     {
-        if (_data.Labels.Length == 0) return;
-        Table.Columns[0].Width = Math.Min(150, Math.Max(0, Table.ActualWidth * .25));
-        double width = Math.Max(0, (Table.ActualWidth - Table.Columns[0].Width.Value - 2 - SystemParameters.VerticalScrollBarWidth) / _data.Labels.Length);
+        // An inactive tab has no viewport yet. Zero-width columns prevent WPF's
+        // virtualized grid from estimating its cells; size them when it is loaded.
+        if (_data.Labels.Length == 0 || Table.ActualWidth <= 0) return;
+        double header = Math.Min(150, Table.ActualWidth * .25);
+        double available = Table.ActualWidth - header - 2 - SystemParameters.VerticalScrollBarWidth;
+        if (available <= 0) return;
+        Table.Columns[0].Width = header;
+        double width = available / _data.Labels.Length;
         foreach (var column in Table.Columns.Skip(1)) column.Width = width;
     }
     private void Table_SizeChanged(object sender, SizeChangedEventArgs e) { if (e.WidthChanged) ResizeColumns(); }

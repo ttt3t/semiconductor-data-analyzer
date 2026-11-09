@@ -17,10 +17,12 @@ static class Preview
     static void Pump() { var frame = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => frame.Continue = false)); Dispatcher.PushFrame(frame); }
     static void Save(Window window, string name, int width = 1400, int height = 850)
     {
+        Console.WriteLine("Capturing " + name);
         var root = (FrameworkElement)window.Content;
         root.Measure(new Size(width, height)); root.Arrange(new Rect(0,0,width,height)); root.UpdateLayout();
         using var png = ChartImage.Png(ChartImage.Capture(root, new ChartImageSize(width,height)));
         File.WriteAllBytes(Path.Combine(folder,name),png.ToArray());
+        Console.WriteLine("Captured " + name);
     }
     static void Pair(string name, byte[] left, byte[] right)
     {
@@ -30,6 +32,7 @@ static class Preview
     }
     static void CheckPercentages()
     {
+        Console.WriteLine("Checking percentage denominators");
         var counts=new ManagementTrendData(new[]{"A","B","C"},new()
         {
             new("Bin 2",Brushes.Red,new double?[]{10,0,5}),
@@ -79,7 +82,9 @@ static class Preview
             }
             product.Files.Add(new ManagedDataFile {FilePath=path,StageId=stage.Id,Lot=lot,TestTime=new DateTime(2026,11,1).AddHours(index),UseStdfTestTime=false});
         }
+        Console.WriteLine("Calculating simulated wafer data");
         product.Snapshot=ProductYieldService.Calculate(product);
+        Console.WriteLine("Calculated simulated wafer data");
         return product;
     }
     [STAThread] static int Main(string[] args)
@@ -91,7 +96,7 @@ static class Preview
             SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
             CheckPercentages();
             var product=Product();var store=new ProductCatalogStore(Path.Combine(folder,"catalog.json"));store.Save(new ProductCatalog {Products=new(){product}});
-            var window=new ProductManagementWindow(store){Width=1440,Height=900};window.Show();Pump();
+            var window=new ProductManagementWindow(store){Width=1440,Height=900};window.Show();Console.WriteLine("Management window shown");Pump();
             Save(window,"01-yield-bars.png");
             var tabs=(TabControl)window.FindName("MainTabs");tabs.SelectedIndex=1;Pump();Save(window,"02-compact-yield-table.png");
             tabs.SelectedIndex=3;Pump();Save(window,"03-hbin-fail-stacks.png");
