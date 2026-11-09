@@ -11,6 +11,12 @@ public sealed class ManagementChartControl : FrameworkElement
     private ManagementTrendData _data = new(Array.Empty<string>(), new());
     public string Title { get; set; } = "";
     public bool ShowLegend { get; set; }
+    private double? _columnWidth, _headerWidth;
+    private double _rightPadding = 19;
+    public void SetColumnLayout(double? columnWidth = null, double? headerWidth = null, double rightPadding = 19)
+    {
+        _columnWidth = columnWidth; _headerWidth = headerWidth; _rightPadding = rightPadding; InvalidateVisual();
+    }
     private double _offset;
     public double HorizontalOffset { get => _offset; set { _offset = Math.Max(0, value); InvalidateVisual(); } }
     private static readonly Brush Text = Brushes.DimGray;
@@ -69,16 +75,18 @@ public sealed class ManagementChartControl : FrameworkElement
         if (max <= min) min = Math.Max(0, max - 5);
         // Leave room above 100% for the cumulative and center/edge annotations.
         double annotationSpace = _data.Mode == ManagementChartMode.CenterEdge ? 24 : pareto ? 12 : 0;
-        double left = Math.Min(55, w * .18), right = Math.Min(pareto ? 51 : 19, w * (pareto ? .17 : .06));
-        var plot = new Rect(left, top + 13 + annotationSpace, Math.Max(1, w - left - right), Math.Max(1, h - top - 58 - annotationSpace));
+        double left = _headerWidth ?? Math.Min(55, w * .18), right = _headerWidth.HasValue ? _rightPadding : Math.Min(pareto ? 51 : 19, w * (pareto ? .17 : .06));
+        double plotWidth = Math.Max(1, w - left - right);
+        if (_columnWidth is double columnWidth) plotWidth = Math.Min(plotWidth, columnWidth * _data.Labels.Length);
+        var plot = new Rect(left, top + 13 + annotationSpace, plotWidth, Math.Max(1, h - top - 58 - annotationSpace));
         double Y(double value) => plot.Bottom - (value - min) / (max - min) * plot.Height;
-        double slot = plot.Width / _data.Labels.Length;
+        double slot = _columnWidth ?? plot.Width / _data.Labels.Length;
         int labelStride = (int)Math.Clamp(Math.Ceiling(52 / slot), 1, _data.Labels.Length);
         double X(int index) => plot.Left + (index + .5) * slot - _offset;
         foreach (double tick in ChartAxis.Ticks(min, max, Math.Max(3, (int)(plot.Height / 48)), integers: counts))
         {
             double y = Y(tick); dc.DrawLine(Grid, new Point(plot.Left, y), new Point(plot.Right, y));
-            Label(dc, counts ? tick.ToString("N0") : tick.ToString("0.#"), plot.Left / 2, y - 7, 9, maxWidth: Math.Max(1, plot.Left - 6), center: true);
+            Label(dc, counts ? tick.ToString("N0") : tick.ToString("0.#"), plot.Left - Math.Min(25, plot.Left / 2), y - 7, 9, maxWidth: Math.Min(45, Math.Max(1, plot.Left - 6)), center: true);
         }
         Label(dc, _data.AxisTitle, plot.Left, top - 2, 9);
         dc.DrawLine(Axis, plot.TopLeft, plot.BottomLeft); dc.DrawLine(Axis, plot.BottomLeft, plot.BottomRight);

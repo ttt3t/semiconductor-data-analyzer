@@ -30,6 +30,35 @@ static class Preview
         var v=new DrawingVisual();using(var dc=v.RenderOpen()){dc.DrawRectangle(Brushes.White,null,new Rect(0,0,1200,440));dc.DrawImage(Read(left),new Rect(0,0,600,440));dc.DrawImage(Read(right),new Rect(600,0,600,440));}
         var b=new RenderTargetBitmap(1200,440,96,96,PixelFormats.Pbgra32);b.Render(v);using var png=ChartImage.Png(b);File.WriteAllBytes(Path.Combine(folder,name),png.ToArray());
     }
+    static ScrollViewer? Scroll(DependencyObject root)
+    {
+        if(root is ScrollViewer scroll)return scroll;
+        for(int i=0;i<VisualTreeHelper.GetChildrenCount(root);i++)if(Scroll(VisualTreeHelper.GetChild(root,i)) is {} child)return child;
+        return null;
+    }
+    static ManagementChartLayout CheckWidthZoom(Window window,TabControl tabs,int tab,ManagementTrendView view,string prefix)
+    {
+        tabs.SelectedIndex=tab;view.ZoomWidth(1/view.WidthZoom);Pump();Save(window,prefix+"-100.png");
+        var original=view.ReportLayout??throw new Exception("Missing chart layout");
+        var value=view.SelectedData.Series[0].Values[0];
+        view.ZoomWidth(2);Pump();Save(window,prefix+"-200.png");
+        var enlarged=view.ReportLayout??throw new Exception("Missing enlarged layout");
+        if(enlarged.ColumnWidth<original.ColumnWidth*1.9||enlarged.ColumnWidth>original.ColumnWidth*2.1)throw new Exception("Horizontal zoom did not double the column width");
+        var scroll=Scroll((DataGrid)view.FindName("Table"))??throw new Exception("Missing table scrollbar");
+        scroll.ScrollToHorizontalOffset(enlarged.ColumnWidth*3);Pump();
+        var chart=(ManagementChartControl)view.FindName("Chart");
+        if(scroll.HorizontalOffset<=0||Math.Abs(scroll.HorizontalOffset-chart.HorizontalOffset)>.1)throw new Exception("Chart and table scroll offsets differ");
+        Save(window,prefix+"-scrolled.png");
+        var page=ManagementReportService.Pages(view.SelectedData).First();
+        byte[] small=ManagementReportService.TrendImage(page,"Width 100%",false,original),large=ManagementReportService.TrendImage(page,"Width 200%",false,enlarged);
+        int Width(byte[] png){using var stream=new MemoryStream(png);return BitmapFrame.Create(stream,BitmapCreateOptions.PreservePixelFormat,BitmapCacheOption.OnLoad).PixelWidth;}
+        if(Width(large)<=Width(small)*1.7)throw new Exception("Report PNG did not grow with GUI column width");
+        File.WriteAllBytes(Path.Combine(folder,prefix+"-report-100.png"),small);File.WriteAllBytes(Path.Combine(folder,prefix+"-report-200.png"),large);
+        view.ZoomWidth(.25);Pump();Save(window,prefix+"-050.png");
+        if(scroll.HorizontalOffset>.1||chart.HorizontalOffset>.1||view.SelectedData.Series[0].Values[0]!=value)throw new Exception("Zoom out changed data or left a stale scroll offset");
+        Console.WriteLine($"{prefix}: column {original.ColumnWidth:F2} -> {enlarged.ColumnWidth:F2}; report {Width(small)} -> {Width(large)} pixels");
+        return enlarged;
+    }
     static void CheckPercentages()
     {
         Console.WriteLine("Checking percentage denominators");
@@ -109,6 +138,9 @@ static class Preview
             window.Width=820;Pump();Save(window,"15-narrow-management-window.png",820,850);
             if(window.ActualWidth>840)throw new Exception("Management minimum width is still locked");
             window.Width=1440;Pump();
+            var binLayout=CheckWidthZoom(window,tabs,3,binView,"16-bin-width");
+            var defectLayout=CheckWidthZoom(window,tabs,4,defectView,"17-defect-width");
+            if(Math.Abs(binView.WidthZoom-.5)>.001||Math.Abs(defectView.WidthZoom-.5)>.001)throw new Exception("View zoom state changed unexpectedly");
             var options=new ManagementReportOptionsWindow(product){Owner=window};options.Show();Pump();Save(options,"04-export-selection.png",590,650);options.Close();
             string stage=product.Flow[0].Id;
             var actual=ManagementTrendService.DisplayCounts(ManagementTrendService.FailTrend(product,stage,"HBIN","",ManagementPeriod.Wafer),ManagementCountDisplay.PercentOfTotal);
@@ -118,7 +150,7 @@ static class Preview
             Pair("06-radial-center-edge-preview.png",ManagementReportService.AnalysisImage(radial,"各晶圆径向良率分布",600,440),ManagementReportService.AnalysisImage(ManagementTrendService.CenterEdge(product,stage),"中心区 vs 边缘区",600,440));
             File.WriteAllBytes(Path.Combine(folder,"07-sbin-root-causes.png"),ManagementReportService.AnalysisImage(ManagementTrendService.RootCause(product,stage),"SBIN Fail 分类 · 释义来自产品配置",1200,530));
             ManagementReportService.SaveWorkbook(Path.Combine(folder,"management-report-preview.xlsx"),product,options:new ManagementReportOptions(ManagementAnalytics.Scopes(product).ToHashSet()));
-            ManagementReportService.SaveWorkbook(Path.Combine(folder,"management-report-percent-preview.xlsx"),product,options:new ManagementReportOptions(ManagementAnalytics.Scopes(product).ToHashSet(),BinDisplay:ManagementCountDisplay.PercentOfTotal,DefectDisplay:ManagementCountDisplay.PercentOfFailures,BinType:"SBIN"));
+            ManagementReportService.SaveWorkbook(Path.Combine(folder,"management-report-percent-preview.xlsx"),product,options:new ManagementReportOptions(ManagementAnalytics.Scopes(product).ToHashSet(),BinDisplay:ManagementCountDisplay.PercentOfTotal,DefectDisplay:ManagementCountDisplay.PercentOfFailures,BinType:"SBIN",BinLayout:binLayout,DefectLayout:defectLayout));
             window.Close();Pump();app.Shutdown();Console.WriteLine("Preview screenshots and XLSX generated from simulated data.");return 0;
         }
         catch(Exception ex){Console.Error.WriteLine(ex);return 1;}

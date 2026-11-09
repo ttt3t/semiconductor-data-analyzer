@@ -23,14 +23,18 @@ public static class ManagementReportService
         }) { IsBackground = true, Name = "Product report" };
         worker.SetApartmentState(ApartmentState.STA); worker.Start(); return completion.Task;
     }
-    public static byte[] TrendImage(ManagementTrendData data, string title, bool yield = true)
+    public static byte[] TrendImage(ManagementTrendData data, string title, bool yield = true, ManagementChartLayout? layout = null)
     {
-        const int width = 1440;
-        int chartHeight = TrendChartHeight(data);
-        double cellWidth = (width - 152.0) / Math.Max(1, data.Labels.Length);
-        int height = TrendImageHeight(data);
+        int width = TrendImageWidth(data, layout);
+        double chartHeight = layout?.ChartHeight ?? TrendChartHeight(data);
+        double headerWidth = layout?.HeaderWidth ?? 150;
+        double headerHeight = layout?.HeaderHeight ?? 22, rowHeight = layout?.RowHeight ?? 22;
+        double cellWidth = layout?.ColumnWidth ?? (width - 152.0) / Math.Max(1, data.Labels.Length);
+        int height = TrendImageHeight(data, layout);
         if (height > 12000) throw new InvalidDataException("报表分类过多，请减少所选分类。");
+        new ChartImageSize(width, height).Validate();
         var chart = new ManagementChartControl { Width = width, Height = chartHeight };
+        if (layout != null) chart.SetColumnLayout(cellWidth, headerWidth + 1, layout.RightPadding);
         chart.SetData(data);
         chart.Measure(new Size(width, chartHeight)); chart.Arrange(new Rect(0, 0, width, chartHeight)); chart.UpdateLayout();
         var visual = new DrawingVisual();
@@ -38,29 +42,29 @@ public static class ManagementReportService
         {
             dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, width, height));
             var heading = ChartAxis.Text(chart, title, 18, Brushes.Black);
-            heading.MaxTextWidth = width - 40; heading.Trimming = TextTrimming.CharacterEllipsis;
+            heading.MaxTextWidth = Math.Max(1, width - 16); heading.MaxLineCount = 1; heading.Trimming = TextTrimming.CharacterEllipsis;
             dc.DrawText(heading, new Point(Math.Max(20, (width - heading.Width) / 2), 4));
             dc.PushTransform(new TranslateTransform(0, 32));
             dc.DrawRectangle(new VisualBrush(chart), null, new Rect(0, 0, width, chartHeight)); dc.Pop();
             double tableY = chartHeight + 32;
             var border = new Pen(Brushes.LightGray, 1); border.Freeze();
-            void Text(string text, double x, double y, double available, bool center)
+            void Text(string text, double x, double y, double available, bool center, bool multiline = false)
             {
                 var label = ChartAxis.Text(chart, text, 10, Brushes.Black); label.MaxTextWidth = Math.Max(1, available - 8);
-                label.Trimming = TextTrimming.CharacterEllipsis;
+                label.MaxLineCount = multiline ? 2 : 1; label.Trimming = TextTrimming.CharacterEllipsis;
                 dc.DrawText(label, new Point(x + (center ? Math.Max(6, (available - label.Width) / 2) : 8), y + 3));
             }
-            dc.DrawRectangle(Brushes.AliceBlue, border, new Rect(1, tableY, width - 2, 22)); Text("测试步骤 / 分类", 1, tableY, 150, true);
-            for (int c = 0; c < data.Labels.Length; c++) Text(data.Labels[c], 151 + c * cellWidth, tableY, cellWidth, true);
+            dc.DrawRectangle(Brushes.AliceBlue, border, new Rect(1, tableY, width - 2, headerHeight)); Text("测试步骤 / 分类", 1, tableY, headerWidth, true);
+            for (int c = 0; c < data.Labels.Length; c++) Text(layout == null ? data.Labels[c] : data.Labels[c].Replace(" / ", "\n"), headerWidth + 1 + c * cellWidth, tableY, cellWidth, true, layout != null);
             for (int r = 0; r < data.Series.Count; r++)
             {
-                var series = data.Series[r]; double y = tableY + (r + 1) * 22;
-                dc.DrawRectangle(r % 2 == 0 ? Brushes.White : Brushes.WhiteSmoke, border, new Rect(1, y, width - 2, 22));
-                dc.DrawLine(new Pen(series.LineBrush, 3), new Point(10, y + 11), new Point(30, y + 11));
-                Text(series.Category, 32, y, 119, false);
+                var series = data.Series[r]; double y = tableY + headerHeight + r * rowHeight;
+                dc.DrawRectangle(r % 2 == 0 ? Brushes.White : Brushes.WhiteSmoke, border, new Rect(1, y, width - 2, rowHeight));
+                dc.DrawLine(new Pen(series.LineBrush, 3), new Point(10, y + rowHeight / 2), new Point(30, y + rowHeight / 2));
+                Text(series.Category, 32, y, headerWidth - 31, false);
                 for (int c = 0; c < data.Labels.Length; c++)
                 {
-                    double x = 151 + c * cellWidth; dc.DrawLine(border, new Point(x, y), new Point(x, y + 22));
+                    double x = headerWidth + 1 + c * cellWidth; dc.DrawLine(border, new Point(x, y), new Point(x, y + rowHeight));
                     Text(c < series.Values.Length && series.Values[c] is double value ? value.ToString(data.Mode == ManagementChartMode.StackedCounts ? "N0" : "F1", CultureInfo.CurrentCulture) + (data.Mode == ManagementChartMode.StackedCounts ? "" : "%") : "–", x, y, cellWidth, true);
                 }
             }
@@ -70,7 +74,10 @@ public static class ManagementReportService
         using var stream = new MemoryStream(); encoder.Save(stream); return stream.ToArray();
     }
     private static int TrendChartHeight(ManagementTrendData data) => data.IsStacked ? 572 : 440;
-    public static int TrendImageHeight(ManagementTrendData data) => TrendChartHeight(data) + 40 + (data.Series.Count + 1) * 22;
+    public static int TrendImageWidth(ManagementTrendData data, ManagementChartLayout? layout = null) => layout == null ? 1440 :
+        checked((int)Math.Ceiling(layout.HeaderWidth + 1 + data.Labels.Length * layout.ColumnWidth + layout.RightPadding));
+    public static int TrendImageHeight(ManagementTrendData data, ManagementChartLayout? layout = null) =>
+        checked((int)Math.Ceiling((layout?.ChartHeight ?? TrendChartHeight(data)) + 40 + (layout?.HeaderHeight ?? 22) + data.Series.Count * (layout?.RowHeight ?? 22)));
     public static IEnumerable<ManagementTrendData> Pages(ManagementTrendData data)
     {
         for (int start = 0; start < data.Labels.Length; start += 10)
@@ -162,20 +169,24 @@ public static class ManagementReportService
                     foreach (var page in Pages(ManagementTrendService.DisplayCounts(ManagementTrendService.FailTrend(product, stage.Id, binType, filter, period), options?.BinDisplay ?? ManagementCountDisplay.Count)))
                     {
                         token.ThrowIfCancellationRequested();
-                        using var stream = new MemoryStream(TrendImage(page, product.Name + " · " + stage.Label + " · " + binType + " Fail · " + periodLabel, false));
-                        int imageHeight = TrendImageHeight(page);
-                        categoryPlots.AddPicture(stream).MoveTo(categoryPlots.Cell(row, 1)).WithSize(1200, (int)(imageHeight * 1200.0 / 1440));
-                        row += (int)Math.Ceiling(imageHeight * 1200.0 / 1440 / 20) + 3;
+                        var layout = options?.BinLayout;
+                        using var stream = new MemoryStream(TrendImage(page, product.Name + " · " + stage.Label + " · " + binType + " Fail · " + periodLabel, false, layout));
+                        int imageHeight = TrendImageHeight(page, layout), imageWidth = TrendImageWidth(page, layout);
+                        int displayWidth = layout == null ? 1200 : imageWidth, displayHeight = (int)Math.Ceiling(imageHeight * (double)displayWidth / imageWidth);
+                        categoryPlots.AddPicture(stream).MoveTo(categoryPlots.Cell(row, 1)).WithSize(displayWidth, displayHeight);
+                        row += (int)Math.Ceiling(displayHeight / 20.0) + 3;
                     }
                 var defectPlots = Sheet("不良分类图", new[] { "按配置的 SBIN 分类汇总不良 · 显示口径与界面一致 · 未配置的 SBIN 归入未分类" }); row = 6;
                 foreach (var stage in product.Flow)
                     foreach (var page in Pages(ManagementTrendService.DisplayCounts(ManagementTrendService.DefectTrend(product, stage.Id, filter, period), options?.DefectDisplay ?? ManagementCountDisplay.Count)))
                     {
                         token.ThrowIfCancellationRequested();
-                        using var stream = new MemoryStream(TrendImage(page, product.Name + " · " + stage.Label + " · SBIN 不良分类 · " + periodLabel, false));
-                        int imageHeight = TrendImageHeight(page);
-                        defectPlots.AddPicture(stream).MoveTo(defectPlots.Cell(row, 1)).WithSize(1200, (int)(imageHeight * 1200.0 / 1440));
-                        row += (int)Math.Ceiling(imageHeight * 1200.0 / 1440 / 20) + 3;
+                        var layout = options?.DefectLayout;
+                        using var stream = new MemoryStream(TrendImage(page, product.Name + " · " + stage.Label + " · SBIN 不良分类 · " + periodLabel, false, layout));
+                        int imageHeight = TrendImageHeight(page, layout), imageWidth = TrendImageWidth(page, layout);
+                        int displayWidth = layout == null ? 1200 : imageWidth, displayHeight = (int)Math.Ceiling(imageHeight * (double)displayWidth / imageWidth);
+                        defectPlots.AddPicture(stream).MoveTo(defectPlots.Cell(row, 1)).WithSize(displayWidth, displayHeight);
+                        row += (int)Math.Ceiling(displayHeight / 20.0) + 3;
                     }
                 AddAnalysisSheets(book, product, filter, token);
                 var files = Sheet("文件清单", new[] { "文件名", "原文件路径", "批次", "晶圆覆盖", "步骤", "原记录数", "身份缺失", "状态", "测试时间" }); row = 5;

@@ -4,9 +4,11 @@ using SemiconductorCsvAnalyzer.Models;
 namespace SemiconductorCsvAnalyzer.Services;
 
 public sealed record ManagementBinSummary(string Bin, string Description, int Count, double Percent, double Cumulative);
+public sealed record ManagementChartLayout(double ColumnWidth, double HeaderWidth, double ChartHeight,
+    double RowHeight = 22, double HeaderHeight = 34, double RightPadding = 18);
 public sealed record ManagementReportOptions(HashSet<ManagementScope> Scopes, double TargetYield = 85,
     ManagementCountDisplay BinDisplay = ManagementCountDisplay.Count, ManagementCountDisplay DefectDisplay = ManagementCountDisplay.Count,
-    string BinType = "HBIN");
+    string BinType = "HBIN", ManagementChartLayout? BinLayout = null, ManagementChartLayout? DefectLayout = null);
 
 public static class ManagementAnalytics
 {

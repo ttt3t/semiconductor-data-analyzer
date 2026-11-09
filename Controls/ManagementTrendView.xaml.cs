@@ -2,6 +2,8 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
+using System.Windows.Media;
 using SemiconductorCsvAnalyzer.Services;
 
 namespace SemiconductorCsvAnalyzer.Controls;
@@ -10,6 +12,9 @@ public partial class ManagementTrendView : UserControl
 {
     private ManagementTrendData _data = new(Array.Empty<string>(), new());
     private List<WaferCategoryTrendWindow.CategoryChoice> _choices = new();
+    private double _widthZoom = 1, _columnWidth, _headerWidth, _rightPadding;
+    private double? _pendingOffset;
+    private ManagementChartLayout? _lastLayout;
     public ManagementTrendView()
     {
         InitializeComponent();
@@ -44,7 +49,7 @@ public partial class ManagementTrendView : UserControl
             _choices[i].IsVisible = restore ? previous.GetValueOrDefault(_choices[i].Category, true) : data.Mode != ManagementChartMode.YieldBars || i == _choices.Count - 1;
         foreach (var choice in _choices) choice.PropertyChanged += Choice_Changed;
         Legend.ItemsSource = _choices;
-        Chart.HorizontalOffset = 0; ResizeColumns(); Refresh();
+        _pendingOffset = 0; Chart.HorizontalOffset = 0; ResizeColumns(); Refresh();
     }
     public double TargetYield => double.TryParse(TxtTarget.Text, out double value) && double.IsFinite(value) && value is >= 0 and <= 100 ? value : 85;
     public ManagementCountDisplay CountDisplay
@@ -80,6 +85,45 @@ public partial class ManagementTrendView : UserControl
             { Mode = BindingMode.OneTime, StringFormat = ValueFormat, TargetNullValue = "–" };
         Refresh();
     }
+    public double WidthZoom => _widthZoom;
+    public ManagementChartLayout? ReportLayout
+    {
+        get { CaptureLayout(); return _lastLayout; }
+    }
+    public void ZoomWidth(double factor, double anchor = 0)
+    {
+        if (!_data.IsStacked || !double.IsFinite(factor) || factor <= 0) return;
+        double zoom = Math.Clamp(_widthZoom * factor, .1, 8);
+        var scroll = FindScrollViewer(Table);
+        double offset = _pendingOffset ?? scroll?.HorizontalOffset ?? 0;
+        _pendingOffset = Math.Max(0, (offset + Math.Max(0, anchor)) * zoom / _widthZoom - Math.Max(0, anchor));
+        _widthZoom = zoom;
+        TxtWidthZoom.Text = zoom.ToString("P0");
+        ResizeColumns();
+    }
+    private void WidthZoom_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (!_data.IsStacked || (Keyboard.Modifiers & ModifierKeys.Control) == 0 || e.Delta == 0) return;
+        ZoomWidth(Math.Pow(1.15, e.Delta / 120.0), Math.Max(0, e.GetPosition(Chart).X - _headerWidth - 1));
+        e.Handled = true;
+    }
+    private void WidthZoom_Reset(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount != 2) return;
+        _pendingOffset = 0; ZoomWidth(1 / _widthZoom); e.Handled = true;
+    }
+    private static ScrollViewer? FindScrollViewer(DependencyObject root)
+    {
+        if (root is ScrollViewer scroll) return scroll;
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            if (FindScrollViewer(VisualTreeHelper.GetChild(root, i)) is { } child) return child;
+        return null;
+    }
+    private void CaptureLayout()
+    {
+        if (_data.IsStacked && _columnWidth > 0 && Chart.ActualHeight >= 100)
+            _lastLayout = new(_columnWidth, _headerWidth, Chart.ActualHeight, Table.RowHeight, Table.ColumnHeaderHeight, _rightPadding);
+    }
     private void ResizeColumns()
     {
         // An inactive tab has no viewport yet. Zero-width columns prevent WPF's
@@ -88,10 +132,24 @@ public partial class ManagementTrendView : UserControl
         double header = Math.Min(150, Table.ActualWidth * .25);
         double available = Table.ActualWidth - header - 2 - SystemParameters.VerticalScrollBarWidth;
         if (available <= 0) return;
+        double width = available / _data.Labels.Length * (_data.IsStacked ? _widthZoom : 1);
         Table.Columns[0].Width = header;
-        double width = available / _data.Labels.Length;
         foreach (var column in Table.Columns.Skip(1)) column.Width = width;
+        _columnWidth = width; _headerWidth = header; _rightPadding = 1 + SystemParameters.VerticalScrollBarWidth;
+        if (_data.IsStacked) Chart.SetColumnLayout(width, header + 1, _rightPadding);
+        else Chart.SetColumnLayout();
+        CaptureLayout();
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+        {
+            if (_pendingOffset is not double offset || !IsLoaded) return;
+            _pendingOffset = null;
+            FindScrollViewer(Table)?.ScrollToHorizontalOffset(offset);
+        }));
     }
+    private void Chart_SizeChanged(object sender, SizeChangedEventArgs e) => CaptureLayout();
     private void Table_SizeChanged(object sender, SizeChangedEventArgs e) { if (e.WidthChanged) ResizeColumns(); }
-    private void Table_ScrollChanged(object sender, ScrollChangedEventArgs e) { if (e.HorizontalChange != 0) Chart.HorizontalOffset = e.HorizontalOffset; }
+    private void Table_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (e.HorizontalChange != 0) Chart.HorizontalOffset = e.HorizontalOffset;
+    }
 }

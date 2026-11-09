@@ -1,5 +1,5 @@
 <UserControl x:Class="SemiconductorCsvAnalyzer.Controls.ManagementTrendView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:SemiconductorCsvAnalyzer.Controls">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:SemiconductorCsvAnalyzer.Controls" PreviewMouseWheel="WidthZoom_MouseWheel">
     <DockPanel Background="White" TextElement.FontSize="11">
         <StackPanel x:Name="ReferencePanel" DockPanel.Dock="Top" Orientation="Horizontal" HorizontalAlignment="Right" Margin="4,2,8,2">
             <TextBlock Text="参考良率 %" VerticalAlignment="Center" Foreground="#64748B" Margin="0,0,5,0"/>
@@ -10,6 +10,8 @@
             <RadioButton x:Name="CountMode" Content="数量" IsChecked="True" Checked="DisplayMode_Changed" Margin="0,0,12,0"/>
             <RadioButton x:Name="TotalPercentMode" Content="占总芯片数 %" Checked="DisplayMode_Changed" Margin="0,0,12,0" ToolTip="分类不良数 ÷ 当前晶圆、批次或期间的总芯片数。"/>
             <RadioButton x:Name="FailPercentMode" Content="占不良芯片数 %" Checked="DisplayMode_Changed" ToolTip="分类不良数 ÷ 当前范围的不良芯片数；全部分类合计 100%。隐藏分类不改变分母。"/>
+            <TextBlock x:Name="TxtWidthZoom" Text="100%" Foreground="#64748B" VerticalAlignment="Center" Margin="12,0,0,0" Cursor="Hand"
+                       MouseLeftButtonDown="WidthZoom_Reset" ToolTip="Ctrl + 滚轮横向缩放，双击此处恢复适应宽度。"/>
         </WrapPanel>
         <ItemsControl x:Name="Legend" DockPanel.Dock="Top" Margin="5,2">
             <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
@@ -21,7 +23,7 @@
         </ItemsControl>
         <Grid>
             <Grid.RowDefinitions><RowDefinition x:Name="ChartRow" Height="*" MinHeight="150"/><RowDefinition Height="4"/><RowDefinition x:Name="TableRow" Height="Auto" MaxHeight="180"/></Grid.RowDefinitions>
-            <local:ManagementChartControl x:Name="Chart"/>
+            <local:ManagementChartControl x:Name="Chart" SizeChanged="Chart_SizeChanged"/>
             <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch" ResizeDirection="Rows" Background="#EEF2F7"/>
             <DataGrid x:Name="Table" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" CanUserDeleteRows="False"
                       CanUserSortColumns="False" CanUserReorderColumns="False" CanUserResizeColumns="False" FrozenColumnCount="1" MinColumnWidth="0"
