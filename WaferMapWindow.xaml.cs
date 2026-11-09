@@ -62,6 +62,7 @@ public partial class WaferMapWindow : Window
             BinVisibilityColumn.Visibility = Visibility.Visible;
             ChkBinNumbers.Content = $"显示 {binName} 数字";
             ChkBinNumbers.Visibility = Visibility.Visible;
+            StackHint.Text = "图例汇总全部晶圆，双击进入单片";
         }
         Map.HoverChanged += ShowHoverInfo;
         Deactivated += (_, _) => Map.ClearHover();
@@ -75,6 +76,7 @@ public partial class WaferMapWindow : Window
             Map.Dies = null;
             WaferList.ItemsSource = null;
             StackRows.ItemsSource = null; _stackPages = Array.Empty<WaferMapPage>();
+            _stackBinCounts.Clear(); _stackBinTotal = 0;
             DgLegend.ItemsSource = null;
             _pfDies = Array.Empty<WaferDie>();
             _heatDies = null;
@@ -185,18 +187,30 @@ public partial class WaferMapWindow : Window
         HeatMode.IsEnabled = _heatmapScale != null;
         if (_heatmapScale == null) PfMode.IsChecked = true;
         TxtHeatRange.Text = HeatRangeText();
-        TxtMapInfo.Text = page.WaferId + " · " + (page.Dies.Count == 0 ? "当前测试项 / Site 下没有可绘制坐标。" : $"{page.Dies.Count:N0} 颗芯片");
-        int total = Math.Max(1, _pfDies.Count);
+        RefreshLegend();
+        MapMode_Changed(this, new RoutedEventArgs());
+    }
+
+    private void RefreshLegend()
+    {
+        if (!_ready || WaferList.SelectedItem is not WaferMapPage page) return;
+        bool stackedBins = _isBinMap && ChkStacked.IsChecked == true;
+        TxtMapInfo.Text = stackedBins
+            ? $"全部 {_stackPages.Count:N0} 片晶圆 · {_stackBinTotal:N0} 颗芯片\n当前选中：{page.WaferId}"
+            : page.WaferId + " · " + (page.Dies.Count == 0 ? "当前测试项 / Site 下没有可绘制坐标。" : $"{page.Dies.Count:N0} 颗芯片");
+        int total = Math.Max(1, stackedBins ? _stackBinTotal : _pfDies.Count);
+        IEnumerable<(string Category, int Count, Brush Color)> entries = stackedBins
+            ? _stackBinCounts.Select(e => (e.Key, e.Value.Count, e.Value.Color))
+            : _pfDies.GroupBy(d => d.Category).Select(g => (g.Key, g.Count(), g.First().Color));
         ClearLegend();
-        _legend = _pfDies
-            .GroupBy(d => d.Category)
-            .Select(g => new LegendRow
+        _legend = entries
+            .Select(entry => new LegendRow
             {
-                Category = g.Key,
-                Count = g.Count(),
-                Percent = 100.0 * g.Count() / total,
-                Color = g.First().Color,
-                IsDisplayed = !_dimmedBins.Contains(g.Key)
+                Category = entry.Category,
+                Count = entry.Count,
+                Percent = 100.0 * entry.Count / total,
+                Color = entry.Color,
+                IsDisplayed = !_dimmedBins.Contains(entry.Category)
             })
             .OrderBy(r => ParseBinSortKey(r.Category))
             .ThenBy(r => r.Category)
@@ -205,7 +219,6 @@ public partial class WaferMapWindow : Window
         if (_isBinMap)
             foreach (var row in _legend) row.PropertyChanged += LegendVisibility_Changed;
         DgLegend.ItemsSource = new ListCollectionView(_legend);
-        MapMode_Changed(this, new RoutedEventArgs());
     }
 
     private void ClearLegend()

@@ -10,10 +10,22 @@ namespace SemiconductorCsvAnalyzer;
 public partial class WaferMapWindow
 {
     private IReadOnlyList<WaferMapPage> _stackPages = Array.Empty<WaferMapPage>();
+    private readonly Dictionary<string, (int Count, Brush Color)> _stackBinCounts = new(StringComparer.Ordinal);
+    private int _stackBinTotal;
 
     private void SetStackPages(IReadOnlyList<WaferMapPage> pages)
     {
         _stackPages = pages;
+        // Cache only per-BIN counts/colors, so selecting a wafer does not rescan every die.
+        _stackBinCounts.Clear(); _stackBinTotal = 0;
+        if (_isBinMap)
+            foreach (var page in pages)
+                foreach (var die in page.Dies)
+                {
+                    _stackBinCounts[die.Category] = _stackBinCounts.TryGetValue(die.Category, out var entry)
+                        ? (entry.Count + 1, entry.Color) : (1, die.Color);
+                    _stackBinTotal++;
+                }
         // Virtualize rows, each containing at most four existing wafer snapshots.
         // No per-die UI objects or extra heatmap-colored die lists are allocated.
         StackRows.ItemsSource = new ListCollectionView(pages.Chunk(4).ToArray());
@@ -31,6 +43,7 @@ public partial class WaferMapWindow
         if (stacked && WaferList.SelectedItem is WaferMapPage selected)
             for (int i = 0; i < _stackPages.Count; i++)
                 if (_stackPages[i].WaferId == selected.WaferId) { StackRows.ScrollIntoView(StackRows.Items[i / 4]); break; }
+        RefreshLegend();
         MapMode_Changed(this, new RoutedEventArgs());
     }
     private void DisplayOptions_Changed(object sender, RoutedEventArgs e) => RefreshVisibleStackTiles();
