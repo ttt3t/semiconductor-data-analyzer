@@ -6,12 +6,12 @@
         WindowStartupLocation="CenterOwner">
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="140"/>
+            <ColumnDefinition x:Name="WaferSidebarColumn" Width="140"/>
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="260"/>
         </Grid.ColumnDefinitions>
 
-        <DockPanel Grid.Column="0" Margin="8,8,0,8">
+        <DockPanel x:Name="WaferSidebar" Grid.Column="0" Margin="8,8,0,8">
             <TextBlock Text="Wafer" DockPanel.Dock="Top" FontWeight="Bold" Margin="0,0,0,8"/>
             <!-- Keep wafer selection in this window; a ComboBox creates a native popup. -->
             <ListBox x:Name="WaferList" SelectionChanged="Wafer_Changed"
@@ -33,6 +33,7 @@
 
         <Border Grid.Column="1" BorderBrush="#CCC" BorderThickness="1" Margin="8">
             <Grid ClipToBounds="True">
+              <Grid x:Name="SingleMapView">
                 <controls:WaferMapControl x:Name="Map"
                                           ShowBinNumbers="{Binding IsChecked, ElementName=ChkBinNumbers}"
                                           ShowSiteBorders="{Binding IsChecked, ElementName=ChkSiteBorders}"/>
@@ -43,22 +44,44 @@
                         <TextBlock x:Name="HoverText" TextWrapping="Wrap" MaxWidth="340" Foreground="#222"/>
                     </Border>
                 </Canvas>
+              </Grid>
+              <ListBox x:Name="StackRows" Visibility="Collapsed" BorderThickness="0" Background="White"
+                       ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                       ScrollViewer.CanContentScroll="True" VirtualizingPanel.IsVirtualizing="True"
+                       VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel" VirtualizingPanel.CacheLength="0">
+                  <ListBox.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
+                  <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem">
+                      <Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="0"/>
+                      <Setter Property="Margin" Value="0"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Focusable" Value="False"/>
+                  </Style></ListBox.ItemContainerStyle>
+                  <ListBox.ItemTemplate><DataTemplate>
+                      <ItemsControl ItemsSource="{Binding}">
+                          <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="4"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                          <ItemsControl.ItemTemplate><DataTemplate>
+                              <controls:WaferMapTile Page="{Binding}" Loaded="StackTile_Loaded" MouseLeftButtonUp="StackTile_Selected"/>
+                          </DataTemplate></ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                  </DataTemplate></ListBox.ItemTemplate>
+              </ListBox>
             </Grid>
         </Border>
 
         <Grid Grid.Column="2" Margin="0,8,8,8">
             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-            <TextBlock x:Name="TxtTitle" Grid.Row="0"
-                       FontWeight="Bold" FontSize="14" Margin="0,0,0,8" TextWrapping="Wrap"/>
+            <StackPanel Grid.Row="0">
+                <TextBlock x:Name="TxtTitle" FontWeight="Bold" FontSize="14" Margin="0,0,0,8" TextWrapping="Wrap"/>
+                <CheckBox x:Name="ChkStacked" Content="堆叠视图（每行 4 片）" Checked="StackMode_Changed" Unchecked="StackMode_Changed" Margin="0,0,0,6"/>
+                <TextBlock x:Name="StackHint" Text="单击晶圆查看图例，双击进入单片" Foreground="#64748B" FontSize="10" Visibility="Collapsed" Margin="0,0,0,6"/>
+            </StackPanel>
 
             <TextBlock x:Name="TxtMapInfo" Grid.Row="1" Foreground="DimGray"
                        TextWrapping="Wrap" Margin="0,0,0,12"/>
 
             <CheckBox x:Name="ChkBinNumbers" Grid.Row="2" Content="显示 BIN 数字"
-                      IsChecked="False" Visibility="Collapsed" Margin="0,0,0,12"/>
+                      IsChecked="False" Visibility="Collapsed" Margin="0,0,0,12" Checked="DisplayOptions_Changed" Unchecked="DisplayOptions_Changed"/>
 
             <CheckBox x:Name="ChkSiteBorders" Grid.Row="3" Content="显示 Site 加粗边框"
-                      IsChecked="False" Margin="0,0,0,12"/>
+                      IsChecked="False" Margin="0,0,0,12" Checked="DisplayOptions_Changed" Unchecked="DisplayOptions_Changed"/>
 
             <StackPanel x:Name="ModePanel" Grid.Row="4" Visibility="Collapsed" Margin="0,0,0,12">
                 <TextBlock Text="绘图模式" Margin="0,0,0,6"/>

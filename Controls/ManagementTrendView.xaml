@@ -5,7 +5,7 @@
             <TextBlock Text="参考良率 %" VerticalAlignment="Center" Foreground="#64748B" Margin="0,0,5,0"/>
             <TextBox x:Name="TxtTarget" Text="85" Width="43" Height="21" Padding="3,0" VerticalContentAlignment="Center" LostFocus="Target_Changed" ToolTip="低于参考值为红色，高于加权均值为绿色，其余为黄色。"/>
             <TextBlock Text="{Binding Text, ElementName=TxtWidthZoom}" Foreground="#64748B" VerticalAlignment="Center" Margin="12,0,0,0" Cursor="Hand"
-                       MouseLeftButtonDown="WidthZoom_Reset" ToolTip="Ctrl + 滚轮横向缩放，双击此处恢复适应宽度。"/>
+                       MouseLeftButtonDown="WidthZoom_Reset" ToolTip="Ctrl + 滚轮按柱宽和间距缩放，双击恢复默认柱宽。"/>
         </StackPanel>
         <WrapPanel x:Name="CountDisplayPanel" DockPanel.Dock="Top" Visibility="Collapsed" Margin="5,2,5,3">
             <TextBlock Text="显示" VerticalAlignment="Center" Foreground="#64748B" Margin="0,0,8,0"/>
@@ -13,7 +13,7 @@
             <RadioButton x:Name="TotalPercentMode" Content="占总芯片数 %" Checked="DisplayMode_Changed" Margin="0,0,12,0" ToolTip="分类不良数 ÷ 当前晶圆、批次或期间的总芯片数。"/>
             <RadioButton x:Name="FailPercentMode" Content="占不良芯片数 %" Checked="DisplayMode_Changed" ToolTip="分类不良数 ÷ 当前范围的不良芯片数；全部分类合计 100%。隐藏分类不改变分母。"/>
             <TextBlock x:Name="TxtWidthZoom" Text="100%" Foreground="#64748B" VerticalAlignment="Center" Margin="12,0,0,0" Cursor="Hand"
-                       MouseLeftButtonDown="WidthZoom_Reset" ToolTip="Ctrl + 滚轮横向缩放，双击此处恢复适应宽度。"/>
+                       MouseLeftButtonDown="WidthZoom_Reset" ToolTip="Ctrl + 滚轮按柱宽和间距缩放，双击恢复默认柱宽。"/>
         </WrapPanel>
         <ItemsControl x:Name="Legend" DockPanel.Dock="Top" Margin="5,2">
             <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>

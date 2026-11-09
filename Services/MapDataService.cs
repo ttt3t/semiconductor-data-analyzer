@@ -34,7 +34,8 @@ public static class MapDataService
                     Value = valid ? value * item.DisplayFactor : null, RawValue = MeasurementDisplay.ExportText(item, raw), Category = category, Color = WaferMapWindow.ColorForCategory(category)
                 };
             }).ToList();
-            return new WaferMapPage(wafer, dies, scale, item.ShownUnit, true);
+            return new WaferMapPage(wafer, dies, scale, item.ShownUnit, true,
+                dies.Count(d => d.Category == "PASS"), "当前测项 Pass / 有坐标且含该测项的芯片（含无效测量）");
         }).ToList();
     }
 
@@ -42,8 +43,10 @@ public static class MapDataService
     {
         var colors = BinPalette.Create(data.Records.Select(r => soft ? r.SBin : r.HBin));
         if (config?.PreferGoodRetest == true) data = DatasetService.SelectRetests(data, RetestMode.Last, config);
-        return data.Wafers.Select(wafer => new WaferMapPage(wafer,
-            data.Devices.Where(d => d.WaferId == wafer && d.X.HasValue && d.Y.HasValue).Select(d =>
+        var classifier = new HBinClassifier(config ?? new AnalyzerConfig());
+        return data.Wafers.Select(wafer =>
+        {
+            var dies = data.Devices.Where(d => d.WaferId == wafer && d.X.HasValue && d.Y.HasValue).Select(d =>
             {
                 string category = BinPalette.Key(soft ? d.SBin : d.HBin);
                 return new WaferDie
@@ -52,6 +55,9 @@ public static class MapDataService
                     SBin = d.SBin, HBin = d.HBin, Result = d.Result,
                     Category = category, Color = colors[category]
                 };
-            }).ToList())).ToList();
+            }).ToList();
+            return new WaferMapPage(wafer, dies, PassCount: dies.Count(d => classifier.Classify(d.HBin) == OriginalDisposition.Pass),
+                YieldBasis: "配置的 HBIN Pass / 图中有坐标芯片；不含无坐标记录");
+        }).ToList();
     }
 }

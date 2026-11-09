@@ -15,7 +15,7 @@ public partial class ProductManagementWindow
         var menu = new ContextMenu();
         var open = new MenuItem { Header = "打开" };
         open.Click += OpenYield_Click;
-        var explore = new MenuItem { Header = "打开所在位置" };
+        var explore = new MenuItem { Header = "打开所在位置", ToolTip = "相同目录合并，每次最多打开 5 个位置。" };
         explore.Click += ExploreYield_Click;
         menu.Items.Add(open);
         menu.Items.Add(explore);
@@ -108,28 +108,41 @@ public partial class ProductManagementWindow
     {
         var rows = await CurrentYieldRowsAsync(sender);
         if (rows == null || _product == null || _busy || _closed) return;
+        string productId = _product.Id;
+        long version = ++_version;
+        SetBusy(true);
         try
         {
-            var files = ManagedAnalysisService.YieldFiles(_product, rows).DistinctBy(f => f.FilePath, StringComparer.OrdinalIgnoreCase);
+            var plan = ExplorerLocationPlan.Create(ManagedAnalysisService.YieldFiles(_product, rows).Select(f => f.FilePath));
+            var targets = await Task.Run(() => plan.Files.Select(path =>
+            {
+                string directory = Path.GetDirectoryName(path)!;
+                bool exists = File.Exists(path);
+                return (Path: path, Directory: directory, Exists: exists, Valid: exists || Directory.Exists(directory));
+            }).ToArray());
+            if (_closed || version != _version || _product?.Id != productId) return;
             int opened = 0;
-            var errors = new List<string>();
-            foreach (var file in files)
+            var errors = plan.Errors.ToList();
+            foreach (var target in targets)
             {
                 try
                 {
-                    if (!File.Exists(file.FilePath)) throw new FileNotFoundException("原文件不存在，请在数据文件页重新定位。", file.FilePath);
+                    if (!target.Valid) throw new DirectoryNotFoundException("原目录不存在，请在数据文件页重新定位。");
                     using var process = Process.Start(new ProcessStartInfo("explorer.exe")
                     {
                         UseShellExecute = true,
-                        Arguments = "/n,/select,\"" + Path.GetFullPath(file.FilePath) + "\""
+                        Arguments = target.Exists ? "/select,\"" + target.Path + "\"" : "\"" + target.Directory + "\""
                     });
                     opened++;
                 }
-                catch (Exception ex) { errors.Add(file.FileName + "：" + ex.Message); }
+                catch (Exception ex) { errors.Add(target.Path + "：" + ex.Message); }
             }
-            TxtStatus.Text = $"已请求打开 {opened} 个资源管理器窗口。";
+            TxtStatus.Text = $"已请求打开 {opened} 个不同目录（相同位置已合并，最多 {ExplorerLocationPlan.WindowLimit} 个窗口）。";
+            if (plan.TotalLocations > plan.Files.Length) TxtStatus.Text += $"另有 {plan.TotalLocations - plan.Files.Length} 个目录未打开，可缩小选择范围后定位。";
+            if (plan.InvalidCount > 0) TxtStatus.Text += $"{plan.InvalidCount} 个路径无效。";
             if (errors.Count > 0) MessageBox.Show(this, string.Join(Environment.NewLine, errors), "部分文件无法定位", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
-        catch (Exception ex) { TxtStatus.Text = "打开所在位置失败：" + ex.Message; }
+        catch (Exception ex) { if (!_closed && version == _version) TxtStatus.Text = "打开所在位置失败：" + ex.Message; }
+        finally { if (!_closed && version == _version) SetBusy(false); }
     }
 }

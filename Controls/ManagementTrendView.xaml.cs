@@ -13,6 +13,7 @@ public partial class ManagementTrendView : UserControl
     private ManagementTrendData _data = new(Array.Empty<string>(), new());
     private List<WaferCategoryTrendWindow.CategoryChoice> _choices = new();
     private double _widthZoom = 1, _columnWidth, _headerWidth, _rightPadding;
+    private const double DefaultColumnPitch = 64;
     private double? _pendingOffset;
     private ManagementChartLayout? _lastLayout;
     private bool CanZoom => _data.IsStacked || _data.Mode == ManagementChartMode.YieldBars;
@@ -89,7 +90,11 @@ public partial class ManagementTrendView : UserControl
     public double WidthZoom => _widthZoom;
     public ManagementChartLayout? ReportLayout
     {
-        get { CaptureLayout(); return _lastLayout; }
+        get
+        {
+            CaptureLayout();
+            return _lastLayout ?? (CanZoom ? new ManagementChartLayout(DefaultColumnPitch * _widthZoom, 150, Math.Max(150, ChartRow.MinHeight)) : null);
+        }
     }
     public void ZoomWidth(double factor, double anchor = 0)
     {
@@ -133,7 +138,7 @@ public partial class ManagementTrendView : UserControl
         double header = Math.Min(150, Table.ActualWidth * .25);
         double available = Table.ActualWidth - header - 2 - SystemParameters.VerticalScrollBarWidth;
         if (available <= 0) return;
-        double width = available / _data.Labels.Length * (CanZoom ? _widthZoom : 1);
+        double width = CanZoom ? DefaultColumnPitch * _widthZoom : available / _data.Labels.Length;
         Table.Columns[0].Width = header;
         foreach (var column in Table.Columns.Skip(1)) column.Width = width;
         _columnWidth = width; _headerWidth = header; _rightPadding = 1 + SystemParameters.VerticalScrollBarWidth;

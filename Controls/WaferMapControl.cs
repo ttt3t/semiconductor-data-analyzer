@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
 
 namespace SemiconductorCsvAnalyzer.Controls;
 
@@ -93,6 +94,17 @@ public class WaferMapControl : FrameworkElement
         set => SetValue(DiesProperty, value);
     }
 
+    public static readonly DependencyProperty CompactProperty = DependencyProperty.Register(nameof(Compact), typeof(bool), typeof(WaferMapControl),
+        new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
+    public bool Compact { get => (bool)GetValue(CompactProperty); set => SetValue(CompactProperty, value); }
+
+    public static readonly DependencyProperty ColorScaleProperty = DependencyProperty.Register(nameof(ColorScale), typeof(HeatmapScale), typeof(WaferMapControl),
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender, (d, _) =>
+        {
+            var map = (WaferMapControl)d; map._fills = map._numbers = null; map._fillBitmap = null;
+        }));
+    public HeatmapScale? ColorScale { get => (HeatmapScale?)GetValue(ColorScaleProperty); set => SetValue(ColorScaleProperty, value); }
+
     public static readonly DependencyProperty DimmedCategoriesProperty =
         DependencyProperty.Register(nameof(DimmedCategories), typeof(IReadOnlySet<string>), typeof(WaferMapControl),
             new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender, (d, _) =>
@@ -110,7 +122,7 @@ public class WaferMapControl : FrameworkElement
     }
 
     private Brush DisplayColor(WaferDie die)
-        => DimmedCategories?.Contains(die.Category) == true ? Brushes.Silver : die.Color;
+        => DimmedCategories?.Contains(die.Category) == true ? Brushes.Silver : ColorScale?.ColorForValue(die.Value) ?? die.Color;
 
     public static readonly DependencyProperty ShowSiteBordersProperty =
         DependencyProperty.Register(nameof(ShowSiteBorders), typeof(bool), typeof(WaferMapControl),
@@ -144,7 +156,7 @@ public class WaferMapControl : FrameworkElement
         if (w < 40 || h < 40 || Dies == null || Dies.Count == 0)
             return;
 
-        const double padLeft = 42, padRight = 14, padTop = 38, padBottom = 24;
+        double padLeft = Compact ? 25 : 42, padRight = Compact ? 4 : 14, padTop = Compact ? 18 : 38, padBottom = Compact ? 5 : 24;
         double plotW = w - padLeft - padRight;
         double plotH = h - padTop - padBottom;
         if (plotW < 10 || plotH < 10) return;
@@ -226,7 +238,7 @@ public class WaferMapControl : FrameworkElement
             double sx = ox + ((long)x - minX) * cell + cell / 2;
             dc.DrawLine(tickPen, new Point(sx, oy), new Point(sx, oy - 4));
             var ft = new FormattedText(x.ToString(), CultureInfo.InvariantCulture,
-                FlowDirection.LeftToRight, typeface, 10, Brushes.Black, dpi);
+                FlowDirection.LeftToRight, typeface, Compact ? 8 : 10, Brushes.Black, dpi);
             dc.DrawText(ft, new Point(sx - ft.Width / 2, oy - 6 - ft.Height));
         }
 
@@ -235,13 +247,16 @@ public class WaferMapControl : FrameworkElement
             double sy = oy + ((long)y - minY) * cell + cell / 2;
             dc.DrawLine(tickPen, new Point(ox, sy), new Point(ox - 4, sy));
             var ft = new FormattedText(y.ToString(), CultureInfo.InvariantCulture,
-                FlowDirection.LeftToRight, typeface, 10, Brushes.Black, dpi);
+                FlowDirection.LeftToRight, typeface, Compact ? 8 : 10, Brushes.Black, dpi);
             dc.DrawText(ft, new Point(ox - 6 - ft.Width, sy - ft.Height / 2));
         }
 
+        if (!Compact)
+        {
         var ftInfo = new FormattedText($"原点:左上  X:{minX}~{maxX}  Y:{minY}~{maxY}  Dies:{Dies.Count}",
             CultureInfo.InvariantCulture, FlowDirection.LeftToRight, typeface, 11, Brushes.Gray, dpi);
         dc.DrawText(ftInfo, new Point(8, h - ftInfo.Height - 4));
+        }
     }
 
     private static MatrixTransform FrozenTransform(double scale, double x, double y)

@@ -36,6 +36,78 @@ static class Preview
         for(int i=0;i<VisualTreeHelper.GetChildrenCount(root);i++)if(Scroll(VisualTreeHelper.GetChild(root,i)) is {} child)return child;
         return null;
     }
+    static IEnumerable<T> Children<T>(DependencyObject root) where T:DependencyObject
+    {
+        for(int i=0;i<VisualTreeHelper.GetChildrenCount(root);i++)
+        {
+            var child=VisualTreeHelper.GetChild(root,i);if(child is T item)yield return item;
+            foreach(var nested in Children<T>(child))yield return nested;
+        }
+    }
+    static void CheckScopePitch(Window window,TabControl tabs,params ManagementTrendView[] views)
+    {
+        foreach(var view in views)view.ZoomWidth(2/view.WidthZoom);
+        foreach(string period in new[]{"PeriodLot","PeriodMonth","PeriodYear","PeriodWafer"})
+        {
+            ((RadioButton)window.FindName(period)).IsChecked=true;Pump();
+            foreach(var view in views)
+                if(Math.Abs((view.ReportLayout?.ColumnWidth??0)-128)>.01)throw new Exception("Switching scope changed the selected column pitch");
+            tabs.SelectedIndex=0;Save(window,"19-yield-"+period+".png");
+        }
+        foreach(var view in views)view.ZoomWidth(.5/view.WidthZoom);
+        Console.WriteLine("Wafer, lot, month and year scopes retain 128px column pitch at 200% zoom.");
+    }
+    static void CheckExplorerPlan()
+    {
+        string root=Path.Combine(Path.GetTempPath(),"ExplorerLocationPreview");
+        var paths=Enumerable.Range(0,8).SelectMany(i=>new[]{Path.Combine(root,"D"+i,"a.csv"),Path.Combine(root,"D"+i,"b.csv")}).ToList();
+        paths.Add(Path.Combine(root,"D0","..","D0","a.csv"));paths.Add(paths[0].ToUpperInvariant());paths.Add("\0");
+        var plan=ExplorerLocationPlan.Create(paths);
+        if(plan.TotalLocations!=8||plan.Files.Length!=5||plan.InvalidCount!=1||plan.Files.Select(Path.GetDirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Count()!=5)throw new Exception("Explorer locations must deduplicate folders and cap requests at five");
+        Console.WriteLine("Explorer plan: 8 distinct directories, at most 5 requests, duplicate folders normalized; no Explorer process launched.");
+    }
+    static void CheckStackedMaps()
+    {
+        var item=new TestItemData{Id="map-preview",Name="Map preview signal",DisplayName="Map preview signal",LowLimit=-.8,HighLimit=.8,Unit="mV"};
+        var records=new List<CsvRecord>();
+        for(int w=1;w<=32;w++)for(int y=-12;y<=12;y++)for(int x=-12;x<=12;x++)
+        {
+            if(x*x+y*y>144)continue;
+            string raw=x==0&&y==0?"***":(Math.Sin(x*.25)+y*.03+(w-16)*.01).ToString("G17",System.Globalization.CultureInfo.InvariantCulture);
+            bool pass=(x+y+w)%11!=0;
+            records.Add(new(){WaferId=$"W{w:00}",X=x,Y=y,Site=(Math.Abs(x)%4+1).ToString(),SerialNumber=records.Count.ToString(),HBin=pass?"7":"2",SBin=pass?"1":(w%2==0?"3":"2"),Measurements=new Dictionary<string,string>{{item.Id,raw}}});
+        }
+        var data=DatasetService.Build(new(){item},records);var config=new AnalyzerConfig{PassHBins=new(){"7"}};
+        foreach(string kind in new[]{"SBIN","HBIN","PF"})
+        {
+            var pages=kind=="PF"?MapDataService.PfPages(data,item,null,config):MapDataService.BinPages(data,kind=="SBIN",config);
+            foreach(var page in pages)
+                if(page.PassCount!=page.Dies.Count(d=>kind=="PF"?d.Category=="PASS":d.HBin=="7"))throw new Exception("Stacked map yield does not follow its own pass rule");
+            var map=new WaferMapWindow(kind+" · 堆叠预览（模拟数据）",pages,kind=="PF"?null:kind){Width=1400,Height=900};
+            map.Show();Pump();((CheckBox)map.FindName("ChkStacked")).IsChecked=true;Pump();Save(map,"30-stack-"+kind+".png");
+            var rows=(ListBox)map.FindName("StackRows");var tiles=Children<WaferMapTile>(rows).Where(t=>t.Page!=null).ToArray();
+            if(tiles.Length<4||tiles.Length>20||tiles.Length>=pages.Count)throw new Exception("Stack rows must realize only the visible viewport");
+            var positions=tiles.Take(4).Select(t=>t.TranslatePoint(new Point(),rows)).ToArray();
+            if(positions.Any(p=>Math.Abs(p.Y-positions[0].Y)>2)||positions.Zip(positions.Skip(1)).Any(p=>p.First.X>=p.Second.X))throw new Exception("Stacked maps must use four columns");
+            ((CheckBox)map.FindName("ChkSiteBorders")).IsChecked=true;
+            if(kind!="PF")((CheckBox)map.FindName("ChkBinNumbers")).IsChecked=true;
+            if(kind=="PF")
+            {
+                ((RadioButton)map.FindName("HeatMode")).IsChecked=true;Pump();Save(map,"31-stack-heat.png");
+                foreach(var tile in Children<WaferMapTile>(rows))
+                {
+                    var renderer=(WaferMapControl)tile.FindName("TileMap");
+                    if(renderer.ColorScale==null||!ReferenceEquals(renderer.Dies,tile.Page?.Dies))throw new Exception("Stacked heatmaps must reuse die snapshots and the common scale");
+                }
+            }
+            Scroll(rows)!.ScrollToEnd();Pump();
+            if(!Children<WaferMapTile>(rows).Any(t=>t.Page?.WaferId==pages[^1].WaferId))throw new Exception("Stacked map cannot reach the final wafer");
+            map.SetPages(pages.Take(4).ToList());Pump();
+            if(rows.Items.Count!=1||((CheckBox)map.FindName("ChkStacked")).IsChecked!=true)throw new Exception("Map refresh must preserve stacked mode");
+            map.Close();Pump();if(rows.ItemsSource!=null)throw new Exception("Closed stack retained its page source");
+            Console.WriteLine($"{kind} stack: 4 columns, {tiles.Length} realized tiles for {pages.Count} wafers; yield, scroll, refresh and close checked.");
+        }
+    }
     static ManagementChartLayout CheckWidthZoom(Window window,TabControl tabs,int tab,ManagementTrendView view,string prefix)
     {
         tabs.SelectedIndex=tab;view.ZoomWidth(1/view.WidthZoom);Pump();Save(window,prefix+"-100.png");
@@ -124,6 +196,7 @@ static class Preview
             var app=new App();app.InitializeComponent();app.ShutdownMode=ShutdownMode.OnExplicitShutdown;
             SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
             CheckPercentages();
+            CheckExplorerPlan();
             var product=Product();var store=new ProductCatalogStore(Path.Combine(folder,"catalog.json"));store.Save(new ProductCatalog {Products=new(){product}});
             var window=new ProductManagementWindow(store){Width=1440,Height=900};window.Show();Console.WriteLine("Management window shown");Pump();
             Save(window,"01-yield-bars.png");
@@ -142,6 +215,7 @@ static class Preview
             var defectLayout=CheckWidthZoom(window,tabs,4,defectView,"17-defect-width");
             var yieldView=(ManagementTrendView)window.FindName("YieldTrend");
             var yieldLayout=CheckWidthZoom(window,tabs,0,yieldView,"18-yield-width");
+            CheckScopePitch(window,tabs,binView,defectView,yieldView);
             if(Math.Abs(binView.WidthZoom-.5)>.001||Math.Abs(defectView.WidthZoom-.5)>.001)throw new Exception("View zoom state changed unexpectedly");
             binView.ZoomWidth(1_000_000);Pump();
             if(binView.WidthZoom!=100)throw new Exception("Maximum zoom must be 10000%");
@@ -177,7 +251,7 @@ static class Preview
             ManagementReportService.SaveWorkbook(Path.Combine(folder,"management-report-preview.xlsx"),product,options:new ManagementReportOptions(ManagementAnalytics.Scopes(product).ToHashSet()));
             ManagementReportService.SaveWorkbook(Path.Combine(folder,"management-report-percent-preview.xlsx"),product,options:new ManagementReportOptions(ManagementAnalytics.Scopes(product).ToHashSet(),BinDisplay:ManagementCountDisplay.PercentOfTotal,DefectDisplay:ManagementCountDisplay.PercentOfFailures,BinType:"SBIN",BinLayout:binLayout,DefectLayout:defectLayout,YieldLayout:yieldLayout));
             ManagementReportService.SaveWorkbook(Path.Combine(folder,"management-report-wide-preview.xlsx"),product,options:new ManagementReportOptions(new(){ManagementAnalytics.Scopes(product).First()},BinLayout:wideLayout,DefectLayout:wideLayout,YieldLayout:wideLayout));
-            window.Close();Pump();app.Shutdown();Console.WriteLine("Preview screenshots and XLSX generated from simulated data.");return 0;
+            window.Close();Pump();CheckStackedMaps();app.Shutdown();Console.WriteLine("Preview screenshots and XLSX generated from simulated data.");return 0;
         }
         catch(Exception ex){Console.Error.WriteLine(ex);return 1;}
     }

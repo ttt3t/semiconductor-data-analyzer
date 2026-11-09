@@ -122,7 +122,7 @@ public sealed class ManagementChartControl : FrameworkElement
         }
         else for (int i = first; i <= last; i++)
         {
-            double accumulated = 0, groupWidth = Math.Min(65, slot * .72);
+            double accumulated = 0, groupWidth = _columnWidth.HasValue ? slot * .72 : Math.Min(65, slot * .72);
             for (int s = 0; s < _data.Series.Count; s++)
             {
                 var series = _data.Series[s]; if (i >= series.Values.Length || series.Values[i] is not double value) continue;
@@ -164,7 +164,8 @@ public sealed class ManagementChartControl : FrameworkElement
             var targetPen = new Pen(Brushes.IndianRed, .8) { DashStyle = DashStyles.Dot };
             dc.DrawLine(meanPen, new Point(plot.Left, Y(mean)), new Point(plot.Right, Y(mean)));
             dc.DrawLine(targetPen, new Point(plot.Left, Y(_data.TargetYield)), new Point(plot.Right, Y(_data.TargetYield)));
-            Label(dc, $"{(series.Mean.HasValue ? "加权均值" : "算术均值")} {mean:F2}%   参考 {_data.TargetYield:F1}%", plot.Right - 215, plot.Top + 2, 9, Brushes.SteelBlue, 215);
+            double legendWidth = Math.Min(215, plot.Width);
+            Label(dc, $"{(series.Mean.HasValue ? "加权均值" : "算术均值")} {mean:F2}%   参考 {_data.TargetYield:F1}%", plot.Right - legendWidth, plot.Top + 2, 9, Brushes.SteelBlue, legendWidth);
         }
         dc.Pop();
         for (int i = first; i <= last; i++)

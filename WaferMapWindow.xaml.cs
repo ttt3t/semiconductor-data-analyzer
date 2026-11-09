@@ -74,6 +74,7 @@ public partial class WaferMapWindow : Window
             BtnCopyMapTable.IsEnabled = false;
             Map.Dies = null;
             WaferList.ItemsSource = null;
+            StackRows.ItemsSource = null; _stackPages = Array.Empty<WaferMapPage>();
             DgLegend.ItemsSource = null;
             _pfDies = Array.Empty<WaferDie>();
             _heatDies = null;
@@ -118,6 +119,7 @@ public partial class WaferMapWindow : Window
         _ready = false;
         // Own the view instead of leaving a default view cached for this snapshot.
         var snapshot = pages.ToList();
+        SetStackPages(snapshot);
         WaferList.ItemsSource = new ListCollectionView(snapshot);
         int index = snapshot.FindIndex(p => p.WaferId == selected);
         WaferList.SelectedIndex = index >= 0 ? index : pages.Count > 0 ? 0 : -1;
@@ -183,7 +185,7 @@ public partial class WaferMapWindow : Window
         HeatMode.IsEnabled = _heatmapScale != null;
         if (_heatmapScale == null) PfMode.IsChecked = true;
         TxtHeatRange.Text = HeatRangeText();
-        TxtMapInfo.Text = page.Dies.Count == 0 ? "此 wafer 在当前测试项 / Site 下没有可绘制坐标。" : $"{page.Dies.Count} 颗芯片";
+        TxtMapInfo.Text = page.WaferId + " · " + (page.Dies.Count == 0 ? "当前测试项 / Site 下没有可绘制坐标。" : $"{page.Dies.Count:N0} 颗芯片");
         int total = Math.Max(1, _pfDies.Count);
         ClearLegend();
         _legend = _pfDies
@@ -244,6 +246,7 @@ public partial class WaferMapWindow : Window
     {
         // Replace a small set once per click, rather than copying dies or rebuilding the wafer.
         Map.DimmedCategories = _dimmedBins.Count == 0 ? null : new HashSet<string>(_dimmedBins, StringComparer.Ordinal);
+        RefreshVisibleStackTiles();
     }
 
     private void HeatRangeMode_Changed(object sender, RoutedEventArgs e)
@@ -301,11 +304,14 @@ public partial class WaferMapWindow : Window
     {
         if (Map == null || HeatLegend == null || DgLegend == null) return;
         bool heat = HeatMode.IsChecked == true && _heatmapScale != null;
-        if (heat && _heatDies == null)
+        bool stacked = ChkStacked.IsChecked == true;
+        if (stacked) _heatDies = null;
+        if (!stacked && heat && _heatDies == null)
             _heatDies = _pfDies.Select(d => d.WithColor(_heatmapScale!.ColorForValue(d.Value))).ToList();
-        Map.Dies = heat ? _heatDies : _pfDies;
+        Map.Dies = stacked ? null : heat ? _heatDies : _pfDies;
         HeatLegend.Visibility = heat ? Visibility.Visible : Visibility.Collapsed;
         DgLegend.Visibility = heat ? Visibility.Collapsed : Visibility.Visible;
+        RefreshVisibleStackTiles();
     }
 
     private static int ParseBinSortKey(string category)
