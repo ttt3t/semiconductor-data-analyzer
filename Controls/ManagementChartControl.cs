@@ -74,7 +74,7 @@ public sealed class ManagementChartControl : FrameworkElement
         double max = yield ? 100 : stacked ? counts ? stackedMax : Math.Min(100, stackedMax) : Math.Min(100, NiceTop(values.DefaultIfEmpty(0).Max() * 1.18));
         if (max <= min) min = Math.Max(0, max - 5);
         // Leave room above 100% for the cumulative and center/edge annotations.
-        double annotationSpace = _data.Mode == ManagementChartMode.CenterEdge ? 24 : pareto ? 12 : 0;
+        double annotationSpace = _data.Mode == ManagementChartMode.CenterEdge ? 24 : _data.Mode == ManagementChartMode.StackedPercentages ? 18 : pareto ? 12 : 0;
         double left = _headerWidth ?? Math.Min(55, w * .18), right = _headerWidth.HasValue ? _rightPadding : Math.Min(pareto ? 51 : 19, w * (pareto ? .17 : .06));
         double plotWidth = Math.Max(1, w - left - right);
         if (_columnWidth is double columnWidth) plotWidth = Math.Min(plotWidth, columnWidth * _data.Labels.Length);
