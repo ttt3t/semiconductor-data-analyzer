@@ -36,6 +36,7 @@ public static partial class DatasetService
         {
             Items = items, Records = records, Devices = BuildDevices(records),
             SourceDescription = source.SourceDescription, StdfMetadata = source.StdfMetadata,
+            ImportWarning = source.ImportWarning,
             StdfWaferOrigins = source.StdfWaferOrigins,
             SerialNumberNotice = source.SerialNumberNotice, ReassignedSerialNumberCount = source.ReassignedSerialNumberCount,
             RetestIdentitySignature = source.RetestIdentitySignature, RetestIdentityNotice = source.RetestIdentityNotice,

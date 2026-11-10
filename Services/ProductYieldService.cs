@@ -42,7 +42,7 @@ public static partial class ProductYieldService
     }
 
     public static string Signature(ManagedProduct product) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-        JsonSerializer.Serialize(new { Schema = 4, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
+        JsonSerializer.Serialize(new { Schema = 5, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
             product.IncludePartialPass, product.PreferGoodRetest, product.Files }))));
 
     public static bool IsCurrent(ManagedProduct product)
@@ -281,6 +281,7 @@ public static partial class ProductYieldService
         var config = FileConfig(product, file);
         if (stage.Kind == "FT" && config.UuidTestNumbers.Count == 0) throw new InvalidDataException("FT 自动计算需要在产品流程中指定 UUID Test Num；指定汇总良率可不提供 UUID。");
         var data = DataFileService.ReadForYield(file.FilePath, config, token, file.StdfMode);
+        state.Warning = data.ImportWarning;
         token.ThrowIfCancellationRequested();
         bool Blank(CsvRecord record) => !record.X.HasValue && !record.Y.HasValue &&
             string.IsNullOrWhiteSpace(record.ChipSerialNumber) && string.IsNullOrWhiteSpace(record.Site) &&

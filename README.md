@@ -1,6 +1,6 @@
 # Semiconductor Data Analyzer
 
-**CSV Analyzer V2.0.11 · GYF**
+**CSV Analyzer V2.0.12 · GYF**
 
 A Windows desktop application for semiconductor CSV / STDF test-data analysis, built with .NET 8 and WPF.
 
@@ -28,6 +28,12 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 - 良率明细“打开所在位置”按目录去重，每次最多请求 5 个窗口，超出部分在状态栏提示；文件存在性检查在后台进行，可取消。
 
 只启动独立分析器可使用 `SemiconductorCsvAnalyzer.exe --analyzer`。详细口径见 [使用手册](Docs/UserGuide.md)。
+
+## V2.0.12 更新
+
+- STDF / STD（含 gzip）采用尽量恢复导入。缺少 MIR / MRR、PIR / PRR、WIR / WRR，记录字段异常、不支持的测试记录或尾部截断时，保留能读到的数据并汇总警告。
+- 缺少 PRR 的测量值仍可分析；未知 HBIN、SBIN 和坐标留空，不补造良品结果。缺少 FAR 时根据有限样本推断 V4 字节序并警告；只有定义时保留测项并警告暂无芯片数据，无法解码或完全没有可恢复测试数据时仍明确报错。
+- 数据管理、独立分析器及 Lot Information 使用一致规则。管理器在“数据文件”显示警告，统计仍纳入可读记录；旧摘要重新计算后生效。
 
 ## V2.0.11 更新
 
@@ -131,7 +137,7 @@ bash Tests/run-core-memory.sh
 
 该检查覆盖部分复测、共享列筛选、精度与错误值、原文租约、CSV / 整合 CSV / 大小端与压缩 STDF 的产品统计读取，以及跨温度良率和失败回滚。输出位于忽略的 `bin/CoreMemoryProbe`；它不替代 Windows 上的 WPF 界面回归。
 
-筛选和复测结果共享基础数值列及行映射，编辑列时才复制；产品管理的良率重算仅保留身份、Bin、时间和必要的 UUID 原文，不创建完整数值列或测量原文快照。文件完整性校验及部分复测口径仍沿用原解析流程。
+筛选和复测结果共享基础数值列及行映射，编辑列时才复制；产品管理的良率重算仅保留身份、Bin、时间和必要的 UUID 原文，不创建完整数值列或测量原文快照。读取期间仍校验源文件是否变化；STDF 缺失或损坏记录采用带警告的恢复解析。
 
 发布为 Windows x64 自包含单文件程序：
 

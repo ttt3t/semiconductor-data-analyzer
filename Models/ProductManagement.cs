@@ -184,4 +184,5 @@ public sealed class ManagedFileResult
     public int Records { get; set; }
     public int MissingIdentity { get; set; }
     public string Error { get; set; } = "";
+    public string Warning { get; set; } = "";
 }

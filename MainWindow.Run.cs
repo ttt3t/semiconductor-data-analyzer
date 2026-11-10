@@ -303,6 +303,8 @@ public partial class MainWindow
 
     private void ShowSerialNumberNotice(CsvParseResult data)
     {
+        if (data.ImportWarning.Length > 0)
+            MessageBox.Show(this, data.ImportWarning, "导入警告：已保留可读数据", MessageBoxButton.OK, MessageBoxImage.Warning);
         if (!string.IsNullOrWhiteSpace(data.SerialNumberNotice))
             MessageBox.Show(this, data.SerialNumberNotice, "Run 序列号已自动生成", MessageBoxButton.OK, MessageBoxImage.Information);
         ShowRetestIdentityNotice(data);

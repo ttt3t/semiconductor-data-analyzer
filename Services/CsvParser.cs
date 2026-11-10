@@ -9,6 +9,7 @@ public sealed partial class CsvParseResult
 {
     internal bool IsYieldProjection { get; set; }
     public string SourceDescription { get; set; } = "";
+    public string ImportWarning { get; set; } = "";
     public StdfFileMetadata? StdfMetadata { get; set; }
     internal IReadOnlyDictionary<string, StdfWaferIdentity> StdfWaferOrigins { get; set; } = StdfWaferMerge.Empty;
     public List<TestItemData> Items { get; set; } = new();

@@ -45,7 +45,9 @@ public static class StdfParser
                 pass.Read(file);
             stamp.Validate(file);
             store?.Seal();
-            if (pass.Records.Count == 0) throw new InvalidDataException("STDF 不包含完成的芯片记录（PRR）。");
+            if (pass.Records.Count == 0 && catalog.Items.Count == 0)
+                throw new InvalidDataException("STDF 没有可恢复的芯片记录或测项定义。\n" + string.Join("\n", catalog.Warnings.Messages));
+            if (pass.Records.Count == 0) catalog.Warnings.Add("definitions-only", "只恢复了测项定义，没有可读芯片记录，暂无可统计的芯片数据。");
             var orderedRecords = new List<CsvRecord>(pass.Records.Count);
             bool inOrder = true;
             for (int i = 1; i < pass.Records.Count; i++)
@@ -64,10 +66,13 @@ public static class StdfParser
                 result = projection != null ? projection.Complete(orderedRecords) : DatasetService.Build(catalog.Items, orderedRecords);
             MeasurementDisplay.Configure(result.Items);
             result.StdfMetadata = catalog.Metadata.Complete();
+            result.ImportWarning = catalog.Warnings.Messages.Length == 0 ? "" :
+                $"文件“{Path.GetFileName(path)}”已尽量恢复可读数据：\n" + string.Join("\n", catalog.Warnings.Messages);
             result.StdfWaferOrigins = StdfWaferMerge.ReadOrigins(result.StdfMetadata, result.Wafers);
             result.SourceDescription = "STDF V4" + (mode == StdfImportMode.Advantest93K ? "（93k：TSR 测试名称）" : "") +
                 (catalog.HasFunctional ? "；FTR：0=Pass、1=Fail" : "") +
-                (catalog.Families.Values.Any(f => f.Variants.Count > 1) ? "；不同阈值/单位已拆分测项" : "");
+                (catalog.Families.Values.Any(f => f.Variants.Count > 1) ? "；不同阈值/单位已拆分测项" : "") +
+                (result.ImportWarning.Length > 0 ? "；警告：部分记录缺失或异常，已尽量恢复" : "");
             progress?.Invoke($"解析完成，共 {result.Items.Count} 个测试项，{result.Records.Count} 条测试记录");
             return result;
         }
@@ -98,10 +103,11 @@ public static class StdfParser
     {
         public required string Name;
         public DateTime? StartTime, FinishTime;
+        public bool Inferred;
     }
     private sealed class Catalog
     {
-        public Catalog(StdfImportMode mode) => Mode = mode;
+        public Catalog(StdfImportMode mode) { Mode = mode; Metadata = new(Warnings); }
         public StdfImportMode Mode { get; }
         public readonly List<TestItemData> Items = new();
         public readonly Dictionary<FamilyKey, Family> Families = new();
@@ -115,7 +121,8 @@ public static class StdfParser
         public readonly List<WaferScope> Wafers = new();
         public readonly HashSet<byte> Heads = new();
         public bool HasFunctional;
-        public readonly StdfMetadataBuilder Metadata = new();
+        public readonly StdfWarnings Warnings = new();
+        public readonly StdfMetadataBuilder Metadata;
 
         public TestKey Test(byte kind, uint number, byte head, byte site) =>
             Mode == StdfImportMode.Advantest93K ? new(kind, number, head, site) : new(kind, number);
@@ -261,6 +268,7 @@ public static class StdfParser
         public long Order;
         public WaferScope Wafer = null!;
         public string Product = "", Program = "", Lot = "";
+        public bool HasTests;
         public readonly Dictionary<(TestKey Test, string Name), int> Occurrences = new();
         public readonly byte[] States;
         public readonly double[] Numbers;
@@ -275,6 +283,7 @@ public static class StdfParser
 
         public void Reset()
         {
+            HasTests = false;
             Occurrences.Clear();
             if (States.Length > 0) Array.Clear(States, 0, States.Length);
             InvalidTexts?.Clear();
@@ -307,6 +316,7 @@ public static class StdfParser
             YieldReadProjection? projection = null)
         {
             _catalog = catalog; _config = config; _fileName = fileName; _store = store; _token = token;
+            _product = config.Product; _program = config.Program; _lot = config.Lot;
             _projection = projection;
             if (store != null) _schema = new MeasurementSchema(catalog.Items.Select(i => i.Id));
         }
@@ -330,7 +340,7 @@ public static class StdfParser
 
         public void Read(FileStream file)
         {
-            using var reader = new StdfReader(file);
+            using var reader = new StdfReader(file, Discovering ? _catalog.Warnings : null);
             int progressRecords = 0;
             while (reader.Next())
             {
@@ -340,13 +350,17 @@ public static class StdfParser
                 var fields = reader.Fields;
                 try
                 {
-                    if (_mrr) throw new InvalidDataException("MRR 之后仍有记录，文件不是单个完整的 STDF 数据流。");
-                    if (Discovering) _catalog.Metadata.Read(reader.Type, reader.Subtype, fields);
+                    if (_mrr)
+                    {
+                        Warn("after-mrr", "MRR 之后仍有记录，继续读取可识别部分，请核对文件是否含多个测试段。");
+                        _mrr = false;
+                    }
+                    if (Discovering) _catalog.Metadata.Read(reader.Type, reader.Subtype, fields, reader.Offset);
                     switch ((reader.Type, reader.Subtype))
                     {
-                        case (0, 10): throw new InvalidDataException("文件中出现重复 FAR，不支持直接拼接二进制 STDF 文件。");
+                        case (0, 10): break; // The reader already checked that the encoding remains compatible.
                         case (1, 10): Mir(ref fields); break;
-                        case (1, 20): fields.U4(); fields.OptionalU1(); _mrr = true; break;
+                        case (1, 20): _mrr = true; fields.OptionalU4(); fields.OptionalU1(); break;
                         case (1, 80): Sdr(ref fields); break;
                         case (2, 10): Wir(ref fields); break;
                         case (2, 20): Wrr(ref fields); break;
@@ -356,23 +370,63 @@ public static class StdfParser
                         case (15, 10): Ptr(ref fields); break;
                         case (15, 15): Mpr(ref fields); break;
                         case (15, 20): Ftr(ref fields); break;
-                        case (15, _): throw new InvalidDataException($"尚不支持测试记录 15/{reader.Subtype}（例如扫描扩展 STR），为避免漏算测试结果，未导入此文件。");
+                        case (15, _): Warn($"unsupported:15/{reader.Subtype}", $"暂不支持测试记录 15/{reader.Subtype}，已跳过该类记录，其他可读结果继续导入。"); break;
                         // Summary/pin/pattern/annotation records are not individual measurements.
                     }
                 }
                 catch (InvalidDataException ex)
-                { throw new InvalidDataException($"STDF 记录 {reader.Type}/{reader.Subtype}（截至字节 {reader.Offset}）：{ex.Message}", ex); }
+                {
+                    string key = $"record:{reader.Type}/{reader.Subtype}:{ex.Message}";
+                    string message = $"记录 {reader.Type}/{reader.Subtype}（截至字节 {reader.Offset}）异常，已略过不可读部分：{ex.Message}";
+                    if (Discovering) _catalog.Warnings.Add(key, message);
+                    else _catalog.Warnings.AddOnce(key, message);
+                }
             }
-            if (!_mir || !_mrr) throw new InvalidDataException("STDF 缺少 MIR/MRR，文件可能仍在写入或已截断，未导入不完整结果。");
-            if (_parts.Count > 0) throw new InvalidDataException("STDF 有 PIR 尚未对应 PRR，未导入不完整芯片记录。");
+            foreach (var entry in _parts.ToArray())
+            {
+                _token.ThrowIfCancellationRequested();
+                _parts.Remove(entry.Key);
+                RecoverPart(entry.Key.Head, entry.Key.Site, entry.Value);
+            }
+        }
+
+        private void Warn(string key, string message)
+        { if (Discovering) _catalog.Warnings.Add(key, message); }
+
+        private Part StartPart(byte head, byte site)
+        {
+            _catalog.Heads.Add(head); _catalog.Sites.Add((head, site));
+            return RentPart(_order++, Wafer(head, site), _product, _program, _lot);
+        }
+
+        private void RecoverPart(byte head, byte site, Part part)
+        {
+            if (!part.HasTests) { ReleasePart(part); return; }
+            Warn("missing-prr", $"芯片缺少可读 PRR（如 Head {head} / Site {site}），已保留测量值；HBIN、SBIN、坐标等未提供字段留空，不能作为已知良品。");
+            CompletePart(head, site, part);
+        }
+
+        private void CloseParts(WaferScope scope)
+        {
+            foreach (var entry in _parts.Where(p => ReferenceEquals(p.Value.Wafer, scope)).ToArray())
+            {
+                _parts.Remove(entry.Key); RecoverPart(entry.Key.Head, entry.Key.Site, entry.Value);
+            }
         }
 
         private void Mir(ref StdfFields f)
         {
-            if (_mir) throw new InvalidDataException("同一数据流包含多个 MIR。");
+            if (!_mir && _order > 0) Warn("late-mir", "MIR 晚于芯片记录，已保留此前结果，缺失批次等信息沿用配置。");
+            if (_mir)
+            {
+                foreach (var entry in _parts.ToArray()) { _parts.Remove(entry.Key); RecoverPart(entry.Key.Head, entry.Key.Site, entry.Value); }
+                _wafers.Clear(); _siteGroups.Clear(); _defaults.Clear();
+            }
+            _mir = true;
+            _lot = _config.Lot; _product = _config.Product; _program = _config.Program;
             f.Skip(15);
-            string lot = f.Cn().Trim(), product = f.Cn().Trim(); f.SkipCn(); f.SkipCn();
-            string job = f.Cn().Trim(), revision = (f.OptionalCn() ?? "").Trim();
+            string lot = (f.OptionalCn() ?? "").Trim(), product = (f.OptionalCn() ?? "").Trim(); f.OptionalSkipCn(); f.OptionalSkipCn();
+            string job = (f.OptionalCn() ?? "").Trim(), revision = (f.OptionalCn() ?? "").Trim();
             _lot = lot.Length > 0 ? lot : _config.Lot;
             _product = product.Length > 0 ? product : _config.Product;
             _program = job.Length > 0 ? job + (revision.Length > 0 ? " @ " + revision : "") : _config.Program;
@@ -385,12 +439,12 @@ public static class StdfParser
             for (int i = 0; i < count; i++) _siteGroups[(head, f.U1())] = group;
         }
 
-        private WaferScope NewWafer(byte head, byte group, string name)
+        private WaferScope NewWafer(byte head, byte group, string name, bool inferred = false)
         {
             WaferScope scope;
             if (Discovering)
             {
-                scope = new WaferScope { Name = name.Length > 0 ? name : $"{_fileName} (wafer {_waferIndex + 1})" };
+                scope = new WaferScope { Name = name.Length > 0 ? name : $"{_fileName} (wafer {_waferIndex + 1})", Inferred = inferred };
                 _catalog.Wafers.Add(scope);
             }
             else scope = _catalog.Wafers[_waferIndex]; // WRR may have corrected the WIR name in pass one.
@@ -402,7 +456,13 @@ public static class StdfParser
         private void Wir(ref StdfFields f)
         {
             byte head = f.U1(), group = f.U1(); var start = StdfMetadataBuilder.Time(f.U4()); string name = (f.OptionalCn() ?? "").Trim();
-            if (_wafers.ContainsKey((head, group))) throw new InvalidDataException("WIR 尚未结束便出现同一 Head/Site Group 的新 WIR。");
+            if (group != 255 && _wafers.TryGetValue((head, 255), out var inferred) && inferred.Inferred)
+            {
+                Warn("late-wir", "部分芯片早于 WIR，已保留在原临时晶圆，新 WIR 后的芯片使用实际晶圆归属。");
+                CloseParts(inferred); _wafers.Remove((head, 255));
+            }
+            if (_wafers.TryGetValue((head, group), out var previous))
+            { Warn("missing-wrr", "缺少 WRR 便出现新 WIR，已保留前一片可读数据并开始下一片。"); CloseParts(previous); }
             var scope = NewWafer(head, group, name);
             if (Discovering) scope.StartTime = start;
         }
@@ -412,8 +472,15 @@ public static class StdfParser
             byte head = f.U1(), group = f.U1(); var finish = StdfMetadataBuilder.Time(f.U4()); f.U4();
             for (int i = 0; i < 4; i++) f.OptionalU4();
             string name = (f.OptionalCn() ?? "").Trim();
-            if (!_wafers.Remove((head, group), out var scope)) throw new InvalidDataException("WRR 没有对应 WIR。");
-            if (_parts.Values.Any(p => ReferenceEquals(p.Wafer, scope))) throw new InvalidDataException("WRR 出现时仍有未完成的芯片。");
+            if (!_wafers.Remove((head, group), out var scope))
+            {
+                Warn("missing-wir", "WRR 没有对应 WIR，按已有芯片和 WRR 尽量恢复晶圆；无法确定的片号沿用文件名。");
+                var candidates = _wafers.Where(w => w.Key.Head == head).ToArray();
+                if (candidates.Length == 1 && candidates[0].Value.Inferred)
+                { scope = candidates[0].Value; _wafers.Remove(candidates[0].Key); }
+                else { scope = NewWafer(head, group, name); _wafers.Remove((head, group)); }
+            }
+            CloseParts(scope);
             if (Discovering && name.Length > 0) scope.Name = name;
             if (Discovering) scope.FinishTime = finish;
         }
@@ -424,27 +491,46 @@ public static class StdfParser
             if (_wafers.TryGetValue((head, 255), out scope)) return scope;
             var candidates = _wafers.Where(w => w.Key.Head == head).Select(w => w.Value).ToArray();
             if (candidates.Length == 1) return candidates[0];
-            if (candidates.Length > 1) throw new InvalidDataException("同一 Head 有多个晶圆，缺少可确定 Site Group 的 SDR。");
-            return NewWafer(head, 255, _fileName); // Final test commonly has no WIR/WRR or XY.
+            if (candidates.Length > 1)
+            {
+                Warn("ambiguous-wafer", "缺少可确定 Site Group 的 SDR，无法确定归属的芯片放入独立未知晶圆，未猜测其片号。");
+                return NewWafer(head, 255, $"{_fileName} (Head {head} 未知晶圆)", inferred: true);
+            }
+            return NewWafer(head, 255, _fileName, inferred: true); // Final test commonly has no WIR/WRR or XY.
         }
 
         private void Pir(ref StdfFields f)
         {
-            if (!_mir) throw new InvalidDataException("PIR 必须位于 MIR 之后。");
             byte head = f.U1(), site = f.U1();
-            _catalog.Heads.Add(head);
-            _catalog.Sites.Add((head, site));
-            if (_parts.ContainsKey((head, site)))
-                throw new InvalidDataException($"Head {head} / Site {site} 的上一个 PIR 尚未结束。");
-            _parts.Add((head, site), RentPart(_order++, Wafer(head, site), _product, _program, _lot));
+            if (_parts.Remove((head, site), out var previous)) RecoverPart(head, site, previous);
+            _parts.Add((head, site), StartPart(head, site));
         }
 
         private void Prr(ref StdfFields f)
         {
-            byte head = f.U1(), site = f.U1(); f.U1(); f.U2(); ushort hbin = f.U2();
-            ushort? sbin = f.OptionalU2(); short? x = f.OptionalI2(), y = f.OptionalI2(); f.OptionalU4();
-            string sn = (f.OptionalCn() ?? "").Trim(); f.OptionalSkipCn(); f.OptionalBytes();
-            if (!_parts.Remove((head, site), out var part)) throw new InvalidDataException($"Head {head} / Site {site} 的 PRR 没有对应 PIR。");
+            byte head = f.U1(), site = f.U1();
+            ushort? hbin = null, sbin = null; short? x = null, y = null; string sn = "";
+            try
+            {
+                f.OptionalU1(); f.OptionalU2(); hbin = f.OptionalU2();
+                sbin = f.OptionalU2(); x = f.OptionalI2(); y = f.OptionalI2(); f.OptionalU4();
+                sn = (f.OptionalCn() ?? "").Trim(); f.OptionalSkipCn(); f.OptionalBytes();
+            }
+            catch (InvalidDataException ex) { Warn("partial-prr", "PRR 字段不完整，已保留可读的 BIN、坐标和芯片测量值：" + ex.Message); }
+            if (!hbin.HasValue) Warn("prr-no-hbin", "部分 PRR 缺少 HBIN，保留芯片记录，HBIN 留空。");
+            if (!_parts.Remove((head, site), out var part))
+            {
+                Warn("prr-no-pir", "PRR 没有对应 PIR，按 PRR 恢复芯片身份与 BIN，缺少的测量值留空。");
+                part = StartPart(head, site);
+            }
+            if (part.Wafer.Inferred && (x is not null and not short.MinValue || y is not null and not short.MinValue))
+                Warn("coordinates-no-wir", "有坐标芯片缺少可确定归属的 WIR，临时晶圆号沿用文件名；若后续有对应 WRR，则采用 WRR 片号。");
+            CompletePart(head, site, part, hbin, sbin, x, y, sn);
+        }
+
+        private void CompletePart(byte head, byte site, Part part, ushort? hbin = null, ushort? sbin = null,
+            short? x = null, short? y = null, string sn = "")
+        {
             if (Discovering)
             {
                 ReleasePart(part);
@@ -463,7 +549,7 @@ public static class StdfParser
             {
                 WaferId = part.Wafer.Name, SerialNumber = sn, Site = _catalog.Heads.Count > 1 ? $"{head}:{site}" : site.ToString(CultureInfo.InvariantCulture),
                 X = x is null or short.MinValue ? null : x, Y = y is null or short.MinValue ? null : y,
-                HBin = hbin.ToString(CultureInfo.InvariantCulture), SBin = sbin is null or ushort.MaxValue ? "" : sbin.Value.ToString(CultureInfo.InvariantCulture),
+                HBin = hbin is null or ushort.MaxValue ? "" : hbin.Value.ToString(CultureInfo.InvariantCulture), SBin = sbin is null or ushort.MaxValue ? "" : sbin.Value.ToString(CultureInfo.InvariantCulture),
                 Product = part.Product, Program = part.Program, Lot = part.Lot,
                 StdfTestTime = part.Wafer.StartTime ?? _catalog.Metadata.LotStart ?? part.Wafer.FinishTime ?? _catalog.Metadata.LotFinish
             };
@@ -494,8 +580,9 @@ public static class StdfParser
         {
             if (!_parts.TryGetValue((head, site), out var part))
             {
-                if ((flags & 0x10) == 0 || parameterFlags != 0) throw new InvalidDataException("测试结果不在对应 Head/Site 的 PIR/PRR 内。");
-                return (null, 1); // Definition-only PTR/MPR outside a part.
+                if ((flags & 0x10) != 0 && parameterFlags == 0) return (null, 1); // Definition-only record.
+                Warn("test-no-pir", "测试结果缺少对应 PIR，按 Head / Site 建立芯片记录；仍使用后续 PRR 提供的身份和 BIN。");
+                _parts[(head, site)] = part = StartPart(head, site);
             }
             var identity = (key, name);
             int count = part.Occurrences.GetValueOrDefault(identity) + 1;
@@ -560,6 +647,7 @@ public static class StdfParser
                 return;
             }
             var item = _catalog.Item(family, limits, description, Discovering, out bool hasMultipleVariants);
+            part.HasTests = true;
             if (Discovering) return;
             int col = item.ColumnIndex;
             if (part.States[col] != RawMeasurementStore.StateAbsent)
@@ -587,7 +675,7 @@ public static class StdfParser
             uint number = f.U4(); byte head = f.U1(), site = f.U1(), flags = f.U1(), parm = f.U1();
             var key = _catalog.Test(10, number, head, site);
             float? result = f.OptionalR4();
-            if (result == null && (flags & 0x12) == 0) throw new InvalidDataException("PTR 的有效 RESULT 缺失。");
+            if (result == null && (flags & 0x12) == 0) Warn("ptr-no-result", "PTR 缺少 RESULT，保留测项并标为无效测量，不填零。");
             string? text = f.OptionalCn(); f.OptionalSkipCn();
             var initial = Default(key); var definition = ReadLimits(ref f, initial, false, 0);
             definition.Description = Inherit(text, initial.Description);

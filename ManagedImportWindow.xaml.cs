@@ -92,6 +92,7 @@ public partial class ManagedImportWindow : Window
             {
                 if (entry.Metadata is not { } metadata) { notes.Add(entry.File.FileName + "：" + entry.Error); continue; }
                 var file = entry.File; var before = original[file.Id]; success++;
+                if (metadata.Warnings.Count > 0) notes.Add(file.FileName + "：警告：" + string.Join("；", metadata.Warnings));
                 if (file.Lot == before.Lot && metadata.LotId.Length > 0) file.Lot = metadata.LotId;
                 string[] wafers = metadata.WaferIds;
                 if (file.WaferOverride == before.WaferOverride)
@@ -110,6 +111,7 @@ public partial class ManagedImportWindow : Window
             DgFiles.Items.Refresh();
             TxtMetadataStatus.Text = $"已读取 {success} / {files.Length} 个 STDF。优先填入文件内信息；可手动修改，统一修改时间会覆盖逐晶圆时间。" +
                 (notes.Count > 0 ? " " + string.Join("；", notes.Take(2)) : "");
+            TxtMetadataStatus.ToolTip = notes.Count > 0 ? string.Join("\n", notes) : null;
             var lots = Files.Select(f => f.Lot).Distinct(StringComparer.Ordinal).ToArray();
             if (lots.Length == 1) { _commonLot = lots[0]; TxtLot.Text = lots[0]; }
         }

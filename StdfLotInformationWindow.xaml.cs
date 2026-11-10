@@ -119,7 +119,9 @@ public partial class StdfLotInformationWindow : Window
             WaferTab.Header = $"Wafer / 晶圆信息（{_displayed.Wafers.Count}）";
             BtnCopy.IsEnabled = true;
             TxtStatus.Text = $"读取完成 · {info.Length / 1024d:N1} KB · 文件修改时间 {info.Modified.ToLocalTime():yyyy-MM-dd HH:mm:ss}" +
-                (_displayed.Wafers.Count == 0 ? " · 文件未提供 WIR/WRR 晶圆记录" : "");
+                (_displayed.Wafers.Count == 0 ? " · 文件未提供 WIR/WRR 晶圆记录" : "") +
+                (_displayed.Warnings.Count > 0 ? " · 警告：" + string.Join("；", _displayed.Warnings) : "");
+            TxtStatus.ToolTip = _displayed.Warnings.Count > 0 ? string.Join("\n", _displayed.Warnings) : null;
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -143,6 +145,7 @@ public partial class StdfLotInformationWindow : Window
     {
         if (_displayed == null) return "";
         var text = new StringBuilder().AppendLine("STDF Lot Information").AppendLine(_displayedPath);
+        foreach (string warning in _displayed.Warnings) text.AppendLine("警告：" + warning);
         void Append(IEnumerable<StdfInformationField> fields)
         {
             text.AppendLine("记录\t字段\t说明\t原始值");

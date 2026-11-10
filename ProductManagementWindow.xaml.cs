@@ -11,8 +11,11 @@ namespace SemiconductorCsvAnalyzer;
 
 public partial class ProductManagementWindow : Window
 {
-    public sealed record FileRow(ManagedDataFile File, string Stage, string Status, int Records)
-    { public string Name => File.FileName; public string Lot => File.Lot; public string Wafer => File.WaferOverride; public string Path => File.FilePath; }
+    public sealed record FileRow(ManagedDataFile File, string Stage, string Status, int Records, string Warning = "")
+    {
+        public string Name => File.FileName; public string Lot => File.Lot; public string Wafer => File.WaferOverride; public string Path => File.FilePath;
+        public string StatusDetail => Warning.Length > 0 ? Status + "\n" + Warning : Status;
+    }
     private ProductCatalogStore? _store;
     private ManagedProduct? _product;
     private bool _refreshing, _closed, _busy;
@@ -108,7 +111,7 @@ public partial class ProductManagementWindow : Window
             TxtNotice.Text = snapshot == null ? "" :
                 !current ? "原文件、路径或测试配置已变化，当前显示上次统计，请重新计算。" :
                 snapshot.FailedFiles > 0 ? $"{snapshot.FailedFiles} 个文件未参与计算，统计仅覆盖成功读取的数据。请在数据文件页查看原因。" :
-                "";
+                snapshot.Files.Any(f => f.Warning.Length > 0) ? $"{snapshot.Files.Count(f => f.Warning.Length > 0)} 个文件带警告，已保留可读数据参与计算；缺少 HBIN 的记录按未完成处理。请在数据文件页查看详情。" : "";
         }
         else TxtNotice.Text = "";
         NoticePanel.Visibility = TxtNotice.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
@@ -124,11 +127,12 @@ public partial class ProductManagementWindow : Window
                 {
                     var info = new FileInfo(file.FilePath);
                     status = !info.Exists ? "原文件不存在" : state == null ? "待计算" : state.Error.Length > 0 ? state.Error :
-                        info.Length != state.Length || info.LastWriteTimeUtc != state.LastWriteUtc ? "文件已修改，请重算" : "已统计";
+                        info.Length != state.Length || info.LastWriteTimeUtc != state.LastWriteUtc ? "文件已修改，请重算" :
+                        state.Warning.Length > 0 ? "已统计（警告，悬停查看）" : "已统计";
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { status = ex.Message; }
-            return new FileRow(file, product!.Flow.FirstOrDefault(s => s.Id == file.StageId)?.Label ?? (file.StageId.StartsWith("COMBINED:") ? file.SpecifiedKind + " 综合良率" : "步骤不存在"), status, state?.Records ?? 0);
+            return new FileRow(file, product!.Flow.FirstOrDefault(s => s.Id == file.StageId)?.Label ?? (file.StageId.StartsWith("COMBINED:") ? file.SpecifiedKind + " 综合良率" : "步骤不存在"), status, state?.Records ?? 0, state?.Warning ?? "");
         }).ToList());
         RefreshTrend(); RefreshCategories(); RefreshDefects();
     }

@@ -85,6 +85,7 @@ public static class RetestIdentityService
         {
             Items = data.Items, Records = records, Devices = DatasetService.BuildDevices(records),
             SourceDescription = data.SourceDescription, SerialNumberNotice = data.SerialNumberNotice,
+            ImportWarning = data.ImportWarning,
             StdfMetadata = data.StdfMetadata,
             StdfWaferOrigins = data.StdfWaferOrigins,
             ReassignedSerialNumberCount = data.ReassignedSerialNumberCount,

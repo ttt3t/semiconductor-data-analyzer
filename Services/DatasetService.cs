@@ -398,6 +398,7 @@ public static partial class DatasetService
         return new CsvParseResult
         {
             Items = items, Records = records,
+            ImportWarning = StdfWarnings.Combine(existing.ImportWarning, incoming.ImportWarning),
             StdfWaferOrigins = StdfWaferMerge.Merge(existing, incoming, waferMap),
             SerialNumberNotice = string.Join("\n\n", new[] { existing.SerialNumberNotice, incoming.SerialNumberNotice }
                 .Where(notice => notice.Length > 0)),
@@ -408,6 +409,7 @@ public static partial class DatasetService
     private static CsvParseResult CompleteMerge(CsvParseResult definitions)
     {
         var merged = Build(definitions.Items, definitions.Records);
+        merged.ImportWarning = definitions.ImportWarning;
         merged.StdfWaferOrigins = definitions.StdfWaferOrigins;
         MeasurementDisplay.Configure(merged.Items);
         string priorNotice = definitions.SerialNumberNotice;
