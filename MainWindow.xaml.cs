@@ -1274,7 +1274,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        ShowMapWindow(new WaferMapWindow($"{binName} Map  （按 wafer 分开，{(_config.PreferGoodRetest ? "良品优先，无良品取末次" : "同坐标取最新")}）", pages, binName),
+        ShowMapWindow(new WaferMapWindow($"{binName} Map  （按 LOT / wafer 分开，{(_config.PreferGoodRetest ? "良品优先，无良品取末次" : "同坐标取最新")}）", pages, binName),
             data => MapDataService.BinPages(data, soft, _config));
     }
 

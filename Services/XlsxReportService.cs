@@ -323,10 +323,11 @@ public static class XlsxReportService
         sheet.Columns(15, 20).Width = 12;
         int row = 7, index = 0;
         var mode = options.RetestMode == RetestMode.First ? RetestMode.First : RetestMode.Last;
-        foreach (string wafer in data.Wafers.Where(options.Wafers.Contains))
+        foreach (var group in data.Records.Where(r => options.Wafers.Contains(r.WaferId)).GroupBy(r => (Lot: r.Lot.Trim(), r.WaferId)))
         {
             AnalysisOperation.CheckCancellation();
-            var raw = data.Records.Where(r => r.WaferId == wafer).ToList();
+            string wafer = group.Key.WaferId;
+            var raw = group.ToList();
             if (options.RetestMode == RetestMode.OnlyRetests)
             {
                 var retested = DatasetService.SelectRetestRecords(raw, RetestMode.OnlyRetests)
@@ -338,11 +339,11 @@ public static class XlsxReportService
             {
                 string category = soft ? r.SBin : r.HBin;
                 if (string.IsNullOrWhiteSpace(category)) category = "(空)";
-                return new WaferDie { X = r.X!.Value, Y = r.Y!.Value, WaferId = wafer, Site = r.Site,
+                return new WaferDie { X = r.X!.Value, Y = r.Y!.Value, WaferId = wafer, Lot = group.Key.Lot, Site = r.Site,
                     Category = category, Color = colors[category] };
             }).ToList();
             var stats = BinStatisticsService.Build(raw, mode, config);
-            sheet.Cell(row, 2).Value = "Wafer：" + wafer;
+            sheet.Cell(row, 2).Value = (group.Key.Lot.Length > 0 ? "LOT：" + group.Key.Lot + " · " : "") + "Wafer：" + wafer;
             sheet.Cell(row, 2).Style.Font.Bold = true;
             sheet.Row(row).Height = 27;
             sheet.Cell(row + 1, 2).Value = $"芯片 {stats.ChipCount:N0} | 可绘制 {dies.Count:N0} | 缺完整坐标 {stats.ChipCount - dies.Count:N0} | 无 BIN {(soft ? stats.MissingSBin : stats.MissingHBin):N0}";

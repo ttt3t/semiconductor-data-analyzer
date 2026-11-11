@@ -12,16 +12,34 @@ public partial class MainWindow
     private Dictionary<string, int> _runBySerial = new(StringComparer.Ordinal);
     private Dictionary<string, TestItemData> _runItems = new(StringComparer.Ordinal);
     private RunSelectionMode _runSelectionMode;
-    private Dictionary<(string Wafer, int X, int Y), int> _runByCoordinates = new();
-    private Dictionary<string, List<int>> _runRowsByWafer = new(StringComparer.Ordinal);
-    private List<string> _runWafers = new();
+    private Dictionary<(string Lot, string Wafer, int X, int Y), int> _runByCoordinates = new();
+    private Dictionary<(string Lot, string Wafer), List<int>> _runRowsByWafer = new();
+    private List<(string Lot, string Wafer)> _runWafers = new();
     private int[] _runPositions = Array.Empty<int>();
     private bool _updatingRunInput;
+    private static (string Lot, string Wafer) RunScope(CsvRecord row) => (row.Lot.Trim(), row.WaferId);
+    private static (string Lot, string Wafer, int X, int Y) RunCoordinateKey(CsvRecord row) =>
+        (row.Lot.Trim(), row.WaferId, row.X!.Value, row.Y!.Value);
+    private string RunWaferLabel((string Lot, string Wafer) scope) =>
+        _runWafers.Any(other => other.Wafer == scope.Wafer && other.Lot != scope.Lot)
+            ? (scope.Lot.Length > 0 ? scope.Lot : "(未指定 LOT)") + " / " + scope.Wafer : scope.Wafer;
+
+    private bool ResolveRunScope(string text, out (string Lot, string Wafer) scope)
+    {
+        var candidates = _runWafers.Where(s => RunWaferLabel(s) == text).ToArray();
+        if (candidates.Length == 1) { scope = candidates[0]; return true; }
+        var current = (uint)_runIndex < (uint)_data.Records.Count ? RunScope(_data.Records[_runIndex]) : default;
+        if (candidates.Contains(current)) { scope = current; return true; }
+        candidates = _runWafers.Where(s => s.Wafer == text).ToArray();
+        if (candidates.Length == 1) { scope = candidates[0]; return true; }
+        if (candidates.Contains(current)) { scope = current; return true; }
+        scope = default; return false;
+    }
 
     private void ClearCoordinateRunIndex()
     {
         _runByCoordinates = new();
-        _runRowsByWafer = new(StringComparer.Ordinal);
+        _runRowsByWafer = new();
         _runWafers = new();
         _runPositions = Array.Empty<int>();
     }
@@ -41,14 +59,15 @@ public partial class MainWindow
                 _runBySerial.TryAdd(_data.Records[row].SerialNumber.Trim(), row);
                 var record = _data.Records[row];
                 if (record.X is not int x || record.Y is not int y) continue;
-                if (!_runRowsByWafer.TryGetValue(record.WaferId, out var rows))
+                var scope = RunScope(record);
+                if (!_runRowsByWafer.TryGetValue(scope, out var rows))
                 {
-                    _runRowsByWafer[record.WaferId] = rows = new();
-                    _runWafers.Add(record.WaferId);
+                    _runRowsByWafer[scope] = rows = new();
+                    _runWafers.Add(scope);
                 }
                 _runPositions[row] = rows.Count;
                 rows.Add(row);
-                _runByCoordinates[(record.WaferId, x, y)] = row;
+                _runByCoordinates[(scope.Lot, scope.Wafer, x, y)] = row;
             }
             foreach (var item in _data.Items) _runItems[item.Id] = item;
             _runIndex = _data.Records.Count == 0 ? -1 : 0;
@@ -57,7 +76,7 @@ public partial class MainWindow
         if (changedData && _runSelectionMode == RunSelectionMode.WaferCoordinates && _runIndex >= 0)
         {
             var current = _data.Records[_runIndex];
-            _runIndex = _runByCoordinates[(current.WaferId, current.X!.Value, current.Y!.Value)];
+            _runIndex = _runByCoordinates[RunCoordinateKey(current)];
         }
         UpdateRunInput();
         RefreshRunValues(refreshView: false);
@@ -80,18 +99,18 @@ public partial class MainWindow
             }
             else RunTextBox.ToolTip = "打开数据后，按序列号浏览原始测量值。";
             var current = available ? _data.Records[_runIndex] : null;
-            RunWaferTextBox.Text = current?.WaferId ?? "";
+            RunWaferTextBox.Text = current == null ? "" : RunWaferLabel(RunScope(current));
             RunXTextBox.Text = current?.X?.ToString(CultureInfo.InvariantCulture) ?? "";
             RunYTextBox.Text = current?.Y?.ToString(CultureInfo.InvariantCulture) ?? "";
-            int waferIndex = current == null ? -1 : _runWafers.IndexOf(current.WaferId);
+            int waferIndex = current == null ? -1 : _runWafers.IndexOf(RunScope(current));
             PreviousRunWaferButton.IsEnabled = waferIndex > 0;
             NextRunWaferButton.IsEnabled = waferIndex >= 0 && waferIndex + 1 < _runWafers.Count;
             int position = available && _runPositions.Length > _runIndex ? _runPositions[_runIndex] : -1;
             PreviousCoordinateRunButton.IsEnabled = position > 0;
-            NextCoordinateRunButton.IsEnabled = position >= 0 && current != null && position + 1 < _runRowsByWafer[current.WaferId].Count;
-            RunWaferTextBox.ToolTip = "输入完整晶圆名称后回车，或使用上下按钮切换晶圆；优先保留当前 XY，找不到时显示该晶圆首个坐标的末次记录。";
+            NextCoordinateRunButton.IsEnabled = position >= 0 && current != null && position + 1 < _runRowsByWafer[RunScope(current)].Count;
+            RunWaferTextBox.ToolTip = "输入晶圆名称后回车，同名跨批次晶圆使用 LOT / 晶圆号；上下按钮切换批次晶圆，优先保留当前 XY，找不到时显示该片首个坐标的末次记录。";
             RunCoordinatesInput.ToolTip = current == null ? "没有完整 XY 坐标，请在设置中改用序列号模式。" :
-                $"{current.WaferId} · ({current.X}, {current.Y}) · Run {current.SerialNumber}\n输入 X/Y 后回车定位末次记录；上下按钮按导入顺序浏览当前晶圆的原始记录（含各次复测）。";
+                $"{RunWaferLabel(RunScope(current))} · ({current.X}, {current.Y}) · Run {current.SerialNumber}\n输入 X/Y 后回车定位同 LOT 晶圆末次记录；上下按钮按导入顺序浏览该 LOT 晶圆的原始记录（含各次复测）。";
         }
         finally { _updatingRunInput = false; }
     }
@@ -106,7 +125,7 @@ public partial class MainWindow
                 if (_runIndex >= 0)
                 {
                     var current = _data.Records[_runIndex];
-                    _runIndex = _runByCoordinates[(current.WaferId, current.X!.Value, current.Y!.Value)];
+                    _runIndex = _runByCoordinates[RunCoordinateKey(current)];
                 }
             }
         }
@@ -124,7 +143,7 @@ public partial class MainWindow
         if (mode == RunSelectionMode.WaferCoordinates && _runIndex >= 0)
         {
             var current = _data.Records[_runIndex];
-            _runIndex = _runByCoordinates[(current.WaferId, current.X!.Value, current.Y!.Value)];
+            _runIndex = _runByCoordinates[RunCoordinateKey(current)];
         }
         UpdateRunInput();
         RefreshRunValues();
@@ -200,7 +219,7 @@ public partial class MainWindow
     {
         if (_runSelectionMode == RunSelectionMode.SerialNumber) { SelectRun(_runIndex + step); return; }
         if (!CommitCoordinateRunText()) return;
-        var rows = _runRowsByWafer[_data.Records[_runIndex].WaferId];
+        var rows = _runRowsByWafer[RunScope(_data.Records[_runIndex])];
         int position = _runPositions[_runIndex] + step;
         if ((uint)position < (uint)rows.Count) SelectRun(rows[position]);
     }
@@ -209,13 +228,14 @@ public partial class MainWindow
     {
         if (_updatingRunInput || _isBusy || _runSelectionMode != RunSelectionMode.WaferCoordinates ||
             (uint)_runIndex >= (uint)_data.Records.Count) return false;
-        if (int.TryParse(RunXTextBox.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int x) &&
+        if (ResolveRunScope(RunWaferTextBox.Text.Trim(), out var scope) &&
+            int.TryParse(RunXTextBox.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int x) &&
             int.TryParse(RunYTextBox.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int y) &&
-            _runByCoordinates.TryGetValue((RunWaferTextBox.Text.Trim(), x, y), out int row))
+            _runByCoordinates.TryGetValue((scope.Lot, scope.Wafer, x, y), out int row))
         {
             // Leaving the fields unchanged must not jump away from a browsed first retest.
             var current = _data.Records[_runIndex];
-            if (current.WaferId != RunWaferTextBox.Text.Trim() || current.X != x || current.Y != y)
+            if (RunScope(current) != scope || current.X != x || current.Y != y)
                 SelectRun(row);
             else UpdateRunInput();
             return true;
@@ -227,14 +247,18 @@ public partial class MainWindow
 
     private bool SelectRunWafer(string wafer)
     {
-        if (_isBusy || !_runRowsByWafer.TryGetValue(wafer, out var rows) || rows.Count == 0) return false;
+        return ResolveRunScope(wafer, out var scope) && SelectRunScope(scope);
+    }
+    private bool SelectRunScope((string Lot, string Wafer) scope)
+    {
+        if (_isBusy || !_runRowsByWafer.TryGetValue(scope, out var rows) || rows.Count == 0) return false;
         var current = (uint)_runIndex < (uint)_data.Records.Count ? _data.Records[_runIndex] : null;
         int row = rows[0];
-        if (current?.X is int x && current.Y is int y && _runByCoordinates.TryGetValue((wafer, x, y), out int match)) row = match;
+        if (current?.X is int x && current.Y is int y && _runByCoordinates.TryGetValue((scope.Lot, scope.Wafer, x, y), out int match)) row = match;
         else
         {
             var first = _data.Records[row];
-            row = _runByCoordinates[(wafer, first.X!.Value, first.Y!.Value)];
+            row = _runByCoordinates[(scope.Lot, scope.Wafer, first.X!.Value, first.Y!.Value)];
         }
         SelectRun(row);
         return true;
@@ -245,7 +269,7 @@ public partial class MainWindow
         if (_updatingRunInput || _runSelectionMode != RunSelectionMode.WaferCoordinates || _isBusy ||
             (uint)_runIndex >= (uint)_data.Records.Count) return false;
         string wafer = RunWaferTextBox.Text.Trim();
-        if (wafer == _data.Records[_runIndex].WaferId) return true;
+        if (wafer == RunWaferLabel(RunScope(_data.Records[_runIndex]))) return true;
         if (SelectRunWafer(wafer)) return true;
         UpdateRunInput();
         TxtStatus.Text = "未找到有完整坐标的晶圆，已保留原选择。";
@@ -255,8 +279,8 @@ public partial class MainWindow
     private void StepRunWafer(int step)
     {
         if (_runIndex < 0 || !CommitRunWaferText()) return;
-        int index = _runWafers.IndexOf(_data.Records[_runIndex].WaferId) + step;
-        if ((uint)index < (uint)_runWafers.Count) SelectRunWafer(_runWafers[index]);
+        int index = _runWafers.IndexOf(RunScope(_data.Records[_runIndex])) + step;
+        if ((uint)index < (uint)_runWafers.Count) SelectRunScope(_runWafers[index]);
     }
 
     private void RunCoordinates_KeyDown(object sender, KeyEventArgs e)
@@ -267,7 +291,7 @@ public partial class MainWindow
             if (CommitCoordinateRunText())
             {
                 var current = _data.Records[_runIndex];
-                SelectRun(_runByCoordinates[(current.WaferId, current.X!.Value, current.Y!.Value)]);
+                SelectRun(_runByCoordinates[RunCoordinateKey(current)]);
             }
             e.Handled = true;
         }

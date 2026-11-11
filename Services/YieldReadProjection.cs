@@ -63,6 +63,7 @@ internal sealed class YieldReadProjection
             record.IsFtIdentity = reader != null;
             if (reader != null) record.RetestUuid = reader.Read(record);
             record.UuidTestNumbers = reader?.Recipe ?? record.UuidTestNumbers;
+            if (reader != null) record.UuidEncoding = RetestIdentityService.CurrentEncoding;
             if (reader != null && record.RetestUuid == "") data.MissingUuidCount++;
         }
         return data;

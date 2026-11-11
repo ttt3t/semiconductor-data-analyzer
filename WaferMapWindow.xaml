@@ -25,7 +25,7 @@
                 </ListBox.ItemContainerStyle>
                 <ListBox.ItemTemplate>
                     <DataTemplate>
-                        <TextBlock Text="{Binding WaferId, Mode=OneTime}" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding DisplayName, Mode=OneTime}" TextWrapping="Wrap"/>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
             </ListBox>

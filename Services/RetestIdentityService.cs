@@ -7,6 +7,7 @@ namespace SemiconductorCsvAnalyzer.Services;
 
 public static class RetestIdentityService
 {
+    public const int CurrentEncoding = 1;
     public static List<string> ParseTestNumbers(string text)
     {
         var result = new List<string>();
@@ -43,7 +44,7 @@ public static class RetestIdentityService
                 return matches[0].Id;
             }).ToArray();
             MissingTests = missingTests.ToArray();
-            _missing = config.MissingTokens.Concat(config.NotApplicableTokens).Concat(new[] { "NULL", "NaN", "Infinity", "+Infinity", "-Infinity" })
+            _missing = config.MissingTokens.Concat(config.NotApplicableTokens).Concat(new[] { "NULL", "NaN", "Infinity", "+Infinity", "-Infinity", StdfParser.NotApplicableValue })
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
         public string Read(CsvRecord record)
@@ -52,20 +53,53 @@ public static class RetestIdentityService
             bool incomplete = false;
             foreach (string? id in _ids)
             {
-                if (id == null) return "";
+                if (id == null) { incomplete = true; continue; }
                 if (!record.Measurements.TryGetValue(id, out string? raw))
                 { incomplete = true; continue; }
-                if (string.IsNullOrWhiteSpace(raw) || _missing.Contains(raw.Trim())) return "";
-                value.Append(raw.Trim()); // Preserve hex text, case and leading zeroes; no numeric conversion.
+                if (string.IsNullOrWhiteSpace(raw) || _missing.Contains(raw.Trim()) || raw.Trim().StartsWith("STDF_INVALID(", StringComparison.Ordinal)) return "";
+                string field = raw.Trim(); // Preserve hex text, case and leading zeroes; no numeric conversion.
+                if (_ids.Length > 1)
+                {
+                    if (value.Length > 0) value.Append('|');
+                    value.Append(field.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("|", "\\|", StringComparison.Ordinal));
+                }
+                else value.Append(field);
             }
-            return incomplete ? record.UuidTestNumbers == Recipe ? record.RetestUuid ?? "" : "" : value.ToString();
+            if (!incomplete) return value.ToString();
+            // Legacy multi-field concatenations cannot be split reliably. Never reuse them as verified IDs.
+            if (record.UuidTestNumbers != Recipe || string.IsNullOrWhiteSpace(record.RetestUuid)) return "";
+            if (_ids.Length == 1) return record.RetestUuid!;
+            return record.UuidEncoding == CurrentEncoding && ValidCachedTuple(record.RetestUuid!) ? record.RetestUuid! : "";
+        }
+
+        private bool ValidCachedTuple(string text)
+        {
+            var field = new StringBuilder(); int count = 0;
+            bool ValidField() => field.Length > 0 && !string.IsNullOrWhiteSpace(field.ToString()) &&
+                !_missing.Contains(field.ToString().Trim()) && !field.ToString().StartsWith("STDF_INVALID(", StringComparison.Ordinal);
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = text[i];
+                if (c == '\\')
+                {
+                    if (++i == text.Length || text[i] is not ('\\' or '|')) return false;
+                    field.Append(text[i]);
+                }
+                else if (c == '|')
+                {
+                    if (!ValidField()) return false;
+                    count++; field.Clear();
+                }
+                else field.Append(c);
+            }
+            return ValidField() && count + 1 == _ids.Length;
         }
     }
 
     public static CsvParseResult Prepare(CsvParseResult data, AnalyzerConfig config)
     {
         AnalysisOperation.CheckCancellation();
-        string signature = config.TestMode + ":" + string.Join(",", config.UuidTestNumbers) + ":" +
+        string signature = "UUID" + CurrentEncoding + ":" + config.TestMode + ":" + string.Join(",", config.UuidTestNumbers) + ":" +
             string.Join(",", config.MissingTokens.Concat(config.NotApplicableTokens));
         if (data.RetestIdentitySignature == signature || config.TestMode == TestAnalysisMode.CP && data.Records.All(r => !r.IsFtIdentity)) return data;
         Reader? reader = config.TestMode == TestAnalysisMode.FT ? new(data.Items, config) : null;
@@ -77,6 +111,7 @@ public static class RetestIdentityService
             record.IsFtIdentity = reader != null;
             record.RetestUuid = reader != null ? reader.Read(source) : source.RetestUuid;
             record.UuidTestNumbers = reader?.Recipe ?? source.UuidTestNumbers;
+            record.UuidEncoding = reader != null ? CurrentEncoding : source.UuidEncoding;
             if (record.IsFtIdentity && record.RetestUuid == "") missing++;
             return record;
         }).ToList();

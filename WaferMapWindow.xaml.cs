@@ -119,13 +119,13 @@ public partial class WaferMapWindow : Window
 
     public void SetPages(IReadOnlyList<WaferMapPage> pages)
     {
-        string? selected = (WaferList.SelectedItem as WaferMapPage)?.WaferId;
+        var selected = WaferList.SelectedItem as WaferMapPage;
         _ready = false;
         // Own the view instead of leaving a default view cached for this snapshot.
         var snapshot = pages.ToList();
         SetStackPages(snapshot);
         WaferList.ItemsSource = new ListCollectionView(snapshot);
-        int index = snapshot.FindIndex(p => p.WaferId == selected);
+        int index = selected == null ? -1 : snapshot.FindIndex(p => p.WaferId == selected.WaferId && p.Lot == selected.Lot);
         WaferList.SelectedIndex = index >= 0 ? index : pages.Count > 0 ? 0 : -1;
         if (WaferList.SelectedItem != null) WaferList.ScrollIntoView(WaferList.SelectedItem);
         _ready = true;
@@ -147,6 +147,7 @@ public partial class WaferMapWindow : Window
 
     public void SelectWafer(string wafer)
     {
+        if ((WaferList.SelectedItem as WaferMapPage)?.WaferId == wafer) return;
         var page = WaferList.Items.OfType<WaferMapPage>().FirstOrDefault(p => p.WaferId == wafer);
         if (page != null) WaferList.SelectedItem = page;
     }
@@ -199,8 +200,8 @@ public partial class WaferMapWindow : Window
         if (!_ready || WaferList.SelectedItem is not WaferMapPage page) return;
         bool stackedBins = _isBinMap && ChkStacked.IsChecked == true;
         TxtMapInfo.Text = stackedBins
-            ? $"全部 {_stackPages.Count:N0} 片晶圆 · {_stackBinTotal:N0} 颗芯片\n当前选中：{page.WaferId}"
-            : page.WaferId + " · " + (page.Dies.Count == 0 ? "当前测试项 / Site 下没有可绘制坐标。" : $"{page.Dies.Count:N0} 颗芯片");
+            ? $"全部 {_stackPages.Count:N0} 片晶圆 · {_stackBinTotal:N0} 颗芯片\n当前选中：{page.DisplayName}"
+            : page.DisplayName + " · " + (page.Dies.Count == 0 ? "当前测试项 / Site 下没有可绘制坐标。" : $"{page.Dies.Count:N0} 颗芯片");
         int total = Math.Max(1, stackedBins ? _stackBinTotal : _pfDies.Count);
         IEnumerable<(string Category, int Count, Brush Color)> entries = stackedBins
             ? _stackBinCounts.Select(e => (e.Key, e.Value.Count, e.Value.Color))
@@ -393,7 +394,7 @@ public partial class WaferMapWindow : Window
             // No matrix or extra numeric columns are retained during rendering/wafer switching.
             var table = MapTableCopyService.Build(_pfDies.Select(d =>
                 new MapTableEntry(d.X, d.Y, d.SBin, d.HBin, d.Category)), _mapTableKind);
-            string status = $"已复制 {page.WaferId} 的 {table.Columns}×{table.Rows} Map 表格（{table.DieCount} 颗芯片）";
+            string status = $"已复制 {page.DisplayName} 的 {table.Columns}×{table.Rows} Map 表格（{table.DieCount} 颗芯片）";
             if (table.ErrorCount > 0) status += $"；{table.ErrorCount} 颗无效测量标为 E";
             CopyText(table.Text, status);
         }

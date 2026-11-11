@@ -42,7 +42,7 @@ public static partial class ProductYieldService
     }
 
     public static string Signature(ManagedProduct product) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-        JsonSerializer.Serialize(new { Schema = 5, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
+        JsonSerializer.Serialize(new { Schema = 6, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
             product.IncludePartialPass, product.PreferGoodRetest, product.Files }))));
 
     public static bool IsCurrent(ManagedProduct product)
@@ -297,7 +297,7 @@ public static partial class ProductYieldService
             if ((r & 1023) == 0) token.ThrowIfCancellationRequested();
             var record = data.Records[r];
             if (Blank(record)) continue;
-            bool known = stage.Kind == "CP" ? record.X.HasValue && record.Y.HasValue : !string.IsNullOrEmpty(record.RetestUuid);
+            bool known = stage.Kind == "CP" ? record.X.HasValue && record.Y.HasValue : !string.IsNullOrWhiteSpace(record.RetestUuid);
             string identity = !known ? $"UNKNOWN:{file.Id}:{r}" : stage.Kind == "CP" ? $"XY:{record.X},{record.Y}" : "UUID:" + record.RetestUuid!;
             string wafer = stage.Kind == "FT" ? "" : file.WaferOverride.Length > 0 ? file.WaferOverride : record.WaferId;
             if (stage.Kind == "CP" && string.IsNullOrWhiteSpace(wafer)) throw new InvalidDataException("CP 数据缺少晶圆名称，请在登记时指定真实晶圆号。");

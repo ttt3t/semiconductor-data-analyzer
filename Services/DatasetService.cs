@@ -28,13 +28,19 @@ public static partial class DatasetService
 
     internal static (string Wafer, int? X, int? Y, string Fallback) ChipKey(CsvRecord record)
     {
+        string lot = record.Lot.Trim();
+        string scope = $"LOT:{lot.Length}:{lot}|";
         if (record.IsFtIdentity)
-            return ("", null, null, !string.IsNullOrEmpty(record.RetestUuid) ? $"LOT:{record.Lot.Length}:{record.Lot}|UUID:" + record.RetestUuid : "ROW:" + record.Id);
+            return ("", null, null, scope + (!string.IsNullOrWhiteSpace(record.RetestUuid) ? "UUID:" + record.RetestUuid : "ROW:" + record.Id));
         bool coordinates = record.X.HasValue && record.Y.HasValue;
         string fallback = coordinates ? "" : !string.IsNullOrWhiteSpace(record.ChipSerialNumber)
             ? "SN:" + record.ChipSerialNumber.Trim() : "ROW:" + record.Id;
-        return (record.WaferId, coordinates ? record.X : null, coordinates ? record.Y : null, fallback);
+        return (record.WaferId, coordinates ? record.X : null, coordinates ? record.Y : null, scope + fallback);
     }
+
+    private static (string Wafer, int? X, int? Y, string Fallback) DeviceKey(CsvRecord record) =>
+        record.IsFtIdentity || record.X.HasValue && record.Y.HasValue ? ChipKey(record) :
+            (record.WaferId, record.X, record.Y, $"LOT:{record.Lot.Trim().Length}:{record.Lot.Trim()}|ROW:" + record.Id);
 
     // Export needs raw record selection only, without rebuilding every numeric column.
     public static List<CsvRecord> SelectRetestRecords(List<CsvRecord> source, RetestMode mode, AnalyzerConfig? config = null)
@@ -213,12 +219,11 @@ public static partial class DatasetService
                     string.IsNullOrWhiteSpace(record.SBin) &&
                     string.IsNullOrWhiteSpace(record.HBin);
                 if (blank) continue;
-                var key = record.IsFtIdentity ? ChipKey(record) :
-                    (record.WaferId, record.X, record.Y, record.X.HasValue && record.Y.HasValue ? "" : record.Id);
+                var key = DeviceKey(record);
                 devices[key] = new DeviceInfo
                 {
                     WaferId = record.WaferId, SerialNumber = record.SerialNumber, X = record.X, Y = record.Y,
-                    Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin
+                    Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin, Lot = record.Lot.Trim()
                 };
             }
         }
@@ -390,6 +395,7 @@ public static partial class DatasetService
                 WaferId = waferMap[record.WaferId], SerialNumber = record.SerialNumber, X = record.X, Y = record.Y,
                 OriginalSerialNumber = record.OriginalSerialNumber,
                 IsFtIdentity = record.IsFtIdentity, RetestUuid = record.RetestUuid, UuidTestNumbers = record.UuidTestNumbers,
+                UuidEncoding = record.UuidEncoding,
                 Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
                 Product = record.Product, Program = record.Program, Lot = record.Lot,
                 StdfTestTime = record.StdfTestTime,
@@ -453,6 +459,7 @@ public static partial class DatasetService
         Id = record.Id, WaferId = record.WaferId, SerialNumber = record.SerialNumber,
         OriginalSerialNumber = record.OriginalSerialNumber,
         IsFtIdentity = record.IsFtIdentity, RetestUuid = record.RetestUuid, UuidTestNumbers = record.UuidTestNumbers,
+        UuidEncoding = record.UuidEncoding,
         X = record.X, Y = record.Y, Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
         Product = record.Product, Program = record.Program, Lot = record.Lot,
         StdfTestTime = record.StdfTestTime,
@@ -501,12 +508,11 @@ public static partial class DatasetService
                     }
                     if (rawBlank) continue;
                 }
-                var keyForDevice = record.IsFtIdentity ? ChipKey(record) :
-                    (record.WaferId, record.X, record.Y, record.X.HasValue && record.Y.HasValue ? "" : record.Id);
+                var keyForDevice = DeviceKey(record);
                 devices[keyForDevice] = new DeviceInfo
                 {
                     WaferId = record.WaferId, SerialNumber = record.SerialNumber, X = record.X, Y = record.Y,
-                    Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin
+                    Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin, Lot = record.Lot.Trim()
                 };
             }
         }

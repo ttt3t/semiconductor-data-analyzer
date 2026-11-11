@@ -15,11 +15,12 @@ public static class MapDataService
         // Pool all wafer measurements once. A wafer switch must not change the meaning of a color.
         // Retain the PF map's existing valid-measurement and Site population.
         var scale = HeatmapScale.Create(item.Values.Where(v => IncludeSite(v.Site)).Select(v => v.Value * item.DisplayFactor));
-        return data.Wafers.Select(wafer =>
+        return data.Records.GroupBy(r => (Lot: r.Lot.Trim(), r.WaferId)).Select(group =>
         {
+            string wafer = group.Key.WaferId;
             var latest = new Dictionary<(int X, int Y), CsvRecord>();
-            foreach (var record in data.Records)
-                if (record.WaferId == wafer && IncludeSite(record.Site) && record.X.HasValue && record.Y.HasValue &&
+            foreach (var record in group)
+                if (IncludeSite(record.Site) && record.X.HasValue && record.Y.HasValue &&
                     record.Measurements.ContainsKey(item.Id)) latest[(record.X.Value, record.Y.Value)] = record;
             var dies = latest.Values.Select(r =>
             {
@@ -29,13 +30,13 @@ public static class MapDataService
                     (item.LowLimit.HasValue && value < item.LowLimit || item.HighLimit.HasValue && value > item.HighLimit) ? "FAIL" : "PASS";
                 return new WaferDie
                 {
-                    WaferId = wafer, X = r.X!.Value, Y = r.Y!.Value, Site = r.Site, SerialNumber = r.SerialNumber,
+                    WaferId = wafer, Lot = group.Key.Lot, X = r.X!.Value, Y = r.Y!.Value, Site = r.Site, SerialNumber = r.SerialNumber,
                     SBin = r.SBin, HBin = r.HBin, Result = r.Result, Unit = item.ShownUnit,
                     Value = valid ? value * item.DisplayFactor : null, RawValue = MeasurementDisplay.ExportText(item, raw), Category = category, Color = WaferMapWindow.ColorForCategory(category)
                 };
             }).ToList();
             return new WaferMapPage(wafer, dies, scale, item.ShownUnit, true,
-                dies.Count(d => d.Category == "PASS"), "当前测项 Pass / 有坐标且含该测项的芯片（含无效测量）");
+                dies.Count(d => d.Category == "PASS"), "当前测项 Pass / 有坐标且含该测项的芯片（含无效测量）", Lot: group.Key.Lot);
         }).ToList();
     }
 
@@ -44,20 +45,21 @@ public static class MapDataService
         var colors = BinPalette.Create(data.Records.Select(r => soft ? r.SBin : r.HBin));
         if (config?.PreferGoodRetest == true) data = DatasetService.SelectRetests(data, RetestMode.Last, config);
         var classifier = new HBinClassifier(config ?? new AnalyzerConfig());
-        return data.Wafers.Select(wafer =>
+        return data.Records.GroupBy(r => (Lot: r.Lot.Trim(), r.WaferId)).Select(group =>
         {
-            var dies = data.Devices.Where(d => d.WaferId == wafer && d.X.HasValue && d.Y.HasValue).Select(d =>
+            string wafer = group.Key.WaferId;
+            var dies = data.Devices.Where(d => d.WaferId == wafer && d.Lot.Trim() == group.Key.Lot && d.X.HasValue && d.Y.HasValue).Select(d =>
             {
                 string category = BinPalette.Key(soft ? d.SBin : d.HBin);
                 return new WaferDie
                 {
-                    WaferId = wafer, X = d.X!.Value, Y = d.Y!.Value, Site = d.Site, SerialNumber = d.SerialNumber,
+                    WaferId = wafer, Lot = group.Key.Lot, X = d.X!.Value, Y = d.Y!.Value, Site = d.Site, SerialNumber = d.SerialNumber,
                     SBin = d.SBin, HBin = d.HBin, Result = d.Result,
                     Category = category, Color = colors[category]
                 };
             }).ToList();
             return new WaferMapPage(wafer, dies, PassCount: dies.Count(d => classifier.Classify(d.HBin) == OriginalDisposition.Pass),
-                YieldBasis: "配置的 HBIN Pass / 图中有坐标芯片；不含无坐标记录");
+                YieldBasis: "配置的 HBIN Pass / 图中有坐标芯片；不含无坐标记录", Lot: group.Key.Lot);
         }).ToList();
     }
 }

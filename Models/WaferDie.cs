@@ -5,6 +5,7 @@ namespace SemiconductorCsvAnalyzer.Models;
 public sealed class WaferDie
 {
     public string WaferId { get; set; } = "";
+    public string Lot { get; set; } = "";
     public string SerialNumber { get; set; } = "";
     public string SBin { get; set; } = "";
     public string HBin { get; set; } = "";

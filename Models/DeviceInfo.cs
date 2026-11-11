@@ -2,6 +2,7 @@ namespace SemiconductorCsvAnalyzer.Models;
 
 public sealed class DeviceInfo
 {
+    public string Lot { get; set; } = "";
     public string WaferId { get; set; } = "";
     public string SerialNumber { get; set; } = "";
     public int? X { get; set; }

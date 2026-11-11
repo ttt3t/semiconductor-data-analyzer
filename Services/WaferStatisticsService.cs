@@ -20,7 +20,9 @@ public static class WaferStatisticsService
         if (mode is not (RetestMode.First or RetestMode.Last)) throw new ArgumentOutOfRangeException(nameof(mode));
         // Reuse BIN Table's whole-chip retest selection and category definitions.
         // Only compact counts survive this method; no measurement columns are copied.
-        var groups = records.GroupBy(r => r.WaferId, StringComparer.Ordinal).ToArray();
+        var groups = records.GroupBy(r => (Lot: r.Lot.Trim(), r.WaferId)).ToArray();
+        var repeated = groups.GroupBy(g => g.Key.WaferId, StringComparer.Ordinal).Where(g => g.Count() > 1)
+            .Select(g => g.Key).ToHashSet(StringComparer.Ordinal);
         var summaries = groups.Select(g => BinStatisticsService.Build(g.ToArray(), mode, config)).ToArray();
         var valid = summaries.Select(s => s.ChipCount - s.MissingSBin).ToArray();
         var lookup = summaries.Select(s => s.SBins.ToDictionary(r => r.Bin, r => r.Count, StringComparer.Ordinal)).ToArray();
@@ -49,7 +51,9 @@ public static class WaferStatisticsService
                 categoryLookup.Select(categories => categories.GetValueOrDefault(r.Category)).ToArray(),
                 categoryLookup.Select((categories, i) => valid[i] == 0 ? (double?)null : 100.0 * categories.GetValueOrDefault(r.Category) / valid[i]).ToArray()))
             .ToList();
-        return new(groups.Select(g => g.Key).ToList(), summaries.Select(s => s.ChipCount).ToArray(), valid, rows)
+        return new(groups.Select(g => repeated.Contains(g.Key.WaferId)
+            ? (g.Key.Lot.Length > 0 ? g.Key.Lot : "(未指定 LOT)") + " / " + g.Key.WaferId : g.Key.WaferId).ToList(),
+            summaries.Select(s => s.ChipCount).ToArray(), valid, rows)
         { ValidHBinCounts = hValid, HBinRows = hRows, CategoryRows = categoryRows };
     }
 }

@@ -66,7 +66,7 @@ static class Probe
         Check(bin.ProbabilityAt(2, 0) == 0 && data.Categories.Any(c => c.Category == "9"), "zero probability and bins absent from the first wafer remain available");
         var map = bin.CreatePage();
         Check(((SolidColorBrush)map.Dies.Single(d => d.X == 2).Color).Color == Color.FromRgb(229, 231, 235), "zero probability is light gray");
-        Check(((SolidColorBrush)map.Dies.Single(d => d.X == 0).Color).Color == ((SolidColorBrush)bin.Color).Color, "100% uses the original BIN palette color");
+        Check(((SolidColorBrush)map.Dies.Single(d => d.X == 0).Color).Color == ((SolidColorBrush)bin.Color).Color, "100% uses the strengthened color for the same BIN hue");
         Check(map.Dies.Single(d => d.X == 1).Value == 50 && bin.CopyTable().Text.Contains("50.00%"), "tooltip values and copied coordinate table use percentages");
         var pfPages = pages.Select(p => new WaferMapPage(p.WaferId, p.Dies.Select(d => new WaferDie
         {

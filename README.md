@@ -31,7 +31,9 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 
 ## V2.0.13 更新
 
-- SBIN / HBIN / P/F Map 新增累计视图：每个 Bin 一图，P/F 为 P、F 两图，每行 4 张。按各坐标实际有芯片的晶圆数计算占比，0% 浅灰，100% 沿用原 Bin / P/F 颜色；悬停显示命中数和分母。
+同版本修复：累计颜色整体加深；多字段 UUID 使用带转义的 `|` 保留字段边界，空白或缺失字段的 DUT 独立保留；CP 复测、设备索引、BIN / PF Map、累计图与报告均按 LOT 隔离，防止不同批次同片号 / 同坐标误合并。FT 整合 CSV 新增 UUID 编码版本，兼容读取旧文件；管理器旧统计需重新计算。
+
+- SBIN / HBIN / P/F Map 新增累计视图：每个 Bin 一图，P/F 为 P、F 两图，每行 4 张。按各坐标实际有芯片的晶圆数计算占比，0% 浅灰，100% 为原 Bin / P/F 同色系加深色，增强低占比的辨识度；悬停显示命中数和分母。
 - 累计图支持复制带坐标轴的百分比表格；后台累计、按可见行生成图形，切换测项 / 数据或关闭时取消过期任务。原单片、堆叠和热力图模式继续可用。
 
 ## V2.0.12 更新
@@ -203,3 +205,8 @@ Fail / 复测良品芯片 XLSX 的结构、冻结、交替配色、CP/FT 分组�
 Map 表格检查：`bash Tests/run-map-table-copy.sh` 验证坐标方向、空位、BIN/PF 值、重复坐标、边界与大晶圆。Windows 上运行 `pwsh Tests/run-clipboard-busy.ps1 -Assembly ./bin/Release/net8.0-windows/SemiconductorCsvAnalyzer.dll`，验证三类 Map 的实际剪贴板、晶圆切换、热力图 / 置灰显示，以及占用后重试。
 
 良品优先检查：`bash Tests/run-good-retest.sh` 验证 HBIN、CP/FT 身份、跨文件/月份、PartialPass、缓存与持久化；Windows 运行 `pwsh Tests/run-good-retest-ui.ps1` 验证实际勾选、重算、筛选和导出。`pwsh Tests/run-yield-multiselect.ps1` 同时验证三个打开入口的独立窗口生命周期。
+
+
+## 发布包约定
+
+后续 Release 同时提供两个 Windows x64 单 EXE ZIP：`*-self-contained.zip` 自带 .NET 运行时、无需另装框架；`*-framework-dependent.zip` 体积较小，需要 .NET 8 Desktop Runtime x64。两个 ZIP 内均只包含 `SemiconductorCsvAnalyzer.exe`，代码功能与版本一致。

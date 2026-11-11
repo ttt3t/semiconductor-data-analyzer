@@ -38,7 +38,7 @@ public partial class FtUuidWindow : Window
             }).ToArray(), token);
             if (_closed) return;
             DgPreview.ItemsSource = rows;
-            TxtNotice.Text = $"按 {reader.Recipe} 顺序拼接；预览 {rows.Length} 条。" +
+            TxtNotice.Text = $"按 {reader.Recipe} 顺序读取，字段间保留 | 分隔（字段内 | 和反斜杠会转义）；预览 {rows.Length} 条。" +
                 (reader.MissingTests.Length > 0 ? " 未找到 Test Num：" + string.Join(", ", reader.MissingTests) : "");
         }
         catch (OperationCanceledException) { }

@@ -7,7 +7,7 @@
     <DockPanel Margin="24">
         <StackPanel DockPanel.Dock="Top">
             <TextBlock Text="eFuse / OTP 芯片 UUID" FontSize="20" FontWeight="SemiBold" Margin="0,0,0,14"/>
-            <TextBlock Text="填写一个或多个 Test Num，按此顺序拼接读取值" Margin="0,0,0,8"/>
+            <TextBlock Text="填写一个或多个 Test Num，按此顺序读取；多个 UUID 字段用 | 分隔并转义" Margin="0,0,0,8"/>
             <Grid Margin="0,0,0,12"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <TextBox x:Name="TxtNumbers" Padding="8,6"/>
                 <Button x:Name="BtnPreview" Grid.Column="1" Content="预览" Click="Preview_Click" Style="{StaticResource WorkspaceButton}" Margin="10,0,0,0"/>

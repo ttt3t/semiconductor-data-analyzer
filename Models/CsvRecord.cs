@@ -18,6 +18,8 @@ public sealed class CsvRecord
     public bool IsFtIdentity { get; set; }
     public string? RetestUuid { get; set; }
     public string UuidTestNumbers { get; set; } = "";
+    // 0: legacy concatenation; 1: escaped, field-delimited UUID (single fields remain raw).
+    public int UuidEncoding { get; set; }
     public int? X { get; set; }
     public int? Y { get; set; }
     public string Site { get; set; } = "";

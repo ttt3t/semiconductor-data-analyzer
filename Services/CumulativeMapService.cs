@@ -24,7 +24,7 @@ public sealed class CumulativeMapData
         palette = new Brush[256];
         for (int i = 0; i < palette.Length; i++)
         {
-            double fraction = i / 255.0;
+            double fraction = Math.Sqrt(i / 255.0);
             byte Blend(byte start, byte end) => (byte)Math.Round(start + (end - start) * fraction);
             var brush = new SolidColorBrush(Color.FromRgb(Blend(229, color.R), Blend(231, color.G), Blend(235, color.B)));
             brush.Freeze(); palette[i] = brush;
@@ -57,7 +57,7 @@ public sealed class CumulativeMapCategory
             {
                 WaferId = $"全部 {Data.WaferCount} 片晶圆", X = position.X, Y = position.Y,
                 Category = Category, Value = percent, Unit = "%",
-                Color = palette[(int)Math.Round(255.0 * count / total)],
+                Color = palette[count == 0 ? 0 : Math.Max(1, (int)Math.Round(255.0 * count / total))],
                 AdditionalInfo = $"{Title}\nX：{position.X}    Y：{position.Y}\n命中 {count} / 有芯片 {total} 片\n该坐标占比：{percent:F2}%"
             });
         }
@@ -81,14 +81,18 @@ public static class CumulativeMapService
             if (categories.TryGetValue(category, out var existing)) return existing;
             string title = kind == MapTableKind.PassFail ? (category == "PASS" ? "P 累计" : "F 累计") :
                 $"{(kind == MapTableKind.SBin ? "SBIN" : "HBIN")} {category} 累计";
-            return categories[category] = new() { Data = data, Category = category, Title = title, Color = color };
+            var original = color is SolidColorBrush solid ? solid.Color : Colors.Gray;
+            var stronger = new SolidColorBrush(Color.FromRgb((byte)Math.Round(original.R * .72),
+                (byte)Math.Round(original.G * .72), (byte)Math.Round(original.B * .72)));
+            stronger.Freeze();
+            return categories[category] = new() { Data = data, Category = category, Title = title, Color = stronger };
         }
         if (kind == MapTableKind.PassFail)
         {
             Add("PASS", WaferMapWindow.ColorForCategory("PASS"));
             Add("FAIL", WaferMapWindow.ColorForCategory("FAIL"));
         }
-        foreach (var wafer in pages.GroupBy(p => p.WaferId, StringComparer.Ordinal))
+        foreach (var wafer in pages.GroupBy(p => (Lot: p.Lot.Trim(), p.WaferId)))
         {
             token.ThrowIfCancellationRequested();
             // A wafer contributes at most once per coordinate, even if input contains duplicate snapshots.

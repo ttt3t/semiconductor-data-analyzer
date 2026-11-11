@@ -56,8 +56,8 @@ public partial class WaferMapTile : UserControl
     {
         if (TileMap == null) return;
         var page = DisplayPage;
-        TitleText.Text = page?.WaferId ?? "";
-        TitleText.ToolTip = page?.WaferId;
+        TitleText.Text = page?.DisplayName ?? "";
+        TitleText.ToolTip = page?.DisplayName;
         YieldText.Text = !string.IsNullOrEmpty(page?.Summary) ? page.Summary : page?.PassCount is int good && page.Dies.Count > 0
             ? $"良率 {good * 100.0 / page.Dies.Count:F2}%" : "良率 —";
         YieldText.ToolTip = !string.IsNullOrEmpty(page?.SummaryDetails) ? page.SummaryDetails : page?.PassCount is int pass

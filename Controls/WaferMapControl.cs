@@ -83,7 +83,8 @@ public class WaferMapControl : FrameworkElement
     {
         static string Text(string text) => string.IsNullOrWhiteSpace(text) ? "-" : text.Length > 160 ? text[..160] + "…" : text;
         string value = die.Value.HasValue ? die.Value.Value.ToString("G10", CultureInfo.InvariantCulture) : Text(die.RawValue);
-        return $"Wafer：{Text(die.WaferId)}\nX：{die.X}    Y：{die.Y}\nSite：{Text(die.Site)}\n" +
+        return (die.Lot.Length > 0 ? $"LOT：{Text(die.Lot)}\n" : "") +
+            $"Wafer：{Text(die.WaferId)}\nX：{die.X}    Y：{die.Y}\nSite：{Text(die.Site)}\n" +
             $"序列号：{Text(die.SerialNumber)}\nSBIN：{Text(die.SBin)}    HBIN：{Text(die.HBin)}\n" +
             $"分类：{Text(die.Category)}\n" + (die.AdditionalInfo.Length > 0 ? die.AdditionalInfo : $"测量值：{value} {die.Unit}");
     }

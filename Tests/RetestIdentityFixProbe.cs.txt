@@ -1,0 +1,163 @@
+using System.Globalization;
+using System.IO;
+using System.Reflection;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static void Check(bool condition, string message)
+    { if (!condition) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
+    static TestItemData Item(string id, string number) => new() { Id = id, Name = number, DisplayName = number, TestNumber = number, LowLimit = 0, HighLimit = 10 };
+    static CsvRecord Row(string id, string? a, string? b, string lot = "L")
+    {
+        var row = new CsvRecord { Id = id, SerialNumber = "same", Lot = lot, WaferId = "W", X = 0, Y = 0, Site = "1", HBin = "1", SBin = "1" };
+        if (a != null) row.Measurements.Add("a", a);
+        if (b != null) row.Measurements.Add("b", b);
+        return row;
+    }
+    static void Uuids(string folder)
+    {
+        var items = new List<TestItemData> { Item("a", "101"), Item("b", "102") };
+        var config = new AnalyzerConfig { TestMode = TestAnalysisMode.FT, UuidTestNumbers = new() { "101", "102" } };
+        var reader = new RetestIdentityService.Reader(items, config);
+        Check(reader.Read(Row("a", "001", "1")) == "001|1" && reader.Read(Row("b", "00", "11")) == "00|11", "field boundaries distinguish 001 + 1 from 00 + 11");
+        Check(reader.Read(Row("a", "A|B", "C")) != reader.Read(Row("b", "A", "B|C")), "embedded delimiter cannot collide across fields");
+        Check(reader.Read(Row("a", "A\\", "B")) != reader.Read(Row("b", "A", "\\B")), "backslashes are escaped unambiguously");
+        Check(reader.Read(Row("blank-a", " ", "1")) == "" && reader.Read(Row("blank-b", "1", "")) == "" && reader.Read(Row("blank-c", null, "1")) == "", "any blank or missing UUID component invalidates the whole UUID");
+        Check(reader.Read(Row("invalid-a", StdfParser.NotApplicableValue, "1")) == "" && reader.Read(Row("invalid-b", "STDF_INVALID(TEST_FLG=0x02)", "1")) == "", "untested and invalid STDF UUID values do not create identities");
+        var cached = Row("cached", null, null); cached.UuidTestNumbers = "101,102"; cached.RetestUuid = "0011";
+        Check(reader.Read(cached) == "", "ambiguous legacy cached concatenation is never reused");
+        cached.RetestUuid = "001|1"; cached.UuidEncoding = RetestIdentityService.CurrentEncoding;
+        Check(reader.Read(cached) == "001|1", "verified encoded UUID survives a partial-measurement export");
+        cached.RetestUuid = "| "; Check(reader.Read(cached) == "", "blank cached UUID components remain invalid");
+
+        var rows = new List<CsvRecord> { Row("one", "001", "1"), Row("two", "00", "11"), Row("repeat", "001", "1"),
+            Row("blank1", " ", "1"), Row("blank2", " ", "1"), Row("escape1", "A|B", "C"), Row("escape2", "A", "B|C") };
+        var raw = DatasetService.Build(items, rows); using var rawLease = new DatasetLease(raw.Records);
+        var data = RetestIdentityService.Prepare(raw, config);
+        Check(RetestPreference.SelectWhole(data.Records, RetestMode.Last, config).Count == 6 && data.MissingUuidCount == 2,
+            "only real duplicate UUIDs merge, while blank UUID DUTs remain separate at identical coordinates");
+        var whitespace = new[] { Row("ws1", "1", "1"), Row("ws2", "1", "1") };
+        foreach (var row in whitespace) { row.IsFtIdentity = true; row.RetestUuid = "  "; }
+        Check(RetestPreference.SelectWhole(whitespace, RetestMode.Last, config).Count == 2, "whitespace-only UUID metadata never merges");
+        data.Records[0].Measurements = new();
+        string path = Path.Combine(folder, "uuid-v5.csv"); IntegratedCsvService.Save(path, data);
+        Check(File.ReadLines(path).First() == "#CSVAnalyzerIntegrated,5", "integrated CSV explicitly records UUID encoding version");
+        var reopened = DataFileService.Parse(path, config); using var reopenedLease = new DatasetLease(reopened.Records);
+        Check(reopened.Records[0].RetestUuid == "001|1" && reopened.Records[1].RetestUuid == "00|11" && reopened.Records.All(r => r.UuidEncoding == 1),
+            "CSV round-trip preserves field boundaries, leading zeroes and safe cached UUIDs");
+        Check(RetestPreference.SelectWhole(reopened.Records, RetestMode.Last, config).Count == 6, "CSV reopening preserves unique DUT count and missing UUID separation");
+        var cpView = RetestIdentityService.Prepare(reopened, new AnalyzerConfig());
+        var ftAgain = RetestIdentityService.Prepare(cpView, config);
+        Check(ftAgain.Records[0].RetestUuid == "001|1", "CP/FT switching retains UUID encoding for partial records");
+
+        var parser = typeof(CsvParser).GetMethod("ParseLine", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+        var legacyRows = File.ReadAllLines(path).Select(line => ((string[])parser.Invoke(null, new object[] { line, ',', true })!).ToList()).ToList();
+        legacyRows[0] = new() { "#CSVAnalyzerIntegrated", "4" };
+        for (int i = 1; i < legacyRows.Count; i++) legacyRows[i].RemoveAt(17);
+        legacyRows[9][15] = "0011";
+        string legacyPath = Path.Combine(folder, "uuid-legacy.csv");
+        string Escape(string text) => "\"" + text.Replace("\"", "\"\"") + "\"";
+        File.WriteAllLines(legacyPath, legacyRows.Select((r, index) => index == 0 ? string.Join(",", r) : string.Join(",", r.Select(Escape))));
+        var legacy = DataFileService.Parse(legacyPath, config); using var legacyLease = new DatasetLease(legacy.Records);
+        Check(legacy.Records[0].RetestUuid == "" && legacy.Records[1].RetestUuid == "00|11", "legacy CSV rebuilds from raw fields; missing raw fields stay independent");
+
+        var stage = new ProductTestStage { Id = "FT", Kind = "FT", Name = "FT" };
+        var product = new ManagedProduct { Name = "UUID boundaries", ConfigText = ConfigLoader.Serialize(config), UuidTestNumbers = "101,102", Flow = new() { stage },
+            Files = new() { new ManagedDataFile { Id = "input", FilePath = path, StageId = stage.Id, Lot = "L" } } };
+        var snapshot = ProductYieldService.Calculate(product);
+        Check(snapshot.FailedFiles == 0 && snapshot.Yields.Single(r => !r.IsCombined).Total == 6, "manager uses the same UUID field boundaries and blank-ID separation");
+    }
+
+    static void Lots(string folder)
+    {
+        var item = Item("a", "201");
+        var rows = new List<CsvRecord> { Row("a-first", "20", null, "A"), Row("b-first", "30", null, "B"), Row("a-last", "2", null, "A") };
+        rows[0].HBin = rows[0].SBin = "2"; rows[1].HBin = rows[1].SBin = "2";
+        var data = DatasetService.Build(new() { item }, rows); using var lease = new DatasetLease(data.Records);
+        var config = new AnalyzerConfig();
+        Check(data.Devices.Count == 2 && data.Devices.Select(d => d.Lot).Distinct().Count() == 2, "device index separates the same wafer/XY across LOTs");
+        Check(DatasetService.SelectRetestRecords(rows, RetestMode.Last).Select(r => r.Id).SequenceEqual(new[] { "b-first", "a-last" }), "last-test merge is scoped to LOT + wafer + XY");
+        Check(DatasetService.SelectRetestRecords(rows, RetestMode.OnlyRetests).Select(r => r.Id).SequenceEqual(new[] { "a-last" }), "only-retests excludes the other LOT's first test");
+        var preferred = RetestPreference.SelectWhole(rows, RetestMode.Last, new AnalyzerConfig { PreferGoodRetest = true });
+        Check(preferred.Count == 2 && preferred.Any(r => r.Lot == "B"), "good-priority selection cannot borrow another LOT's good die");
+        Check(BinStatisticsService.Build(rows, RetestMode.Last, config).ChipCount == 2 && SimulationSnapshot.Build(data, config, RetestMode.Last, default).Count == 2,
+            "BIN and joint-yield statistics use LOT-scoped identity");
+        var filtered = SampleFilterService.Apply(data, new[] { new SampleRange("a", null, 10) }, RetestMode.Last, SampleMatchMode.Intersection, config);
+        Check(filtered.Records.Count == 2 && filtered.Records.All(r => r.Lot == "A"), "sample filtering does not pull in the other LOT");
+        foreach (bool soft in new[] { true, false })
+        {
+            var pages = MapDataService.BinPages(data, soft, config);
+            Check(pages.Count == 2 && pages.All(p => p.Dies.Count == 1) && pages.Select(p => p.DisplayName).Distinct().Count() == 2,
+                "BIN maps split and label duplicate wafer numbers by LOT");
+            var cumulative = CumulativeMapService.Build(pages, soft ? MapTableKind.SBin : MapTableKind.HBin);
+            Check(cumulative.WaferCount == 2 && cumulative.TotalAt(0, 0) == 2 && cumulative.Categories.Single(c => c.Category == "2").ProbabilityAt(0, 0) == .5,
+                "cumulative map counts equal wafer names in different LOTs as two wafers");
+        }
+        var pf = MapDataService.PfPages(data, item, null, config);
+        Check(pf.Count == 2 && pf.Single(p => p.Lot == "A").Dies[0].Category == "PASS" && pf.Single(p => p.Lot == "B").Dies[0].Category == "FAIL",
+            "PF map preserves each LOT's independent latest result");
+        var waferStats = WaferStatisticsService.Build(rows, RetestMode.Last, config);
+        Check(waferStats.Wafers.Count == 2 && waferStats.ChipCounts.SequenceEqual(new[] { 1, 1 }), "wafer statistics keep separate columns for duplicate names across LOTs");
+        string path = Path.Combine(folder, "lots.csv"); IntegratedCsvService.Save(path, data);
+        var loaded = DataFileService.Parse(path, config); using var loadedLease = new DatasetLease(loaded.Records);
+        Check(loaded.Devices.Count == 2 && DatasetService.SelectRetests(loaded, RetestMode.Last).Records.Count == 2, "CP CSV round-trip preserves LOT separation");
+        var snRows = new[] { Row("sn-a", "1", null, "A"), Row("sn-b", "1", null, "B") };
+        foreach (var row in snRows) row.X = row.Y = null;
+        Check(RetestPreference.SelectWhole(snRows, RetestMode.Last, config).Count == 2, "SN fallback is also scoped to LOT");
+    }
+
+    static void Colors()
+    {
+        var pale = new SolidColorBrush(Color.FromRgb(240, 180, 200)); pale.Freeze();
+        var pages = Enumerable.Range(0, 10).Select(i => new WaferMapPage("W" + i, new[]
+        {
+            new WaferDie { X = 0, Y = 0, Category = i < 2 ? "2" : "1", Color = i < 2 ? pale : Brushes.Green },
+            new WaferDie { X = 1, Y = 0, Category = "2", Color = pale },
+            new WaferDie { X = 2, Y = 0, Category = "1", Color = Brushes.Green }
+        })).ToArray();
+        var category = CumulativeMapService.Build(pages, MapTableKind.SBin).Categories.Single(c => c.Category == "2");
+        var dies = category.CreatePage().Dies;
+        var at20 = ((SolidColorBrush)dies.Single(d => d.X == 0).Color).Color;
+        double Light(Color color) => .2126 * color.R + .7152 * color.G + .0722 * color.B;
+        var old20 = Color.FromRgb((byte)Math.Round(229 + (240 - 229) * .2), (byte)Math.Round(231 + (180 - 231) * .2), (byte)Math.Round(235 + (200 - 235) * .2));
+        Check(Light(at20) < Light(old20) && dies.Single(d => d.X == 0).Value == 20, "low probabilities are visibly darker without changing percentages");
+        Check(Light(((SolidColorBrush)dies.Single(d => d.X == 1).Color).Color) < Light(pale.Color) && pale.Color == Color.FromRgb(240, 180, 200), "100% is darker while original BIN palette remains unchanged");
+        Check(((SolidColorBrush)dies.Single(d => d.X == 2).Color).Color == Color.FromRgb(229, 231, 235), "0% stays light gray");
+    }
+    static void RunScopes()
+    {
+        var rows = new List<CsvRecord> { Row("run-a-first", "1", null, "A"), Row("run-b", "2", null, "B"), Row("run-a-last", "3", null, "A") };
+        var data = DatasetService.Build(new() { Item("a", "201") }, rows); using var lease = new DatasetLease(data.Records);
+        var window = new MainWindow();
+        var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        typeof(MainWindow).GetField("_data", flags)!.SetValue(window, data);
+        typeof(MainWindow).GetField("_runSelectionMode", flags)!.SetValue(window, RunSelectionMode.WaferCoordinates);
+        typeof(MainWindow).GetMethod("InitializeRun", flags)!.Invoke(window, new object[] { true });
+        int Index() => (int)typeof(MainWindow).GetField("_runIndex", flags)!.GetValue(window)!;
+        Check(Index() == 2 && ((TextBox)window.FindName("RunWaferTextBox")).Text == "A / W", "Run initialization selects the current LOT's latest XY and disambiguates its wafer label");
+        bool changed = (bool)typeof(MainWindow).GetMethod("SelectRunWafer", flags)!.Invoke(window, new object[] { "B / W" })!;
+        Check(changed && Index() == 1, "Run wafer selection switches to the explicitly chosen LOT");
+        bool located = (bool)typeof(MainWindow).GetMethod("CommitCoordinateRunText", flags)!.Invoke(window, null)!;
+        Check(located && Index() == 1 && !((Button)window.FindName("NextCoordinateRunButton")).IsEnabled, "Run coordinate lookup and record navigation stay within the LOT");
+        window.Close();
+    }
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
+            var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            string folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            Uuids(folder); Lots(folder); Colors(); RunScopes();
+            Console.WriteLine($"Retest identity and cumulative-color checks passed: {checks}"); app.Shutdown(); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

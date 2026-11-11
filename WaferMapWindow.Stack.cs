@@ -53,7 +53,7 @@ public partial class WaferMapWindow
         StackRows.Visibility = stacked ? Visibility.Visible : Visibility.Collapsed;
         CumulativeRows.Visibility = IsCumulative ? Visibility.Visible : Visibility.Collapsed;
         StackHint.Visibility = multiple ? Visibility.Visible : Visibility.Collapsed;
-        StackHint.Text = IsCumulative ? "0% 浅灰，100% 原色；悬停查看次数，单击选择复制" :
+        StackHint.Text = IsCumulative ? "0% 浅灰，100% 深色；悬停查看次数，单击选择复制" :
             _isBinMap ? "图例汇总全部晶圆，双击进入单片" : "单击晶圆查看图例，双击进入单片";
         WaferSidebar.Visibility = multiple ? Visibility.Collapsed : Visibility.Visible;
         WaferSidebarColumn.Width = new GridLength(multiple ? 0 : 140);
@@ -63,7 +63,7 @@ public partial class WaferMapWindow
             "复制当前晶圆的坐标表格，可粘贴到 Excel；SBIN/HBIN 填编号，P/F 填 P 或 F，无效测量填 E，空坐标留空";
         if (stacked && WaferList.SelectedItem is WaferMapPage selected)
             for (int i = 0; i < _stackPages.Count; i++)
-                if (_stackPages[i].WaferId == selected.WaferId) { StackRows.ScrollIntoView(StackRows.Items[i / 4]); break; }
+                if (ReferenceEquals(_stackPages[i], selected)) { StackRows.ScrollIntoView(StackRows.Items[i / 4]); break; }
         RefreshLegend();
         MapMode_Changed(this, new RoutedEventArgs());
     }
@@ -75,7 +75,7 @@ public partial class WaferMapWindow
     private void StackTile_Selected(object sender, MouseButtonEventArgs e)
     {
         if (sender is not WaferMapTile { Page: { } page }) return;
-        SelectWafer(page.WaferId);
+        WaferList.SelectedItem = page;
         if (e.ClickCount == 2) ChkStacked.IsChecked = false;
         e.Handled = true;
     }
@@ -88,7 +88,7 @@ public partial class WaferMapWindow
     {
         tile.SetOptions(new(HeatMode.IsChecked == true && _heatmapScale != null, _heatmapScale,
             Map.DimmedCategories, _isBinMap && ChkBinNumbers.IsChecked == true, ChkSiteBorders.IsChecked == true),
-            tile.Page?.WaferId == (WaferList.SelectedItem as WaferMapPage)?.WaferId);
+            ReferenceEquals(tile.Page, WaferList.SelectedItem));
     }
     private static IEnumerable<T> VisualChildren<T>(DependencyObject root) where T : DependencyObject
     {
