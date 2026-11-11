@@ -1,6 +1,6 @@
 # Semiconductor Data Analyzer
 
-**CSV Analyzer V2.0.12 · GYF**
+**CSV Analyzer V2.0.13 · GYF**
 
 A Windows desktop application for semiconductor CSV / STDF test-data analysis, built with .NET 8 and WPF.
 
@@ -28,6 +28,11 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 - 良率明细“打开所在位置”按目录去重，每次最多请求 5 个窗口，超出部分在状态栏提示；文件存在性检查在后台进行，可取消。
 
 只启动独立分析器可使用 `SemiconductorCsvAnalyzer.exe --analyzer`。详细口径见 [使用手册](Docs/UserGuide.md)。
+
+## V2.0.13 更新
+
+- SBIN / HBIN / P/F Map 新增累计视图：每个 Bin 一图，P/F 为 P、F 两图，每行 4 张。按各坐标实际有芯片的晶圆数计算占比，0% 浅灰，100% 沿用原 Bin / P/F 颜色；悬停显示命中数和分母。
+- 累计图支持复制带坐标轴的百分比表格；后台累计、按可见行生成图形，切换测项 / 数据或关闭时取消过期任务。原单片、堆叠和热力图模式继续可用。
 
 ## V2.0.12 更新
 

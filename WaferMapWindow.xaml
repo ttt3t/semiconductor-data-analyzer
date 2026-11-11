@@ -63,6 +63,24 @@
                       </ItemsControl>
                   </DataTemplate></ListBox.ItemTemplate>
               </ListBox>
+              <ListBox x:Name="CumulativeRows" Visibility="Collapsed" BorderThickness="0" Background="White"
+                       ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                       ScrollViewer.CanContentScroll="True" VirtualizingPanel.IsVirtualizing="True"
+                       VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel" VirtualizingPanel.CacheLength="0">
+                  <ListBox.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
+                  <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem">
+                      <Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="0"/>
+                      <Setter Property="Margin" Value="0"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Focusable" Value="False"/>
+                  </Style></ListBox.ItemContainerStyle>
+                  <ListBox.ItemTemplate><DataTemplate>
+                      <ItemsControl ItemsSource="{Binding}">
+                          <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="4"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                          <ItemsControl.ItemTemplate><DataTemplate>
+                              <controls:WaferMapTile CumulativeSource="{Binding}" Loaded="CumulativeTile_Loaded" MouseLeftButtonUp="CumulativeTile_Selected"/>
+                          </DataTemplate></ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                  </DataTemplate></ListBox.ItemTemplate>
+              </ListBox>
             </Grid>
         </Border>
 
@@ -71,6 +89,7 @@
             <StackPanel Grid.Row="0">
                 <TextBlock x:Name="TxtTitle" FontWeight="Bold" FontSize="14" Margin="0,0,0,8" TextWrapping="Wrap"/>
                 <CheckBox x:Name="ChkStacked" Content="堆叠视图（每行 4 片）" Checked="StackMode_Changed" Unchecked="StackMode_Changed" Margin="0,0,0,6"/>
+                <CheckBox x:Name="ChkCumulative" Content="累计视图（每 Bin 一图）" Checked="CumulativeMode_Changed" Unchecked="CumulativeMode_Changed" Margin="0,0,0,6"/>
                 <TextBlock x:Name="StackHint" Text="单击晶圆查看图例，双击进入单片" Foreground="#64748B" FontSize="10" Visibility="Collapsed" Margin="0,0,0,6"/>
             </StackPanel>
 

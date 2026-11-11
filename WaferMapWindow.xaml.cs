@@ -57,6 +57,7 @@ public partial class WaferMapWindow : Window
         _isBinMap = binName != null;
         _mapTableKind = binName == null ? MapTableKind.PassFail :
             binName.Equals("HBIN", StringComparison.OrdinalIgnoreCase) ? MapTableKind.HBin : MapTableKind.SBin;
+        if (!_isBinMap) ChkCumulative.Content = "累计视图（P / F）";
         if (binName != null)
         {
             BinVisibilityColumn.Visibility = Visibility.Visible;
@@ -72,6 +73,7 @@ public partial class WaferMapWindow : Window
             HoverInfo.Visibility = Visibility.Collapsed;
             HoverText.Text = "";
             _ready = false;
+            ResetCumulativeData();
             BtnCopyMapTable.IsEnabled = false;
             Map.Dies = null;
             WaferList.ItemsSource = null;
@@ -193,6 +195,7 @@ public partial class WaferMapWindow : Window
 
     private void RefreshLegend()
     {
+        if (_ready && IsCumulative) { RefreshCumulativeLegend(); return; }
         if (!_ready || WaferList.SelectedItem is not WaferMapPage page) return;
         bool stackedBins = _isBinMap && ChkStacked.IsChecked == true;
         TxtMapInfo.Text = stackedBins
@@ -260,6 +263,7 @@ public partial class WaferMapWindow : Window
         // Replace a small set once per click, rather than copying dies or rebuilding the wafer.
         Map.DimmedCategories = _dimmedBins.Count == 0 ? null : new HashSet<string>(_dimmedBins, StringComparer.Ordinal);
         RefreshVisibleStackTiles();
+        RefreshVisibleCumulativeTiles();
     }
 
     private void HeatRangeMode_Changed(object sender, RoutedEventArgs e)
@@ -316,6 +320,16 @@ public partial class WaferMapWindow : Window
     private void MapMode_Changed(object sender, RoutedEventArgs e)
     {
         if (Map == null || HeatLegend == null || DgLegend == null) return;
+        if (IsCumulative)
+        {
+            _heatDies = null; Map.Dies = null;
+            ModePanel.Visibility = HeatLegend.Visibility = Visibility.Collapsed;
+            DgLegend.Visibility = Visibility.Visible;
+            StartCumulativeBuild(); RefreshVisibleCumulativeTiles();
+            return;
+        }
+        ModePanel.Visibility = (WaferList.SelectedItem as WaferMapPage)?.AllowHeatmap == true ? Visibility.Visible : Visibility.Collapsed;
+        BtnCopyMapTable.IsEnabled = _ready && _pfDies.Count > 0;
         bool heat = HeatMode.IsChecked == true && _heatmapScale != null;
         bool stacked = ChkStacked.IsChecked == true;
         if (stacked) _heatDies = null;
@@ -334,7 +348,7 @@ public partial class WaferMapWindow : Window
 
     private void BtnCopyLegend_Click(object sender, RoutedEventArgs e)
     {
-        if (HeatMode.IsChecked == true && _heatmapScale != null)
+        if (!IsCumulative && HeatMode.IsChecked == true && _heatmapScale != null)
         {
             CopyLegendText("热力图色标\n" + HeatRangeText());
             return;
@@ -360,6 +374,17 @@ public partial class WaferMapWindow : Window
 
     private void BtnCopyMapTable_Click(object sender, RoutedEventArgs e)
     {
+        if (IsCumulative)
+        {
+            if (_selectedCumulative == null) { TxtCopyStatus.Text = "没有可复制的累计数据"; return; }
+            try
+            {
+                var table = _selectedCumulative.CopyTable();
+                CopyText(table.Text, $"已复制 {_selectedCumulative.Title} 的逐坐标占比表格（{table.Columns}×{table.Rows}）");
+            }
+            catch (InvalidOperationException ex) { TxtCopyStatus.Text = ex.Message; }
+            return;
+        }
         if (!_ready || WaferList.SelectedItem is not WaferMapPage page || _pfDies.Count == 0)
         { TxtCopyStatus.Text = "没有可复制的 Map 数据"; return; }
         try

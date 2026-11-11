@@ -1,0 +1,163 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Reflection;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Controls;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static void Check(bool condition, string message)
+    { if (!condition) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
+    static void Pump()
+    {
+        var frame = new DispatcherFrame();
+        Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => frame.Continue = false));
+        Dispatcher.PushFrame(frame);
+    }
+    static void Loaded(WaferMapWindow window)
+    {
+        var timer = Stopwatch.StartNew();
+        while (!window.CumulativeLoading.IsCompleted && timer.Elapsed < TimeSpan.FromSeconds(20)) { Pump(); Thread.Sleep(5); }
+        Check(window.CumulativeLoading.IsCompleted, "background cumulative calculation completes");
+        window.CumulativeLoading.GetAwaiter().GetResult(); window.UpdateLayout(); Pump(); window.UpdateLayout();
+    }
+    static IEnumerable<T> Children<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T item) yield return item;
+            foreach (var nested in Children<T>(child)) yield return nested;
+        }
+    }
+    static List<WaferMapPage> CountsFixture()
+    {
+        var colors = BinPalette.Create(new[] { "1", "2", "9" });
+        var pages = new List<WaferMapPage>();
+        for (int i = 0; i < 10; i++)
+        {
+            string wafer = "W" + i;
+            WaferDie Die(int x, int y, string bin) => new() { WaferId = wafer, X = x, Y = y, Category = bin, Color = colors[bin] };
+            var dies = new List<WaferDie> { Die(0, 0, "2"), Die(2, 0, "1") };
+            if (i < 8) dies.Add(Die(1, 0, i < 4 ? "2" : "1"));
+            if (i == 0) { dies.Insert(0, Die(1, 0, "1")); }
+            if (i == 9) dies.Add(Die(-2, 3, "9"));
+            pages.Add(new(wafer, dies));
+        }
+        return pages;
+    }
+    static void CheckCounts()
+    {
+        var pages = CountsFixture();
+        var data = CumulativeMapService.Build(pages.Concat(new[] { pages[0] }).ToArray(), MapTableKind.SBin);
+        var bin = data.Categories.Single(c => c.Category == "2");
+        Check(data.WaferCount == 10 && data.ObservationCount == 29 && data.CoordinateCount == 4, "one contribution per wafer/coordinate, including repeated snapshots");
+        Check(bin.CountAt(0, 0) == 10 && bin.ProbabilityAt(0, 0) == 1, "all ten wafers at BIN 2 yield 100%");
+        Check(data.TotalAt(1, 0) == 8 && bin.CountAt(1, 0) == 4 && bin.ProbabilityAt(1, 0) == .5, "four of eight present wafers yield 50%, absent wafers excluded");
+        Check(bin.ProbabilityAt(2, 0) == 0 && data.Categories.Any(c => c.Category == "9"), "zero probability and bins absent from the first wafer remain available");
+        var map = bin.CreatePage();
+        Check(((SolidColorBrush)map.Dies.Single(d => d.X == 2).Color).Color == Color.FromRgb(229, 231, 235), "zero probability is light gray");
+        Check(((SolidColorBrush)map.Dies.Single(d => d.X == 0).Color).Color == ((SolidColorBrush)bin.Color).Color, "100% uses the original BIN palette color");
+        Check(map.Dies.Single(d => d.X == 1).Value == 50 && bin.CopyTable().Text.Contains("50.00%"), "tooltip values and copied coordinate table use percentages");
+        var pfPages = pages.Select(p => new WaferMapPage(p.WaferId, p.Dies.Select(d => new WaferDie
+        {
+            X = d.X, Y = d.Y, Category = d.Category == "2" ? "FAIL" : d.Category == "1" ? "PASS" : "Eorr",
+            Color = WaferMapWindow.ColorForCategory(d.Category == "2" ? "FAIL" : d.Category == "1" ? "PASS" : "Eorr")
+        }).ToList())).ToArray();
+        var pf = CumulativeMapService.Build(pfPages, MapTableKind.PassFail);
+        Check(pf.Categories.Select(c => c.Category).SequenceEqual(new[] { "PASS", "FAIL" }), "PF always produces P and F maps");
+        Check(pf.Categories[0].ProbabilityAt(2, 0) == 1 && pf.Categories[1].ProbabilityAt(1, 0) == .5, "P and F counts share the coordinate-specific denominator");
+        Check(pf.TotalAt(-2, 3) == 1 && pf.UnclassifiedCount == 1 && pf.Categories.All(c => c.CountAt(-2, 3) == 0), "invalid measurements remain in denominator without becoming pass or fail");
+        using var cancel = new CancellationTokenSource(); cancel.Cancel();
+        bool cancelled = false;
+        try { CumulativeMapService.Build(pages, MapTableKind.HBin, cancel.Token); } catch (OperationCanceledException) { cancelled = true; }
+        Check(cancelled && CumulativeMapService.Build(Array.Empty<WaferMapPage>(), MapTableKind.SBin).Categories.Count == 0, "cancellation and empty populations handled");
+    }
+    static List<WaferMapPage> VisualFixture(int bins)
+    {
+        var colors = BinPalette.Create(Enumerable.Range(1, bins).Select(i => i.ToString()));
+        return Enumerable.Range(0, 10).Select(w => new WaferMapPage($"W{w + 1:00}",
+            (from y in Enumerable.Range(-7, 15) from x in Enumerable.Range(-7, 15)
+             where x * x + y * y <= 49 && !(x > 4 && w >= 8)
+             let bin = (1 + Math.Abs(x * 3 + y + w) % bins).ToString()
+             select new WaferDie { WaferId = $"W{w + 1:00}", X = x, Y = y, Category = bin, Color = colors[bin] }).ToList())).ToList();
+    }
+    static void Save(Window window, string folder, string name)
+    {
+        window.UpdateLayout(); Pump();
+        var content = (FrameworkElement)window.Content;
+        using var png = ChartImage.Png(ChartImage.Capture(content, ChartImage.SizeOf(content)));
+        File.WriteAllBytes(Path.Combine(folder, name), png.ToArray());
+    }
+    static void CheckWindow(string folder, string kind)
+    {
+        var window = new WaferMapWindow(kind + " 累计视图（模拟数据）", VisualFixture(5), kind) { Width = 1400, Height = 900 };
+        window.Show(); Pump();
+        var cumulative = (CheckBox)window.FindName("ChkCumulative");
+        cumulative.IsChecked = true; Loaded(window);
+        var rows = (ListBox)window.FindName("CumulativeRows");
+        Check(rows.Items.Count == 2 && ((DataGrid)window.FindName("DgLegend")).Items.Count == 5, kind + ": five BIN maps and complete legend");
+        var tiles = Children<WaferMapTile>(rows).ToArray();
+        var positions = tiles.Take(4).Select(t => t.TransformToAncestor(rows).Transform(default(Point))).ToArray();
+        Check(positions.Length == 4 && positions.All(p => Math.Abs(p.Y - positions[0].Y) < 2) && positions.Zip(positions.Skip(1)).All(p => p.First.X < p.Second.X), kind + ": four tiles per row");
+        Check(!((CheckBox)window.FindName("ChkSiteBorders")).IsEnabled && tiles.All(t => t.DisplayPage?.Summary.Length > 0), "cumulative headers show proportions rather than wafer yield");
+        Save(window, folder, kind + "-cumulative.png");
+        var legend = ((DataGrid)window.FindName("DgLegend")).Items.OfType<WaferMapWindow.LegendRow>().Single(r => r.Category == "2");
+        legend.IsDisplayed = false;
+        Check(tiles.All(t => ((WaferMapControl)t.FindName("TileMap")).DimmedCategories?.Contains("2") == true), "legend dimming reaches all cumulative tiles");
+        cumulative.IsChecked = false; Pump(); window.UpdateLayout(); Pump();
+        Check(rows.ItemsSource == null && tiles.All(t => t.DisplayPage == null), "leaving cumulative mode releases dense tile snapshots");
+        cumulative.IsChecked = true; Loaded(window);
+        Check(rows.Items.Count == 2, "cached sparse counts restore cumulative view");
+        ((CheckBox)window.FindName("ChkStacked")).IsChecked = true; Pump();
+        Check(cumulative.IsChecked == false && rows.ItemsSource == null, "stacked and cumulative modes are mutually exclusive");
+        window.SetPages(VisualFixture(23)); cumulative.IsChecked = true; Loaded(window);
+        var realized = Children<WaferMapTile>(rows).ToArray();
+        Check(realized.Length >= 4 && realized.Length < 23, "only visible category rows materialize maps");
+        Children<ScrollViewer>(rows).First().ScrollToEnd(); window.UpdateLayout(); Pump(); window.UpdateLayout();
+        Check(Children<WaferMapTile>(rows).Any(t => t.CumulativeSource?.Category == "23"), "last cumulative category remains reachable by scrolling");
+        window.SetPages(VisualFixture(5).Take(1).ToList()); Loaded(window);
+        Check(((TextBlock)window.FindName("TxtMapInfo")).Text.Contains("1 片"), "changing source pages invalidates cumulative counts");
+        window.SetPages(VisualFixture(23)); var loading = window.CumulativeLoading;
+        window.Close();
+        var timer = Stopwatch.StartNew();
+        while (!loading.IsCompleted && timer.Elapsed < TimeSpan.FromSeconds(10)) { Pump(); Thread.Sleep(5); }
+        Check(loading.IsCompleted && rows.ItemsSource == null, "closing cancels outstanding work and clears cumulative rows");
+    }
+    static void CheckPfWindow(string folder)
+    {
+        var pfPages = VisualFixture(3).Select(p => new WaferMapPage(p.WaferId, p.Dies.Select(d => new WaferDie
+        { X = d.X, Y = d.Y, Category = d.Category == "1" ? "FAIL" : "PASS", Value = d.X + d.Y,
+            Color = WaferMapWindow.ColorForCategory(d.Category == "1" ? "FAIL" : "PASS") }).ToList(),
+            HeatmapScale.Create(new[] { -10.0, 0, 10 }), "V", true)).ToArray();
+        var window = new WaferMapWindow("P/F 累计视图（模拟数据）", pfPages) { Width = 1400, Height = 900 };
+        window.Show(); ((RadioButton)window.FindName("HeatMode")).IsChecked = true; Pump();
+        var checkbox = (CheckBox)window.FindName("ChkCumulative"); checkbox.IsChecked = true; Loaded(window);
+        Check(Children<WaferMapTile>((ListBox)window.FindName("CumulativeRows")).Count() == 2 && ((FrameworkElement)window.FindName("HeatLegend")).Visibility == Visibility.Collapsed, "PF produces two probability maps while measurement heat scale is hidden");
+        Save(window, folder, "PF-cumulative.png"); checkbox.IsChecked = false; Pump();
+        Check(((FrameworkElement)window.FindName("HeatLegend")).Visibility == Visibility.Visible, "original measurement heatmap restores after cumulative mode");
+        window.Close();
+    }
+    [STAThread] static int Main(string[] args)
+    {
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
+            var folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
+            CheckCounts(); CheckWindow(folder, "SBIN"); CheckWindow(folder, "HBIN"); CheckPfWindow(folder);
+            Console.WriteLine($"Cumulative-map checks passed: {checks}. Screenshots use simulated data."); app.Shutdown(); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}
