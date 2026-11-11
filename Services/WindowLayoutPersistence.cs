@@ -53,6 +53,7 @@ public sealed class WindowLayoutPersistence
 
     public void TrackTable(string key, DataGrid grid)
     {
+        TriStateGridSorting.Attach(grid);
         _tables.Add((key, grid));
         var saved = _saved?.Tables?.GetValueOrDefault(key);
         _sorts[grid] = saved?.Sorts?.Where(s => s != null &&
@@ -76,18 +77,15 @@ public sealed class WindowLayoutPersistence
                 if (!_closed) RestoreSorts(grid);
             }));
         });
-        DataGridSortingEventHandler sorting = (_, _) =>
+        RoutedEventHandler sorting = (_, _) =>
         {
-            grid.Dispatcher.BeginInvoke(DispatcherPriority.DataBind, new Action(() =>
-            {
-                if (_closed || _restoring) return;
-                _sorts[grid] = grid.Items.SortDescriptions.Select(s => new SortLayout
-                { Property = s.PropertyName, Direction = s.Direction }).ToList();
-                ScheduleSave();
-            }));
+            if (_closed || _restoring) return;
+            _sorts[grid] = grid.Items.SortDescriptions.Select(s => new SortLayout
+            { Property = s.PropertyName, Direction = s.Direction }).ToList();
+            ScheduleSave();
         };
-        grid.Sorting += sorting;
-        _detach.Add(() => grid.Sorting -= sorting);
+        grid.AddHandler(TriStateGridSorting.SortChangedEvent, sorting);
+        _detach.Add(() => grid.RemoveHandler(TriStateGridSorting.SortChangedEvent, sorting));
     }
 
     public void TrackColumns(string key, ColumnDefinition first, ColumnDefinition second)
@@ -167,7 +165,7 @@ public sealed class WindowLayoutPersistence
                 }
             }
         }
-        finally { _restoring = false; }
+        finally { _restoring = false; TriStateGridSorting.UpdateDescription(grid); }
     }
 
     private void Watch(DependencyObject source, DependencyProperty property, Action action)
