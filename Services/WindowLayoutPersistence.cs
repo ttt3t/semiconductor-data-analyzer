@@ -165,7 +165,7 @@ public sealed class WindowLayoutPersistence
                 }
             }
         }
-        finally { _restoring = false; TriStateGridSorting.UpdateDescription(grid); }
+        finally { _restoring = false; TriStateGridSorting.UpdateIndicators(grid); }
     }
 
     private void Watch(DependencyObject source, DependencyProperty property, Action action)
