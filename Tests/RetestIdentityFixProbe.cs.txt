@@ -145,7 +145,7 @@ static class Probe
         bool changed = (bool)typeof(MainWindow).GetMethod("SelectRunWafer", flags)!.Invoke(window, new object[] { "B / W" })!;
         Check(changed && Index() == 1, "Run wafer selection switches to the explicitly chosen LOT");
         bool located = (bool)typeof(MainWindow).GetMethod("CommitCoordinateRunText", flags)!.Invoke(window, null)!;
-        Check(located && Index() == 1 && !((Button)window.FindName("NextCoordinateRunButton")).IsEnabled, "Run coordinate lookup and record navigation stay within the LOT");
+        Check(located && Index() == 1 && !((FrameworkElement)window.FindName("NextCoordinateRunButton")).IsEnabled, "Run coordinate lookup and record navigation stay within the LOT");
         window.Close();
     }
     [STAThread] static int Main(string[] args)
