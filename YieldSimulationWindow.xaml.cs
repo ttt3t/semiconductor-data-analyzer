@@ -37,6 +37,8 @@ public partial class YieldSimulationWindow : Window
         Map.HoverChanged += Map_Hover;
         Loaded += OnLoaded;
         Closed += OnClosed;
+        var lease = new DatasetLease(data.Records);
+        Closed += (_, _) => lease.Dispose();
     }
     private async void OnLoaded(object sender, RoutedEventArgs e)
     { if (_ready) return; _ready = true; await PrepareAsync(); }

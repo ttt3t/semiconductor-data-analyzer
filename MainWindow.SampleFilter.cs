@@ -12,18 +12,30 @@ public partial class MainWindow
     private Models.RetestMode _scopeMode;
     private string _scopeRetestDefinition = "";
     private SampleMatchMode _sampleMatch, _scopeMatch;
-    private SampleFilterWindow? _sampleFilterWindow;
     private HashSet<string>? _sampleIncludedIds;
     private CsvParseResult ActiveData => _scopeData ?? _data;
 
     private void SampleFilter_Click(object sender, RoutedEventArgs e)
     {
         if (_isBusy || _data.Records.Count == 0) return;
-        if (_sampleFilterWindow != null) { _sampleFilterWindow.Activate(); return; }
-        _sampleFilterWindow = new SampleFilterWindow(_data.Items, _sampleRanges, _retestMode,
-            _sampleMatch, ApplySampleFiltersAsync) { Owner = this };
-        _sampleFilterWindow.Closed += (_, _) => _sampleFilterWindow = null;
-        _sampleFilterWindow.Show();
+        var source = _data;
+        var mode = _retestMode;
+        var config = _config;
+        // Only definitions and focus flags are copied; numeric columns are not needed by this editor.
+        var items = source.Items.Select(item =>
+        {
+            var copy = DatasetService.CloneItem(item);
+            copy.Focus = new Models.TestItemFocus { IsFocused = item.Focus.IsFocused };
+            return copy;
+        }).ToArray();
+        IndependentWindow.Show(new SampleFilterWindow(items, _sampleRanges, mode, _sampleMatch,
+            (rules, match) =>
+            {
+                EnsureWindowSource(source);
+                if (_retestMode != mode || !ReferenceEquals(_config, config))
+                    throw new InvalidOperationException("分析口径或配置已变化，请重新打开筛选窗口后应用。");
+                return ApplySampleFiltersAsync(rules, match);
+            }));
     }
 
     private async Task ApplySampleFiltersAsync(IReadOnlyList<SampleRange> rules, SampleMatchMode match)

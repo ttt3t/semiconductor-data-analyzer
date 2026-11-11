@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     private AnalyzerConfig _config = new();
     private readonly RecentFilesService _recentFiles;
     private readonly UiPreferencesService _uiPreferences;
+    private UiPreferences _windowPreferences;
     private List<TestItemData> _allItems = new();
     private List<TestItemSummary> _summaries = new();
     private ListCollectionView? _summaryView;
@@ -35,7 +36,6 @@ public partial class MainWindow : Window
     private bool _managedConfigLoaded;
     private CsvParseResult _data = new();
     private List<CsvImportSource> _sources = new();
-    private readonly List<(WaferMapWindow Window, Func<CsvParseResult, IReadOnlyList<WaferMapPage>> Pages)> _openMaps = new();
     private int _binMode;
     private bool _combineSites = true;
     private bool _combineWafers = true;
@@ -72,6 +72,7 @@ public partial class MainWindow : Window
     {
         _recentFiles = recentFiles ?? RecentFilesService.Current;
         _uiPreferences = uiPreferences ?? UiPreferencesService.Current;
+        _windowPreferences = _uiPreferences.Value;
         _filterTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
         _filterTimer.Tick += (_, _) =>
         {
@@ -88,9 +89,9 @@ public partial class MainWindow : Window
         };
 
         InitializeComponent();
+        IndependentWindow.Configure(this);
         InitializeColumnSearch();
         ApplyUiPreferences();
-        _uiPreferences.Changed += OnUiPreferencesChanged;
         _memoryReclaimer = new IdleMemoryReclaimer(Dispatcher, () => CanReclaimMemory);
         Loaded += (_, _) => _memoryReclaimer.RequestStartup();
         Closing += (_, e) =>
@@ -126,7 +127,6 @@ public partial class MainWindow : Window
         Closed += (_, _) =>
         {
             _closing = true;
-            _sampleFilterWindow?.Close(); _sampleFilterWindow = null;
             CloseValueFilter();
             _detailVersion++;
             _detailTimer.Stop();
@@ -151,7 +151,6 @@ public partial class MainWindow : Window
             ClearCoordinateRunIndex();
             DgTestItems.ScrollActivityChanged -= OnListScrollActivityChanged;
             settings.SaveFailed -= OnLayoutSaveFailed;
-            _uiPreferences.Changed -= OnUiPreferencesChanged;
         };
 
         TextCompositionManager.AddPreviewTextInputStartHandler(this, (_, _) => _imeComposing = true);
@@ -173,20 +172,9 @@ public partial class MainWindow : Window
 
     private void OnLayoutSaveFailed(string message) => TxtStatus.Text = message;
 
-    private void OnUiPreferencesChanged(object? sender, EventArgs e)
-    {
-        if (_closing) return;
-        if (!Dispatcher.CheckAccess())
-        {
-            Dispatcher.BeginInvoke(new Action(() => { if (!_closing) ApplyUiPreferences(); }));
-            return;
-        }
-        ApplyUiPreferences();
-    }
-
     private void ApplyUiPreferences()
     {
-        var preferences = _uiPreferences.Value;
+        var preferences = _windowPreferences;
         DgTestItems.RowHeight = preferences.CompactTable ? 22 : 28;
         DgTestItems.FontSize = preferences.CompactTable ? 12 : 13;
         DgTestItems.ColumnHeaderHeight = preferences.ShowColumnFilters ? 44 : 28;
@@ -232,12 +220,18 @@ public partial class MainWindow : Window
     }
 
     private void BtnAbout_Click(object sender, RoutedEventArgs e)
-        => new AboutWindow { Owner = this }.ShowDialog();
+        => IndependentWindow.Show(new AboutWindow());
 
     private void BtnSettings_Click(object sender, RoutedEventArgs e)
     {
         if (_isBusy) return;
-        new SettingsWindow(_config, ApplySettings, OpenCsvAsync, _recentFiles, _uiPreferences, _data, CancelOperation, _currentCsvPath) { Owner = this }.ShowDialog();
+        var source = _data;
+        IndependentWindow.Show(new SettingsWindow(_config,
+            config => { EnsureWindowSource(source); return ApplySettings(config); },
+            path => { EnsureWindowSource(source); return OpenCsvAsync(path); },
+            _recentFiles, _uiPreferences, source, CancelOperation, _currentCsvPath,
+            () => { if (!_closing) { _windowPreferences = _uiPreferences.Value; ApplyUiPreferences(); } },
+            _windowPreferences));
     }
 
     private async Task ApplySettings(AnalyzerConfig config)
@@ -255,7 +249,6 @@ public partial class MainWindow : Window
             _lastConfigPath = AppSettings.LastConfigCopyPath;
             UpdateConfigInfo();
             CommitAnalysis(data, prepared);
-            RefreshOpenMaps();
             TxtStatus.Text = "设置已保存，统计已重算" + (reload ? "，数据文件已重新解析" : "");
             if (reload) ShowSerialNumberNotice(_data);
             else ShowRetestIdentityNotice(_data);
@@ -348,7 +341,7 @@ public partial class MainWindow : Window
     {
         if (!File.Exists(path)) throw new FileNotFoundException("找不到数据文件：" + path);
         if (!DataFileService.IsStdf(path)) return StdfImportMode.Standard;
-        return _uiPreferences.Value.DefaultStdfMode;
+        return _windowPreferences.DefaultStdfMode;
     }
 
     private async Task OpenDataAsync(string path, StdfImportMode mode)
@@ -366,11 +359,9 @@ public partial class MainWindow : Window
             UpdateValueFilterHeaders();
             CommitAnalysis(result, prepared);
             _sources = new List<CsvImportSource> { new(path, StdfMode: mode) };
-            RefreshStdfInformationSources();
             _currentCsvPath = path;
             _currentDataName = Path.GetFileName(path);
             UpdateWindowTitle();
-            RefreshOpenMaps();
             TxtStatus.Text = _recentFiles.RememberCsv(path) ? "解析完成" : "解析完成（最近文件记录未能保存）";
             if (result.SourceDescription.Length > 0) TxtStatus.Text += " | " + result.SourceDescription;
             ShowSerialNumberNotice(_data);
@@ -413,9 +404,8 @@ public partial class MainWindow : Window
             _columnValueFilters.Clear(); UpdateValueFilterHeaders();
             CommitAnalysis(result, prepared);
             _sources = sources.ToList(); _currentCsvPath = sources[0].Path;
-            RefreshStdfInformationSources();
             _currentDataName = sources.Count == 1 ? Path.GetFileName(sources[0].Path) : $"整合数据（{sources.Count} 个文件 / {result.Wafers.Count} 个 wafer）";
-            UpdateConfigInfo(); RefreshOpenMaps();
+            UpdateConfigInfo();
             TxtStatus.Text = "已按登记顺序打开，保留全部原始测试记录；复测显示沿用产品设置。";
             ShowSerialNumberNotice(_data);
         });
@@ -428,12 +418,14 @@ public partial class MainWindow : Window
         { BtnOpenCsv_Click(sender, e); return; }
         var file = new OpenFileDialog { Filter = DataFileService.OpenFilter, Title = "选择要追加的数据（支持多选 / 批量导入）", Multiselect = true };
         if (file.ShowDialog(this) != true) return;
-        var choices = new ImportDataWindow(file.FileNames, _data.Wafers) { Owner = this };
-        if (choices.ShowDialog() != true) return;
+        var source = _data;
+        var choices = new ImportDataWindow(file.FileNames, _data.Wafers);
+        if (!await IndependentWindow.ShowAsync(choices)) return;
         try
         {
+            EnsureWindowSource(source);
             var paths = choices.SelectedFiles;
-            var mode = _uiPreferences.Value.DefaultStdfMode;
+            var mode = _windowPreferences.DefaultStdfMode;
             var sources = paths.Select(path => new CsvImportSource(path, choices.Options, mode)).ToArray();
             await AppendFilesAsync(sources);
         }
@@ -446,8 +438,11 @@ public partial class MainWindow : Window
         if (_isBusy) return;
         if (ActiveData.Records.Count == 0)
         { MessageBox.Show("没有可导出的数据，请先取消或调整数据筛选。", "导出数据", MessageBoxButton.OK, MessageBoxImage.Information); return; }
-        var options = new ExportDataWindow(ActiveData.Wafers, _config.OutlierSigma) { Owner = this };
-        if (options.ShowDialog() != true) return;
+        var data = ActiveData;
+        var config = ConfigLoader.Parse(ConfigLoader.Serialize(_config));
+        using var lease = new DatasetLease(data.Records);
+        var options = new ExportDataWindow(data.Wafers, config.OutlierSigma);
+        if (!await IndependentWindow.ShowAsync(options, keepOpenOnAccept: true)) return;
         var wafers = options.SelectedWafers;
         var mode = options.Mode;
         var outlierSigma = options.OutlierSigma;
@@ -455,25 +450,19 @@ public partial class MainWindow : Window
         var file = new SaveFileDialog { Filter = failOnly ? "Excel 文件 (*.xlsx)|*.xlsx" : "CSV 文件 (*.csv)|*.csv",
             DefaultExt = failOnly ? ".xlsx" : ".csv", AddExtension = true,
             FileName = failOnly ? "Fail芯片数据.xlsx" : "integrated.csv", Title = "导出数据" };
-        if (file.ShowDialog(this) != true) return;
-        try
+        if (file.ShowDialog(options) != true) { options.Close(); return; }
+        var exporting = IndependentOperationWindow.RunAsync("导出数据", async () =>
         {
-            await RunBusyAsync(async () =>
+            if (failOnly)
             {
-                if (failOnly)
-                {
-                    var exported = await Task.Run(() => FailChipXlsxService.Save(file.FileName, ActiveData, _config, wafers, mode, outlierSigma));
-                    TxtStatus.Text = $"已导出 2 个工作表：{exported.FailChips} 颗 Fail 芯片、{exported.RetestGoodChips} 颗复测良品芯片，共 {exported.Records} 条记录" +
-                        (exported.FailChips == 0 ? "" : exported.ReferenceSerial == null ? "；没有可用的良品参考。" : $"；Fail 表良品参考 SN：{exported.ReferenceSerial}");
-                    return;
-                }
-                int count = await Task.Run(() => IntegratedCsvService.Save(file.FileName, ActiveData, wafers, mode, outlierSigma, _config));
-                TxtStatus.Text = $"已导出 {wafers.Length} 个 wafer、{count} 条测试记录（含异常原文），可直接重新打开" +
-                    (outlierSigma.HasValue ? $"；已剔除均值 ± {outlierSigma.Value:G}σ 以外的测项值" : "");
-            });
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { MessageBox.Show(ex.Message, "导出失败", MessageBoxButton.OK, MessageBoxImage.Error); }
+                var exported = await Task.Run(() => FailChipXlsxService.Save(file.FileName, data, config, wafers, mode, outlierSigma));
+                return $"已导出 2 个工作表：{exported.FailChips} 颗 Fail 芯片、{exported.RetestGoodChips} 颗复测良品芯片，共 {exported.Records} 条记录。\n{file.FileName}";
+            }
+            int count = await Task.Run(() => IntegratedCsvService.Save(file.FileName, data, wafers, mode, outlierSigma, config));
+            return $"已导出 {wafers.Length} 个 wafer、{count} 条测试记录（含异常原文），可直接重新打开。\n{file.FileName}";
+        });
+        options.Close();
+        await exporting;
     }
 
     private async void BtnExportReport_Click(object sender, RoutedEventArgs e)
@@ -482,31 +471,32 @@ public partial class MainWindow : Window
         if (ActiveData.Records.Count == 0)
         { MessageBox.Show("没有可导出的数据，请先打开文件或调整数据筛选。", "导出报告", MessageBoxButton.OK, MessageBoxImage.Information); return; }
         var focused = _data.Items.Where(i => i.Focus.IsFocused).Select(i => i.Id).ToArray();
-        var options = new ExportDataWindow(ActiveData.Wafers, _config.OutlierSigma, report: true,
+        var data = ActiveData;
+        var config = ConfigLoader.Parse(ConfigLoader.Serialize(_config));
+        var dataName = _currentDataName + (_sampleRanges.Count > 0 ? "（已应用数据筛选）" : "");
+        var histogramSize = ReportChartSize(Histogram, _histogramImageSize);
+        var scatterSize = ReportChartSize(ScatterPlot, _scatterImageSize);
+        using var lease = new DatasetLease(data.Records);
+        var options = new ExportDataWindow(data.Wafers, config.OutlierSigma, report: true,
             histogramMode: _binMode, combineSites: _combineSites, focusedCount: focused.Length,
             combineWafers: _combineWafers, scatterOrder: _scatterOrder,
-            scatterUseLimitRange: ScatterPlot.UseLimitRange) { Owner = this };
-        options.HistogramModeChanged += mode => CmbBinMode.SelectedIndex = mode;
-        options.ScatterModeChanged += order => ScatterSortMode.SelectedIndex = (int)order;
-        if (options.ShowDialog() != true) return;
+            scatterUseLimitRange: ScatterPlot.UseLimitRange);
+        if (!await IndependentWindow.ShowAsync(options, keepOpenOnAccept: true)) return;
         var file = new SaveFileDialog { Filter = "Excel 报告 (*.xlsx)|*.xlsx", DefaultExt = ".xlsx", AddExtension = true,
             FileName = "测试分析报告.xlsx", Title = "导出 XLSX 报告" };
-        if (file.ShowDialog(this) != true) return;
+        if (file.ShowDialog(options) != true) { options.Close(); return; }
         var report = new XlsxReportOptions(options.SelectedWafers, options.Mode, options.OutlierSigma,
             options.HistogramMode, options.CombineSites, focused, options.ShowBinNumbers, options.ShowSiteBorders,
             options.CombineWafers, options.ScatterOrder,
-            ReportChartSize(Histogram, _histogramImageSize), ReportChartSize(ScatterPlot, _scatterImageSize),
+            histogramSize, scatterSize,
             options.ScatterUseLimitRange);
-        try
+        var exporting = IndependentOperationWindow.RunAsync("导出 XLSX 报告", async () =>
         {
-            await RunBusyAsync(async () =>
-            {
-                await XlsxReportService.SaveAsync(file.FileName, ActiveData, _config, report, _currentDataName + (_sampleRanges.Count > 0 ? "（已应用数据筛选）" : ""));
-                TxtStatus.Text = $"报告已导出：4 个工作表，{focused.Length} 个关注测项";
-            });
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { MessageBox.Show(ReportExportFailure.Describe(ex), "报告导出失败", MessageBoxButton.OK, MessageBoxImage.Error); }
+            await XlsxReportService.SaveAsync(file.FileName, data, config, report, dataName);
+            return $"报告已导出：4 个工作表，{focused.Length} 个关注测项。\n{file.FileName}";
+        });
+        options.Close();
+        await exporting;
     }
 
     #region 测试项列表 / Combine Site / 列头筛选
@@ -587,10 +577,8 @@ public partial class MainWindow : Window
 
     private async Task RefreshTestItemList()
     {
-        var previousScope = ActiveData;
         var prepared = await PrepareAnalysisAsync(_data, _config);
         CommitAnalysis(_data, prepared);
-        if (!ReferenceEquals(previousScope, ActiveData)) RefreshOpenMaps();
     }
 
     private void CommitAnalysis(CsvParseResult data, PreparedAnalysis prepared)
@@ -621,7 +609,6 @@ public partial class MainWindow : Window
         ApplySearchFilter(keepName, keepSite, keepWafer);
         UpdateBottomInfo();
         ScheduleDetail();
-        _sampleFilterWindow?.UpdateItems(data.Items, _retestMode);
     }
 
     private async Task RunBusyAsync(Func<Task> operation)
@@ -1042,9 +1029,7 @@ public partial class MainWindow : Window
             : $"Site {_currentSite}";
         string title = $"Value 表  {_currentItem.DisplayName}  ({(_currentWafer == null ? "ALL Wafers" : "Wafer " + _currentWafer)} · {siteLabel})";
 
-        var window = new ValuesWindow(title + " · " + _currentItem.ShownUnit, filtered, _currentItem.DisplayFactor) { Owner = this };
-        window.Closed += (_, _) => _memoryReclaimer.Request();
-        window.Show();
+        IndependentWindow.Show(new ValuesWindow(title + " · " + _currentItem.ShownUnit, filtered, _currentItem.DisplayFactor));
     }
 
     #endregion
@@ -1167,7 +1152,7 @@ public partial class MainWindow : Window
     {
         if (_isBusy) return;
         if (_data.Records.Count == 0) { MessageBox.Show("请先打开 CSV / STDF 文件。", "良率预测"); return; }
-        try { new YieldSimulationWindow(ActiveData, _config, _retestMode) { Owner = this }.ShowDialog(); }
+        try { IndependentWindow.Show(new YieldSimulationWindow(ActiveData, _config, _retestMode)); }
         catch (Exception ex) { MessageBox.Show(ex.Message, "良率预测"); }
         finally { _memoryReclaimer.Request(); }
     }
@@ -1188,9 +1173,9 @@ public partial class MainWindow : Window
                 var result = await Task.Run(() => (
                     First: BinStatisticsService.Build(ActiveData.Records, RetestMode.First, _config),
                     Last: BinStatisticsService.Build(ActiveData.Records, RetestMode.Last, _config)));
-                window = new BinStatisticsWindow(result.First, result.Last) { Owner = this };
+                window = new BinStatisticsWindow(result.First, result.Last);
             });
-            window!.ShowDialog();
+            IndependentWindow.Show(window!);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { MessageBox.Show(ex.Message, "Bin 统计失败", MessageBoxButton.OK, MessageBoxImage.Error); }
@@ -1208,9 +1193,9 @@ public partial class MainWindow : Window
                 var result = await Task.Run(() => (
                     First: WaferStatisticsService.Build(ActiveData.Records, RetestMode.First, _config),
                     Last: WaferStatisticsService.Build(ActiveData.Records, RetestMode.Last, _config)));
-                window = new WaferTableWindow(result.First, result.Last) { Owner = this };
+                window = new WaferTableWindow(result.First, result.Last);
             });
-            window!.ShowDialog();
+            IndependentWindow.Show(window!);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { MessageBox.Show(ex.Message, "Wafer Table 统计失败", MessageBoxButton.OK, MessageBoxImage.Error); }
@@ -1245,18 +1230,9 @@ public partial class MainWindow : Window
         }
 
         string siteLabel = _combineSites || _currentSite == TestItemSummary.CombinedSite ? "ALL Sites" : $"Site {_currentSite}";
-        // Keep only the matching keys; retaining the old item would also retain its
-        // entire raw snapshot after a new dataset refreshes this still-open Map.
-        string selectedId = _currentItem.Id, selectedName = _currentItem.Name, selectedNumber = _currentItem.TestNumber;
         var mapWindow = new WaferMapWindow($"P/F Map  {_currentItem.DisplayName}  ({siteLabel})", pages);
         if (_currentWafer != null) mapWindow.SelectWafer(_currentWafer);
-        ShowMapWindow(mapWindow, data =>
-        {
-            var item = data.Items.FirstOrDefault(i => i.Id == selectedId) ??
-                data.Items.FirstOrDefault(i => i.Name == selectedName && i.TestNumber == selectedNumber);
-            return item != null ? MapDataService.PfPages(data, item, site, _config) :
-                data.Wafers.Select(w => new WaferMapPage(w, Array.Empty<WaferDie>())).ToList();
-        });
+        IndependentWindow.Show(mapWindow);
     }
 
     private void ShowBinMap(string binName, bool soft)
@@ -1274,25 +1250,14 @@ public partial class MainWindow : Window
             return;
         }
 
-        ShowMapWindow(new WaferMapWindow($"{binName} Map  （按 LOT / wafer 分开，{(_config.PreferGoodRetest ? "良品优先，无良品取末次" : "同坐标取最新")}）", pages, binName),
-            data => MapDataService.BinPages(data, soft, _config));
+        IndependentWindow.Show(new WaferMapWindow($"{binName} Map  （按 LOT / wafer 分开，{(_config.PreferGoodRetest ? "良品优先，无良品取末次" : "同坐标取最新")}）", pages, binName));
     }
 
-    private void ShowMapWindow(WaferMapWindow window, Func<CsvParseResult, IReadOnlyList<WaferMapPage>> pages)
+    private void EnsureWindowSource(CsvParseResult source)
     {
-        _openMaps.Add((window, pages));
-        window.Closed += (_, _) =>
-        {
-            _openMaps.RemoveAll(m => ReferenceEquals(m.Window, window));
-            _memoryReclaimer.Request();
-        };
-        window.Owner = this;
-        window.Show();
-    }
-
-    private void RefreshOpenMaps()
-    {
-        foreach (var map in _openMaps) map.Window.SetPages(map.Pages(ActiveData));
+        if (_closing) throw new InvalidOperationException("对应的分析器已关闭；此窗口保留原数据，无法再向该分析器应用修改。");
+        if (_isBusy) throw new InvalidOperationException("对应的分析器正在处理数据，请稍后再应用。");
+        if (!ReferenceEquals(_data, source)) throw new InvalidOperationException("对应的分析器已更换数据，请从当前分析器重新打开设置或筛选窗口。");
     }
 
     private static bool IsInSpec(double value, double? lsl, double? usl)

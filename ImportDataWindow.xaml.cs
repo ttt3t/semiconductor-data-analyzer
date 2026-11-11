@@ -56,6 +56,6 @@ public partial class ImportDataWindow : Window
         { TxtError.Text = "请选择要合并到的 wafer。"; return; }
         Options = new ImportOptions(SameWafer.IsChecked == true, target, MatchNumber.IsChecked == true,
             NewLimits.IsChecked == true, AutoWafer: AutoWafer.IsChecked == true);
-        DialogResult = true;
+        IndependentWindow.Accept(this);
     }
 }

@@ -1,4 +1,5 @@
 using System.Windows;
+using SemiconductorCsvAnalyzer.Services;
 
 namespace SemiconductorCsvAnalyzer;
 
@@ -11,6 +12,6 @@ public partial class AboutWindow : Window
 
     private void DetailedHelp_Click(object sender, RoutedEventArgs e)
     {
-        new HelpWindow { Owner = this }.ShowDialog();
+        IndependentWindow.Show(new HelpWindow());
     }
 }

@@ -17,6 +17,8 @@ public partial class FtUuidWindow : Window
         InitializeComponent(); _data = data; _config = config; TxtNumbers.Text = numbers;
         Closed += (_, _) => { _closed = true; _cancel.Cancel(); DgPreview.ItemsSource = null; _cancel.Dispose(); };
         TxtNotice.Text = data == null || data.Records.Count == 0 ? "未加载数据" : $"当前 {data.Records.Count:N0} 条记录";
+        var lease = new DatasetLease(data?.Records.AsEnumerable() ?? Enumerable.Empty<CsvRecord>());
+        Closed += (_, _) => lease.Dispose();
     }
     private RetestIdentityService.Reader ReadDefinition()
     {
@@ -47,7 +49,7 @@ public partial class FtUuidWindow : Window
     }
     private void Apply_Click(object sender, RoutedEventArgs e)
     {
-        try { TestNumbers = ReadDefinition().Recipe; DialogResult = true; }
+        try { TestNumbers = ReadDefinition().Recipe; IndependentWindow.Accept(this); }
         catch (Exception ex) { TxtNotice.Text = ex.Message; }
     }
 }

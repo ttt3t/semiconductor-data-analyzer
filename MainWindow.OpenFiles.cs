@@ -10,10 +10,12 @@ public partial class MainWindow
     {
         if (paths.Count == 0) return;
         if (paths.Count == 1) { await OpenCsvAsync(paths[0]); return; }
-        var choices = new ImportDataWindow(paths, Array.Empty<string>(), initialImport: true) { Owner = this };
-        if (choices.ShowDialog() != true) return;
+        var source = _data;
+        var choices = new ImportDataWindow(paths, Array.Empty<string>(), initialImport: true);
+        if (!await IndependentWindow.ShowAsync(choices)) return;
+        EnsureWindowSource(source);
         var ordered = choices.SelectedFiles;
-        var mode = _uiPreferences.Value.DefaultStdfMode;
+        var mode = _windowPreferences.DefaultStdfMode;
         var sources = ordered.Select((path, index) => new CsvImportSource(path,
             index == 0 ? null : choices.Options, mode)).ToArray();
         await OpenBatchAsync(sources);
@@ -34,7 +36,7 @@ public partial class MainWindow
             CommitAnalysis(result, prepared);
             _sources = sources.ToList(); _currentCsvPath = sources[0].Path;
             _currentDataName = $"整合数据（{sources.Count} 个文件 / {result.Wafers.Count} 个 wafer）";
-            RefreshStdfInformationSources(); UpdateWindowTitle(); RefreshOpenMaps();
+            UpdateWindowTitle();
             foreach (var source in sources) _recentFiles.RememberCsv(source.Path);
             TxtStatus.Text = $"已按所选顺序打开 {sources.Count} 个文件，原始测试记录全部保留";
             ShowSerialNumberNotice(_data);
@@ -49,10 +51,8 @@ public partial class MainWindow
             var prepared = await PrepareAnalysisAsync(merged, _config);
             CommitAnalysis(merged, prepared);
             _sources.AddRange(sources);
-            RefreshStdfInformationSources();
             _currentDataName = $"整合数据（{_sources.Count} 个文件 / {_data.Wafers.Count} 个 wafer）";
             UpdateWindowTitle();
-            RefreshOpenMaps();
             foreach (var source in sources) _recentFiles.RememberCsv(source.Path);
             TxtStatus.Text = $"已导入 {sources.Count} 个文件，原始测试记录全部保留";
             ShowSerialNumberNotice(_data);

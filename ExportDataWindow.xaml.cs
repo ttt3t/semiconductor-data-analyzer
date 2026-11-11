@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Data;
 using System.Windows.Controls;
 using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
 
 namespace SemiconductorCsvAnalyzer;
 
@@ -88,6 +89,6 @@ public partial class ExportDataWindow : Window
             { TxtError.Text = "离群阈值必须是大于 0 的有限数字，例如 6 或 3.5。"; return; }
             OutlierSigma = sigma;
         }
-        DialogResult = true;
+        IndependentWindow.Accept(this);
     }
 }

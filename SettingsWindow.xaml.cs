@@ -20,6 +20,7 @@ public partial class SettingsWindow : Window
     private readonly RecentFilesService _recentFiles;
     private readonly Func<string, Task>? _openCsv;
     private readonly UiPreferencesService _uiPreferences;
+    private readonly Action? _applyPreferences;
     private bool _syncing = true;
     private bool _analysisDirty;
     private bool _identityDirty;
@@ -31,7 +32,8 @@ public partial class SettingsWindow : Window
 
     public SettingsWindow(AnalyzerConfig config, Func<AnalyzerConfig, Task> apply,
         Func<string, Task>? openCsv = null, RecentFilesService? recentFiles = null,
-        UiPreferencesService? uiPreferences = null, CsvParseResult? data = null, Action? cancelApply = null, string csvPath = "")
+        UiPreferencesService? uiPreferences = null, CsvParseResult? data = null, Action? cancelApply = null, string csvPath = "",
+        Action? applyPreferences = null, UiPreferences? preferences = null)
     {
         InitializeComponent();
         _apply = apply;
@@ -39,11 +41,12 @@ public partial class SettingsWindow : Window
         _openCsv = openCsv;
         _recentFiles = recentFiles ?? RecentFilesService.Current;
         _uiPreferences = uiPreferences ?? UiPreferencesService.Current;
+        _applyPreferences = applyPreferences;
         _data = data;
         if (csvPath.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)) TxtCsvSamplePath.Text = csvPath;
         _fileName = "config.ini";
         ShowConfig(config);
-        ShowPreferences(_uiPreferences.Value);
+        ShowPreferences(preferences ?? _uiPreferences.Value);
         _lastTab = SettingsTabs.SelectedItem as TabItem;
         _syncing = false;
         Closing += (_, e) =>
@@ -55,6 +58,8 @@ public partial class SettingsWindow : Window
         RefreshRecentFiles();
         BtnRecentCsv.IsEnabled = _openCsv != null;
         Closed += (_, _) => { RecentConfigs.ItemsSource = RecentCsvs.ItemsSource = null; };
+        var lease = new DatasetLease(data?.Records.AsEnumerable() ?? Enumerable.Empty<CsvRecord>());
+        Closed += (_, _) => lease.Dispose();
     }
 
     private void RefreshRecentFiles()
@@ -102,7 +107,7 @@ public partial class SettingsWindow : Window
                 _recentFiles.RememberConfig(file.FilePath);
             }
             else await _openCsv!(file.FilePath);
-            _applying = false; DialogResult = true;
+            _applying = false; IndependentWindow.Accept(this);
         }
         catch (OperationCanceledException) { TxtStatus.Text = "已取消打开，当前数据保持不变。"; }
         catch (Exception ex) { TxtStatus.Text = "打开失败：" + ex.Message; RefreshRecentFiles(); }
@@ -260,12 +265,12 @@ public partial class SettingsWindow : Window
         finally { _syncing = wasSyncing; }
     }
 
-    private void BtnUuid_Click(object sender, RoutedEventArgs e)
+    private async void BtnUuid_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            var window = new FtUuidWindow(TxtUuidTestNumbers.Text, _data, ConfigLoader.Parse(TxtConfig.Text, _fileName)) { Owner = this };
-            if (window.ShowDialog() == true) TxtUuidTestNumbers.Text = window.TestNumbers;
+            var window = new FtUuidWindow(TxtUuidTestNumbers.Text, _data, ConfigLoader.Parse(TxtConfig.Text, _fileName));
+            if (await IndependentWindow.ShowAsync(window) && IsVisible) TxtUuidTestNumbers.Text = window.TestNumbers;
         }
         catch (Exception ex) { TxtStatus.Text = ex.Message; }
     }
@@ -309,6 +314,7 @@ public partial class SettingsWindow : Window
                 RunSelection = RunByCoordinates.IsChecked == true ? RunSelectionMode.WaferCoordinates : RunSelectionMode.SerialNumber,
                 DefaultStdfMode = CmbDefaultStdfMode.SelectedIndex == 1 ? StdfImportMode.Advantest93K : StdfImportMode.Standard
             });
+            _applyPreferences?.Invoke();
             TxtStatus.Text = "界面设置已保存并生效；当前数据与分析配置保持不变。";
         }
         catch (Exception ex) { TxtStatus.Text = "界面设置保存失败：" + ex.Message; }
@@ -362,7 +368,7 @@ public partial class SettingsWindow : Window
             TxtStatus.Text = "处理中…";
             await _apply(config);
             _applying = false;
-            DialogResult = true;
+            IndependentWindow.Accept(this);
         }
         catch (OperationCanceledException) { TxtStatus.Text = "已取消，配置保持不变。"; }
         catch (Exception ex) { TxtStatus.Text = "应用失败：" + ex.Message; }
