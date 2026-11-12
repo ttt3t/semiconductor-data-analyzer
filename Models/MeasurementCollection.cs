@@ -6,11 +6,15 @@ public sealed class MeasurementSchema
 {
     internal string[] Keys { get; }
     internal Dictionary<string, int> Indices { get; }
-    public MeasurementSchema(IEnumerable<string> keys)
+    internal double[]? UnitFactors { get; }
+    public MeasurementSchema(IEnumerable<string> keys, double[]? unitFactors = null)
     {
         Keys = keys.ToArray();
         Indices = new Dictionary<string, int>(Keys.Length, StringComparer.Ordinal);
         for (int i = 0; i < Keys.Length; i++) Indices.Add(Keys[i], i);
+        if (unitFactors != null && (unitFactors.Length != Keys.Length || unitFactors.Any(f => !double.IsFinite(f) || f <= 0)))
+            throw new ArgumentException("单位换算定义无效。");
+        UnitFactors = unitFactors?.Any(f => f != 1) == true ? unitFactors.ToArray() : null;
     }
 }
 
@@ -47,7 +51,7 @@ public sealed class MeasurementCollection : IReadOnlyDictionary<string, string>
         return _presence == null || (_presence[index >> 3] & (1 << (index & 7))) != 0;
     }
     internal RawMeasurementStore.RawRow ReadRow(ref byte[]? reusableBuffer) =>
-        _store!.Read(_offset, _length, _schema!.Keys.Length, ref reusableBuffer);
+        _store!.Read(_offset, _length, _schema!.Keys.Length, ref reusableBuffer).WithUnitFactors(_schema.UnitFactors);
     internal MeasurementCollection SelectKeys(Func<string, bool> include)
     {
         if (_store == null)
@@ -91,6 +95,13 @@ public sealed class MeasurementCollection : IReadOnlyDictionary<string, string>
         {
             bool found = _editable.TryGetValue(key, out var text); value = text.AsSpan(); return found;
         }
+        if (_schema!.Indices.TryGetValue(key, out int i) && Present(i))
+        { value = _store!.Read(_offset, _length, _schema.Keys.Length).WithUnitFactors(_schema.UnitFactors).Text(i); return true; }
+        value = default; return false;
+    }
+    internal bool TryGetOriginalText(string key, out ReadOnlySpan<char> value)
+    {
+        if (_editable != null) { bool found = _editable.TryGetValue(key, out var text); value = text.AsSpan(); return found; }
         if (_schema!.Indices.TryGetValue(key, out int i) && Present(i))
         { value = _store!.Read(_offset, _length, _schema.Keys.Length).Text(i); return true; }
         value = default; return false;

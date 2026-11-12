@@ -292,10 +292,14 @@ public static partial class DatasetService
 
     private static CsvParseResult MergeDefinitions(CsvParseResult existing, CsvParseResult incoming, ImportOptions options)
     {
+        string MatchNumber(TestItemData item) => item.UnitMergeNumber ?? item.TestNumber;
+        string BaseNumber(TestItemData item) => long.TryParse(TestNumberLabel.Base(MatchNumber(item)), out long number)
+            ? number.ToString(CultureInfo.InvariantCulture) : TestNumberLabel.Base(MatchNumber(item));
         if (options.AutoMatch)
         {
-            bool uniqueNumbers = new[] { existing.Items, incoming.Items }.All(items => items.All(i => i.TestNumber.Trim().Length > 0) &&
-                items.Select(i => long.TryParse(i.TestNumber.Trim(), out long n) ? n.ToString(CultureInfo.InvariantCulture) : i.TestNumber.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() == items.Count);
+            bool uniqueNumbers = new[] { existing.Items, incoming.Items }.All(items => items.All(i => MatchNumber(i).Trim().Length > 0) &&
+                items.GroupBy(i => long.TryParse(MatchNumber(i).Trim(), out long n) ? n.ToString(CultureInfo.InvariantCulture) : MatchNumber(i).Trim(), StringComparer.OrdinalIgnoreCase).All(g => !g.Skip(1).Any() ||
+                    g.All(i => i.UnitMergeSlot > 0) && g.Select(i => (i.Name, i.StdfChannel, i.UnitMergeSlot)).Distinct().Count() == 1));
             options = options with { MatchByNumber = uniqueNumbers };
         }
         if (incoming.Records.Count == 0) throw new InvalidDataException("新文件没有可导入的测试记录。");
@@ -307,23 +311,26 @@ public static partial class DatasetService
         }
         if (options.SameWafer && (!existing.Wafers.Contains(options.TargetWafer) || incoming.Wafers.Count != 1))
             throw new InvalidDataException("同 wafer 导入需要选择已有 wafer，且新文件只能包含一个 wafer。");
-        string BaseNumber(TestItemData item) => long.TryParse(item.BaseTestNumber, out long number)
-            ? number.ToString(CultureInfo.InvariantCulture) : item.BaseTestNumber;
-        var ambiguousNumbers = existing.Items.Concat(incoming.Items).Where(i => TestNumberLabel.IsQualified(i.TestNumber))
+        var ambiguousNumbers = existing.Items.Concat(incoming.Items).Where(i => TestNumberLabel.IsQualified(MatchNumber(i)))
             .Select(BaseNumber).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var duplicateNames = new[] { existing.Items, incoming.Items }.SelectMany(list =>
-                list.GroupBy(i => i.Name, StringComparer.OrdinalIgnoreCase).Where(g => g.Skip(1).Any()).Select(g => g.Key))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var slots = new Dictionary<TestItemData, int>();
         foreach (var list in new[] { existing.Items, incoming.Items })
             foreach (var group in list.GroupBy(i => (Base: BaseNumber(i), i.Name, i.StdfChannel)))
             {
                 int slot = 0;
-                foreach (var item in group.OrderBy(i => i.ColumnIndex)) slots[item] = ++slot;
+                foreach (var item in group.OrderBy(i => i.ColumnIndex))
+                {
+                    slots[item] = item.UnitMergeSlot > 0 ? item.UnitMergeSlot : slot + 1;
+                    slot = Math.Max(slot, slots[item]);
+                }
             }
+        var duplicateNames = new[] { existing.Items, incoming.Items }.SelectMany(list =>
+                list.GroupBy(i => i.Name, StringComparer.OrdinalIgnoreCase)
+                    .Where(g => g.Select(i => (Number: BaseNumber(i), i.StdfChannel, Slot: slots[i])).Distinct().Skip(1).Any()).Select(g => g.Key))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         string Key(TestItemData item)
         {
-            string key = (options.MatchByNumber ? item.TestNumber : item.Name).Trim();
+            string key = (options.MatchByNumber ? MatchNumber(item) : item.Name).Trim();
             if (key.Length == 0) throw new InvalidDataException("匹配依据存在空值，请改用另一种测试项匹配方式。");
             // Qualified numbers may differ across files containing only a subset of names.
             // Match the source number + actual name, rather than assigning B[1] to A[1].
@@ -334,33 +341,111 @@ public static partial class DatasetService
         }
         void CheckUnique(IEnumerable<TestItemData> items)
         {
-            var duplicate = items.GroupBy(Key, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Count() > 1);
+            var duplicate = items.GroupBy(Key, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Skip(1).Any() &&
+                !(g.All(i => i.UnitMergeSlot > 0) && g.Select(i => i.UnitMergeSlot).Distinct().Count() == 1));
             if (duplicate != null) throw new InvalidDataException($"匹配依据存在重复值“{duplicate.Key}”，请改用另一种匹配方式。");
         }
         CheckUnique(existing.Items); CheckUnique(incoming.Items);
         var items = existing.Items.Select(CloneItem).ToList();
         // Clones retain the same name slots, without changing raw measurements.
         for (int i = 0; i < items.Count; i++) slots[items[i]] = slots[existing.Items[i]];
-        var byKey = items.ToDictionary(Key, StringComparer.OrdinalIgnoreCase);
+        foreach (var item in items) item.Unit = UnitConversion.Normalize(item.Unit);
+        var byKey = items.GroupBy(Key, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
         var itemMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var factors = new Dictionary<string, double>(StringComparer.Ordinal);
+        var mappedTargets = new HashSet<string>(StringComparer.Ordinal);
+        var unitWarnings = new StdfWarnings();
+        int conversions = 0, adoptions = 0, splits = 0;
+        static string UnitLabel(string unit) => unit.Length == 0 ? "无单位" : unit;
+        void MarkVariant(TestItemData item)
+        {
+            item.UnitMergeNumber ??= item.TestNumber;
+            if (item.UnitMergeSlot == 0) item.UnitMergeSlot = slots[item];
+            item.UnitMergeDisplayName ??= item.DisplayName;
+            item.DisplayName = item.UnitMergeDisplayName + " [" + UnitLabel(item.Unit) + "]";
+        }
+        bool Compatible(TestItemData source, TestItemData target, out double factor)
+        {
+            string unit = UnitConversion.Normalize(source.Unit);
+            factor = unit.Length == 0 || target.Unit.Length == 0 ? 1 : UnitConversion.Factor(unit, target.Unit) ?? double.NaN;
+            if (!double.IsFinite(factor)) return false;
+            if (factor == 1) return true;
+            if (options.UseNewLimits && (source.LowLimit.HasValue && !double.IsFinite(source.LowLimit.Value * factor) ||
+                source.HighLimit.HasValue && !double.IsFinite(source.HighLimit.Value * factor))) return false;
+            for (int i = 0; i < source.Values.Count; i++)
+            {
+                if ((i & 4095) == 0) AnalysisOperation.CheckCancellation();
+                if (!double.IsFinite(source.Values.GetValueAt(i) * factor)) return false;
+            }
+            return true;
+        }
         foreach (var source in incoming.Items)
         {
-            if (byKey.TryGetValue(Key(source), out var target))
+            AnalysisOperation.CheckCancellation();
+            string key = Key(source), sourceUnit = UnitConversion.Normalize(source.Unit);
+            byKey.TryGetValue(key, out var candidates);
+            var target = candidates?.Where(i => !mappedTargets.Contains(i.Id))
+                .OrderByDescending(i => sourceUnit.Length > 0 && i.Unit == sourceUnit)
+                .FirstOrDefault(i => Compatible(source, i, out _));
+            // STDF may already have separate limit/unit variants before this merge. A subset file
+            // can renumber them, so use an unambiguous compatible unit in the same physical channel.
+            if (target == null && candidates is { Count: > 0 } && sourceUnit.Length > 0)
             {
-                if (!string.Equals(source.Unit.Trim(), target.Unit.Trim(), StringComparison.Ordinal))
-                    throw new InvalidDataException($"测试项“{source.DisplayName}”单位不一致（{target.Unit} / {source.Unit}），无法直接整合。");
-                if (options.UseNewLimits) { target.LowLimit = source.LowLimit; target.HighLimit = source.HighLimit; }
+                var alternatives = items.Where(i => !mappedTargets.Contains(i.Id) && BaseNumber(i) == BaseNumber(source) &&
+                    string.Equals(i.Name, source.Name, StringComparison.OrdinalIgnoreCase) && i.StdfChannel == source.StdfChannel &&
+                    Compatible(source, i, out _)).Take(2).ToArray();
+                if (alternatives.Length == 1)
+                {
+                    target = alternatives[0];
+                    unitWarnings.AddOnce(key + ":existing-unit:" + target.Id, $"测项“{source.Name}”：按单位关联既有的 {target.Unit} 测项。");
+                }
+            }
+            double factor = 1;
+            if (target != null)
+            {
+                factor = sourceUnit.Length == 0 || target.Unit.Length == 0 ? 1 : UnitConversion.Factor(sourceUnit, target.Unit)!.Value;
+                if ((sourceUnit.Length == 0) != (target.Unit.Length == 0))
+                {
+                    if (target.Unit.Length == 0) target.Unit = sourceUnit;
+                    adoptions++;
+                    unitWarnings.AddOnce(key + ":empty:" + target.Unit, $"测项“{source.Name}”：空单位按 {target.Unit} 解释，数值不变。");
+                    if (target.UnitMergeSlot > 0) MarkVariant(target);
+                }
+                if (factor != 1)
+                {
+                    conversions++;
+                    unitWarnings.AddOnce(key + ":convert:" + sourceUnit + ":" + target.Unit,
+                        $"测项“{source.Name}”：{sourceUnit} → {target.Unit}，测量值乘以 {factor:G6}，采用的新阈值同步换算。");
+                }
+                else if (source.Unit.Trim() != sourceUnit && sourceUnit.Length > 0)
+                    unitWarnings.AddOnce(key + ":alias:" + sourceUnit, $"测项“{source.Name}”：单位写法统一为 {sourceUnit}。");
+                if (options.UseNewLimits) { target.LowLimit = source.LowLimit * factor; target.HighLimit = source.HighLimit * factor; }
             }
             else
             {
                 target = CloneItem(source); target.Id = Guid.NewGuid().ToString("N");
                 slots[target] = slots[source];
+                target.Unit = sourceUnit;
+                if (candidates is { Count: > 0 })
+                {
+                    var canonical = candidates[0];
+                    foreach (var candidate in candidates) MarkVariant(candidate);
+                    target.Name = canonical.Name; target.StdfChannel = canonical.StdfChannel;
+                    target.TestNumber = canonical.UnitMergeNumber ?? canonical.TestNumber;
+                    target.UnitMergeNumber = canonical.UnitMergeNumber; target.UnitMergeSlot = canonical.UnitMergeSlot;
+                    target.UnitMergeDisplayName = canonical.UnitMergeDisplayName; slots[target] = slots[canonical];
+                    MarkVariant(target); splits++;
+                    unitWarnings.AddOnce(key + ":split:" + sourceUnit, $"测项“{canonical.Name}”：{UnitLabel(canonical.Unit)} 与 {UnitLabel(sourceUnit)} 无法安全合并，已按单位独立保留。");
+                }
                 string displayName = target.DisplayName;
                 int suffix = 2;
                 while (items.Any(i => i.DisplayName == target.DisplayName)) target.DisplayName = $"{displayName} ({suffix++})";
-                items.Add(target); byKey.Add(Key(source), target);
+                items.Add(target);
+                if (candidates == null) byKey.Add(key, candidates = new());
+                candidates.Add(target);
             }
             itemMap.Add(source.Id, target.Id);
+            factors.Add(source.Id, factor); mappedTargets.Add(target.Id);
         }
         TestNumberLabel.Disambiguate(items);
         var waferMap = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -382,29 +467,49 @@ public static partial class DatasetService
         // A subsequent serial normalization must never edit records held by the active dataset.
         var records = existing.Records.Select(CloneRecord).ToList();
         var schemas = new Dictionary<MeasurementSchema, MeasurementSchema>();
+        RawMeasurementStore? fallbackStore = null;
+        MeasurementSchema? fallbackSchema = null;
+        string?[]? fallbackValues = null;
         MeasurementCollection Remap(MeasurementCollection raw)
         {
-            if (raw.Schema is not { } schema) return raw.ToDictionary(p => itemMap[p.Key], p => p.Value);
+            if (raw.Schema is not { } schema)
+            {
+                if (!raw.Keys.Any(k => factors[k] != 1)) return raw.ToDictionary(p => itemMap[p.Key], p => p.Value);
+                fallbackStore ??= new RawMeasurementStore();
+                fallbackSchema ??= new MeasurementSchema(incoming.Items.Select(i => itemMap[i.Id]), incoming.Items.Select(i => factors[i.Id]).ToArray());
+                fallbackValues ??= new string?[incoming.Items.Count];
+                for (int i = 0; i < incoming.Items.Count; i++) fallbackValues[i] = raw.TryGetValue(incoming.Items[i].Id, out string? text) ? text : null;
+                return fallbackStore.Append(fallbackSchema, fallbackValues);
+            }
             if (!schemas.TryGetValue(schema, out var mapped))
-                schemas[schema] = mapped = new MeasurementSchema(schema.Keys.Select(key => itemMap[key]));
+                schemas[schema] = mapped = new MeasurementSchema(schema.Keys.Select(key => itemMap[key]),
+                    schema.Keys.Select((key, i) => factors[key] * (schema.UnitFactors?[i] ?? 1)).ToArray());
             return raw.Remap(mapped);
         }
-        foreach (var record in incoming.Records)
-            records.Add(new CsvRecord
-            {
-                WaferId = waferMap[record.WaferId], SerialNumber = record.SerialNumber, X = record.X, Y = record.Y,
-                OriginalSerialNumber = record.OriginalSerialNumber,
-                IsFtIdentity = record.IsFtIdentity, RetestUuid = record.RetestUuid, UuidTestNumbers = record.UuidTestNumbers,
-                UuidEncoding = record.UuidEncoding,
-                Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
-                Product = record.Product, Program = record.Program, Lot = record.Lot,
-                StdfTestTime = record.StdfTestTime,
-                Measurements = Remap(record.Measurements)
-            });
+        try
+        {
+            foreach (var record in incoming.Records)
+                records.Add(new CsvRecord
+                {
+                    WaferId = waferMap[record.WaferId], SerialNumber = record.SerialNumber, X = record.X, Y = record.Y,
+                    OriginalSerialNumber = record.OriginalSerialNumber,
+                    IsFtIdentity = record.IsFtIdentity, RetestUuid = record.RetestUuid, UuidTestNumbers = record.UuidTestNumbers,
+                    UuidEncoding = record.UuidEncoding,
+                    PreferCachedUuid = record.PreferCachedUuid,
+                    Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
+                    Product = record.Product, Program = record.Program, Lot = record.Lot,
+                    StdfTestTime = record.StdfTestTime,
+                    Measurements = Remap(record.Measurements)
+                });
+            fallbackStore?.Seal();
+        }
+        catch { fallbackStore?.Dispose(); throw; }
+        string notice = unitWarnings.Messages.Length == 0 ? "" :
+            $"单位处理：换算 {conversions} 项、空单位沿用 {adoptions} 项、独立保留 {splits} 项。\n" + string.Join("\n", unitWarnings.Messages);
         return new CsvParseResult
         {
             Items = items, Records = records,
-            ImportWarning = StdfWarnings.Combine(existing.ImportWarning, incoming.ImportWarning),
+            ImportWarning = StdfWarnings.Combine(existing.ImportWarning, incoming.ImportWarning, notice),
             StdfWaferOrigins = StdfWaferMerge.Merge(existing, incoming, waferMap),
             SerialNumberNotice = string.Join("\n\n", new[] { existing.SerialNumberNotice, incoming.SerialNumberNotice }
                 .Where(notice => notice.Length > 0)),
@@ -418,6 +523,13 @@ public static partial class DatasetService
         merged.ImportWarning = definitions.ImportWarning;
         merged.StdfWaferOrigins = definitions.StdfWaferOrigins;
         MeasurementDisplay.Configure(merged.Items);
+        var labels = merged.Items.Where(i => i.UnitMergeSlot == 0).Select(i => i.DisplayName).ToHashSet(StringComparer.Ordinal);
+        foreach (var item in merged.Items.Where(i => i.UnitMergeSlot > 0))
+        {
+            string label = (item.UnitMergeDisplayName ?? item.Name) + " [" + (item.ShownUnit.Length == 0 ? "无单位" : item.ShownUnit) + "]";
+            item.DisplayName = label; int suffix = 2;
+            while (!labels.Add(item.DisplayName)) item.DisplayName = $"{label} ({suffix++})";
+        }
         string priorNotice = definitions.SerialNumberNotice;
         merged.ReassignedSerialNumberCount = definitions.ReassignedSerialNumberCount;
         if (SerialNumberService.Normalize(merged))
@@ -461,6 +573,7 @@ public static partial class DatasetService
         OriginalSerialNumber = record.OriginalSerialNumber,
         IsFtIdentity = record.IsFtIdentity, RetestUuid = record.RetestUuid, UuidTestNumbers = record.UuidTestNumbers,
         UuidEncoding = record.UuidEncoding,
+        PreferCachedUuid = record.PreferCachedUuid,
         X = record.X, Y = record.Y, Site = record.Site, Result = record.Result, SBin = record.SBin, HBin = record.HBin,
         Product = record.Product, Program = record.Program, Lot = record.Lot,
         StdfTestTime = record.StdfTestTime,
@@ -529,6 +642,7 @@ public static partial class DatasetService
         Id = item.Id, Focus = item.Focus, ColumnIndex = item.ColumnIndex, Name = item.Name, DisplayName = item.DisplayName,
         TestNumber = item.TestNumber, Unit = item.Unit, SBin = item.SBin, HBin = item.HBin,
         StdfChannel = item.StdfChannel,
+        UnitMergeNumber = item.UnitMergeNumber, UnitMergeSlot = item.UnitMergeSlot, UnitMergeDisplayName = item.UnitMergeDisplayName,
         IsStdfMeasurement = item.IsStdfMeasurement, DisplayFactor = item.DisplayFactor, DisplayUnit = item.DisplayUnit,
         LowLimit = item.LowLimit, HighLimit = item.HighLimit
     };

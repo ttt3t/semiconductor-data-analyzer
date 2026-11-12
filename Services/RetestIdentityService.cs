@@ -24,7 +24,7 @@ public static class RetestIdentityService
 
     public sealed class Reader
     {
-        private readonly string?[] _ids;
+        private readonly string[][] _ids;
         private readonly HashSet<string> _missing;
         public string Recipe { get; }
         public string[] MissingTests { get; }
@@ -39,9 +39,11 @@ public static class RetestIdentityService
             var missingTests = new List<string>();
             _ids = numbers.Select(number =>
             {
-                if (!byNumber.TryGetValue(number, out var matches)) { missingTests.Add(number); return null; }
-                if (matches.Length != 1) throw new InvalidDataException($"UUID Test Num {number} 对应多个测试项，无法唯一读取，请先修正测试项定义。");
-                return matches[0].Id;
+                if (!byNumber.TryGetValue(number, out var matches)) { missingTests.Add(number); return Array.Empty<string>(); }
+                if (matches.Length != 1 && !(matches.All(i => i.UnitMergeSlot > 0) &&
+                    matches.Select(i => (i.Name, i.StdfChannel, i.UnitMergeSlot)).Distinct().Count() == 1))
+                    throw new InvalidDataException($"UUID Test Num {number} 对应多个测试项，无法唯一读取，请先修正测试项定义。");
+                return matches.Select(i => i.Id).ToArray();
             }).ToArray();
             MissingTests = missingTests.ToArray();
             _missing = config.MissingTokens.Concat(config.NotApplicableTokens).Concat(new[] { "NULL", "NaN", "Infinity", "+Infinity", "-Infinity", StdfParser.NotApplicableValue })
@@ -49,13 +51,26 @@ public static class RetestIdentityService
         }
         public string Read(CsvRecord record)
         {
+            if (record.PreferCachedUuid && record.UuidTestNumbers == Recipe)
+            {
+                if (string.IsNullOrWhiteSpace(record.RetestUuid)) return "";
+                string cached = record.RetestUuid.Trim();
+                return (_ids.Length == 1 ? !_missing.Contains(cached) && !cached.StartsWith("STDF_INVALID(", StringComparison.Ordinal) :
+                    record.UuidEncoding == CurrentEncoding && ValidCachedTuple(cached)) ? cached : "";
+            }
             var value = new StringBuilder();
             bool incomplete = false;
-            foreach (string? id in _ids)
+            foreach (var alternatives in _ids)
             {
-                if (id == null) { incomplete = true; continue; }
-                if (!record.Measurements.TryGetValue(id, out string? raw))
-                { incomplete = true; continue; }
+                string? raw = null;
+                foreach (string id in alternatives)
+                    if (record.Measurements.TryGetOriginalText(id, out var text))
+                    {
+                        string candidate = text.ToString();
+                        if (raw != null && raw.Trim() != candidate.Trim()) return "";
+                        raw = candidate;
+                    }
+                if (raw == null) { incomplete = true; continue; }
                 if (string.IsNullOrWhiteSpace(raw) || _missing.Contains(raw.Trim()) || raw.Trim().StartsWith("STDF_INVALID(", StringComparison.Ordinal)) return "";
                 string field = raw.Trim(); // Preserve hex text, case and leading zeroes; no numeric conversion.
                 if (_ids.Length > 1)

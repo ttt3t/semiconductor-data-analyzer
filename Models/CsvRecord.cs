@@ -20,6 +20,8 @@ public sealed class CsvRecord
     public string UuidTestNumbers { get; set; } = "";
     // 0: legacy concatenation; 1: escaped, field-delimited UUID (single fields remain raw).
     public int UuidEncoding { get; set; }
+    // Extended integrated exports contain normalized measurements and retain the original verified UUID separately.
+    internal bool PreferCachedUuid { get; set; }
     public int? X { get; set; }
     public int? Y { get; set; }
     public string Site { get; set; } = "";

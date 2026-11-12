@@ -10,6 +10,9 @@ public sealed class TestItemData
     public string TestNumber { get; set; } = "";
     public string BaseTestNumber => Services.TestNumberLabel.Base(TestNumber);
     internal string StdfChannel { get; set; } = "";
+    internal string? UnitMergeNumber { get; set; }
+    internal int UnitMergeSlot { get; set; }
+    internal string? UnitMergeDisplayName { get; set; }
     public string SBin { get; set; } = "";
     public string HBin { get; set; } = "";
     public string Unit { get; set; } = "";

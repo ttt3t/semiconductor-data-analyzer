@@ -26,6 +26,7 @@ public struct TestValue
                 OriginalSerialNumber = _record.OriginalSerialNumber,
                 IsFtIdentity = _record.IsFtIdentity, RetestUuid = _record.RetestUuid, UuidTestNumbers = _record.UuidTestNumbers,
                 UuidEncoding = _record.UuidEncoding,
+                PreferCachedUuid = _record.PreferCachedUuid,
                 Site = _record.Site, Result = _record.Result, SBin = _record.SBin, HBin = _record.HBin,
                 Product = _record.Product, Program = _record.Program, Lot = _record.Lot,
                 StdfTestTime = _record.StdfTestTime,

@@ -191,7 +191,10 @@ internal sealed class RawMeasurementStore : IDisposable
         public long Offset { get; }
         private readonly byte[] _bytes;
         private readonly int _fields;
-        public RawRow(long offset, byte[] bytes, int fields) { Offset = offset; _bytes = bytes; _fields = fields; }
+        private readonly double[]? _unitFactors;
+        public RawRow(long offset, byte[] bytes, int fields, double[]? unitFactors = null)
+        { Offset = offset; _bytes = bytes; _fields = fields; _unitFactors = unitFactors; }
+        internal RawRow WithUnitFactors(double[]? factors) => factors == null ? this : new(Offset, _bytes, _fields, factors);
         private int RawHeader(int index) => BinaryPrimitives.ReadInt32LittleEndian(_bytes.AsSpan(index * sizeof(int)));
         private int End(int index)
         {
@@ -200,16 +203,36 @@ internal sealed class RawMeasurementStore : IDisposable
         }
         public bool IsNumeric(int index)
         {
+            if (_unitFactors is { } factors && factors[index] != 1)
+                return TryOriginalNumber(index, out double number) && double.IsFinite(number * factors[index]);
             int raw = RawHeader(index);
             return raw > 0 && (raw & NumericFlag) != 0;
         }
         public double ReadNumeric(int index)
+        {
+            if (_unitFactors is { } factors && factors[index] != 1)
+                return TryOriginalNumber(index, out double number) ? number * factors[index] : double.NaN;
+            return OriginalNumeric(index);
+        }
+        private double OriginalNumeric(int index)
         {
             int start = index == 0 ? 0 : End(index - 1);
             return BinaryPrimitives.ReadDoubleLittleEndian(
                 _bytes.AsSpan(_fields * sizeof(int) + start * sizeof(char), sizeof(double)));
         }
         public ReadOnlySpan<char> RawTextSpan(int index)
+        {
+            if (_unitFactors is { } factors && factors[index] != 1 && TryOriginalNumber(index, out double number))
+                return (number * factors[index]).ToString("R", CultureInfo.InvariantCulture).AsSpan();
+            return OriginalTextSpan(index);
+        }
+        private bool TryOriginalNumber(int index, out double number)
+        {
+            int header = RawHeader(index);
+            if (header > 0 && (header & NumericFlag) != 0) { number = OriginalNumeric(index); return double.IsFinite(number); }
+            return DatasetService.TryValue(OriginalTextSpan(index), out number);
+        }
+        private ReadOnlySpan<char> OriginalTextSpan(int index)
         {
             int start = index == 0 ? 0 : End(index - 1);
             return MemoryMarshal.Cast<byte, char>(_bytes.AsSpan(_fields * sizeof(int) + start * sizeof(char),

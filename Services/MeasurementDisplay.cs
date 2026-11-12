@@ -14,6 +14,7 @@ public static class MeasurementDisplay
         foreach (var item in items)
         {
             AnalysisOperation.CheckCancellation();
+            item.DisplayFactor = 1; item.DisplayUnit = "";
             if (!item.IsStdfMeasurement || item.Values.Count == 0) continue;
             string unit = item.Unit.Trim();
             // Already prefixed units and other quantities retain their original representation.
@@ -39,19 +40,5 @@ public static class MeasurementDisplay
     public static string ExportText(TestItemData item, string raw) => item.DisplayFactor != 1 && DatasetService.TryValue(raw, out double value)
         ? (value * item.DisplayFactor).ToString("R", CultureInfo.InvariantCulture) : raw;
 
-    public static double? ConversionFactor(string from, string to)
-    {
-        (string Unit, int Power)? Parse(string text)
-        {
-            foreach (string unit in new[] { "Hz", "A", "V", "s", "S" })
-                if (text.EndsWith(unit, StringComparison.Ordinal))
-                {
-                    string prefix = text[..^unit.Length].Replace("µ", "u").Replace("μ", "u");
-                    foreach (var option in Prefixes) if (prefix == option.Prefix) return (unit, option.Power);
-                }
-            return null;
-        }
-        var a = Parse(from); var b = Parse(to);
-        return a.HasValue && b.HasValue && a.Value.Unit == b.Value.Unit ? Math.Pow(10, a.Value.Power - b.Value.Power) : null;
-    }
+    public static double? ConversionFactor(string from, string to) => UnitConversion.Factor(from, to);
 }

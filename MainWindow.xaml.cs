@@ -260,7 +260,7 @@ public partial class MainWindow : Window
     private void UpdateWindowTitle()
     {
         string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
-        Title = $"CSV Analyzer · V2.0.14 | 当前数据：{_currentDataName} | 配置：{configName}";
+        Title = $"CSV Analyzer · V2.0.15 | 当前数据：{_currentDataName} | 配置：{configName}";
     }
 
     private void UpdateConfigInfo()

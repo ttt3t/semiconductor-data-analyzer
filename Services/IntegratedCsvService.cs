@@ -13,6 +13,7 @@ public static class IntegratedCsvService
     private const string Marker3 = "#CSVAnalyzerIntegrated,3";
     private const string Marker4 = "#CSVAnalyzerIntegrated,4";
     private const string Marker5 = "#CSVAnalyzerIntegrated,5";
+    private const string ExtendedPrefix = "#CSVAnalyzerIntegrated,6,";
     private const int IdentityColumns = 10;
     private static readonly string[] ContextHeaders = { "Product", "Program", "Lot" };
     private static readonly string[] SourceSerialHeaders = { "OriginalSerialNumber", "SerialNumberReassigned" };
@@ -24,7 +25,13 @@ public static class IntegratedCsvService
     {
         using var file = SourceFileReader.Open(path);
         using var reader = new StreamReader(file, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        return reader.ReadLine() is Marker or Marker2 or Marker3 or Marker4 or Marker5;
+        return EffectiveMarker(reader.ReadLine(), out _) != null;
+    }
+    private static string? EffectiveMarker(string? marker, out bool extended)
+    {
+        extended = marker != null && marker.StartsWith(ExtendedPrefix, StringComparison.Ordinal);
+        if (extended && marker!.Length == ExtendedPrefix.Length + 1) marker = "#CSVAnalyzerIntegrated," + marker[^1];
+        return marker is Marker or Marker2 or Marker3 or Marker4 or Marker5 ? marker : null;
     }
 
     public static void Save(string path, CsvParseResult data)
@@ -132,7 +139,10 @@ public static class IntegratedCsvService
                 bool sourceSerial = ftIdentity || records.Any(r => r.OriginalSerialNumber != null);
                 bool context = sourceSerial || records.Any(r => r.Product.Length + r.Program.Length + r.Lot.Length > 0);
                 int identityCount = IdentityColumns + (context ? 3 : 0) + (sourceSerial ? 2 : 0) + (ftIdentity ? 3 : 0);
-                writer.WriteLine(ftIdentity ? Marker5 : sourceSerial ? Marker3 : context ? Marker2 : Marker);
+                string marker = ftIdentity ? Marker5 : sourceSerial ? Marker3 : context ? Marker2 : Marker;
+                bool extended = items.Any(i => i.UnitMergeSlot > 0) || ftIdentity && items.Any(i => i.DisplayFactor != 1) ||
+                    records.Any(r => r.Measurements.Schema?.UnitFactors != null || r.PreferCachedUuid);
+                writer.WriteLine(extended ? ExtendedPrefix + marker[^1] : marker);
                 void Row(IEnumerable<string> fields) => writer.WriteLine(string.Join(",", fields.Select(Escape)));
                 void Metadata(string label, Func<TestItemData, string> value) =>
                     Row(new[] { label }.Concat(Enumerable.Repeat("", identityCount - 1)).Concat(items.Select(value)));
@@ -146,6 +156,7 @@ public static class IntegratedCsvService
                 Metadata("#SBIN", i => i.SBin);
                 Metadata("#HBIN", i => i.HBin);
                 Metadata("#DisplayName", i => i.DisplayName);
+                if (extended) Metadata("#UnitMerge", UnitConversion.ExportMerge);
                 var presence = new char[items.Count];
                 var values = new string[items.Count];
                 MeasurementSchema? lastSchema = null;
@@ -256,12 +267,13 @@ public static class IntegratedCsvService
             return null;
         }
         var marker = ReadFields();
-        bool uuidEncoding = marker != null && string.Join(",", marker) == Marker5;
-        bool ftIdentity = uuidEncoding || marker != null && string.Join(",", marker) == Marker4;
-        bool sourceSerial = ftIdentity || marker != null && string.Join(",", marker) == Marker3;
-        bool context = sourceSerial || marker != null && string.Join(",", marker) == Marker2;
+        string? effectiveMarker = EffectiveMarker(marker == null ? null : string.Join(",", marker), out bool extended);
+        bool uuidEncoding = effectiveMarker == Marker5;
+        bool ftIdentity = uuidEncoding || effectiveMarker == Marker4;
+        bool sourceSerial = ftIdentity || effectiveMarker == Marker3;
+        bool context = sourceSerial || effectiveMarker == Marker2;
         int identityCount = IdentityColumns + (context ? 3 : 0) + (sourceSerial ? 2 : 0) + (ftIdentity ? 2 : 0) + (uuidEncoding ? 1 : 0);
-        if (marker == null || (!context && string.Join(",", marker) != Marker)) throw new InvalidDataException("不支持的整合 CSV 格式。");
+        if (effectiveMarker == null) throw new InvalidDataException("不支持的整合 CSV 格式。");
         var header = ReadFields() ?? throw new InvalidDataException("整合 CSV 缺少表头。");
         if (header.Length < identityCount || !header.Take(identityCount).SequenceEqual(Headers.Concat(context ? ContextHeaders : Array.Empty<string>())
             .Concat(sourceSerial ? SourceSerialHeaders : Array.Empty<string>())
@@ -276,6 +288,7 @@ public static class IntegratedCsvService
         }
         var numbers = Metadata("#TestNumber"); var lsl = Metadata("#LSL"); var usl = Metadata("#USL");
         var units = Metadata("#Unit"); var sbin = Metadata("#SBIN"); var hbin = Metadata("#HBIN"); var names = Metadata("#DisplayName");
+        var mergeDefinitions = extended ? Metadata("#UnitMerge") : null;
         double? Limit(string text) => text.Length == 0 ? null : DatasetService.TryValue(text, out double value)
             ? value : throw new InvalidDataException("整合 CSV 的阈值不是有效数字。");
         var items = Enumerable.Range(identityCount, header.Length - identityCount).Select(c => new TestItemData
@@ -283,6 +296,8 @@ public static class IntegratedCsvService
             ColumnIndex = c, Name = header[c], DisplayName = names[c], TestNumber = numbers[c],
             LowLimit = Limit(lsl[c]), HighLimit = Limit(usl[c]), Unit = units[c], SBin = sbin[c], HBin = hbin[c]
         }).ToList();
+        if (mergeDefinitions != null)
+            for (int i = 0; i < items.Count; i++) UnitConversion.ReadMerge(items[i], mergeDefinitions[identityCount + i]);
         int? Coordinate(string text) => text.Length == 0 ? null : int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value)
             ? value : throw new InvalidDataException("整合 CSV 的坐标无效。");
         var records = new List<CsvRecord>();
@@ -309,6 +324,7 @@ public static class IntegratedCsvService
                     OriginalSerialNumber = sourceSerial && row[14] == "1" ? row[13] : null,
                     IsFtIdentity = ftIdentity, RetestUuid = ftIdentity ? row[15] : null, UuidTestNumbers = ftIdentity ? row[16] : "",
                     UuidEncoding = uuidEncoding ? int.Parse(row[17], CultureInfo.InvariantCulture) : 0,
+                    PreferCachedUuid = extended && uuidEncoding,
                     Site = row[5], Result = row[6], SBin = row[7], HBin = row[8],
                     Product = context ? row[10] : "", Program = context ? row[11] : "", Lot = context ? row[12] : ""
                 };

@@ -1,0 +1,147 @@
+using System.Globalization;
+using System.IO.Compression;
+using System.Text;
+using ClosedXML.Excel;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Spreadsheet;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks, sequence;
+    static string folder = "";
+    static void Check(bool condition, string message) { if (!condition) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
+    static bool Close(double actual, double expected) => Math.Abs(actual - expected) <= Math.Max(1e-15, Math.Abs(expected) * 1e-12);
+    static AnalyzerConfig Config() => new() { TestItemRow = 1, LowLimitRow = 2, HighLimitRow = 3, UnitRow = 4,
+        TestNumberRow = 5, DataStartRow = 6, TestItemStartColumn = 8, SerialNumberColumn = 1, XColumn = 2, YColumn = 3,
+        SiteColumn = 4, SBinColumn = 5, HBinColumn = 6, WaferColumn = 7, Lot = "LOT" };
+    static string Csv(string unit, string[] values, string low = "", string high = "", string number = "100", string name = "Voltage")
+    {
+        string path = Path.Combine(folder, "source-" + ++sequence + ".csv");
+        var text = new StringBuilder("SN,X,Y,Site,SBIN,HBIN,Wafer," + name + "\n");
+        foreach (string field in new[] { low, high, unit, number }) text.Append(",,,,,,,").Append(field).Append('\n');
+        for (int row = 0; row < values.Length; row++) text.Append($"{row + 1:D6},{row},0,1,5,5,W1,{values[row]}\n");
+        File.WriteAllText(path, text.ToString(), new UTF8Encoding(false)); return path;
+    }
+    static CsvParseResult Data(string unit, string[] values, string low = "", string high = "") => DataFileService.Parse(Csv(unit, values, low, high), Config());
+    static CsvParseResult Merge(CsvParseResult a, CsvParseResult b, bool newer = false, bool byNumber = true, bool sameWafer = false) =>
+        DatasetService.Merge(a, b, new(sameWafer, sameWafer ? "W1" : "", byNumber, newer));
+    static string Stdf(string unit, float number)
+    {
+        string path = Path.Combine(folder, "binary-" + ++sequence + ".stdf");
+        using var file = File.Create(path); using var output = new BinaryWriter(file);
+        void C(BinaryWriter writer, string text) { byte[] bytes = Encoding.UTF8.GetBytes(text); writer.Write((byte)bytes.Length); writer.Write(bytes); }
+        void R(byte type, byte sub, Action<BinaryWriter> fill)
+        { using var body = new MemoryStream(); using (var w = new BinaryWriter(body, Encoding.UTF8, true)) fill(w); output.Write((ushort)body.Length); output.Write(type); output.Write(sub); output.Write(body.ToArray()); }
+        R(0, 10, w => { w.Write((byte)2); w.Write((byte)4); });
+        R(5, 10, w => { w.Write((byte)1); w.Write((byte)1); });
+        R(15, 10, w => { w.Write(100u); w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((byte)0xc0); w.Write(number); C(w, "Voltage"); C(w, ""); w.Write((byte)0); w.Write((byte)0); w.Write((byte)0); w.Write((byte)0); w.Write(1000f); w.Write(2000f); C(w, unit); });
+        R(5, 20, w => { w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((ushort)1); w.Write((ushort)5); w.Write((ushort)5); w.Write((short)5); w.Write((short)0); w.Write(0u); C(w, "SN5"); });
+        return path;
+    }
+    static int Main(string[] args)
+    {
+        try
+        {
+            folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
+            using var operation = new AnalysisOperation();
+            Check(UnitConversion.Normalize(" µA ") == "uA" && UnitConversion.Normalize("μA") == "uA" && UnitConversion.Normalize("Ohm") == "Ω", "unit aliases normalize without losing prefix case");
+            Check(Close(UnitConversion.Factor("mV", "V")!.Value, .001) && UnitConversion.Factor("ms", "mS") == null && UnitConversion.Factor("V", "A") == null,
+                "known SI dimensions convert and different dimensions remain separate");
+            Check(UnitConversion.Factor("mA", "MA") == 1e-9 && UnitConversion.Factor("kOhm", "Ω") == 1000 && UnitConversion.Factor("custom", "CUSTOM") == null, "prefix case and unknown unit spelling are not guessed");
+            var volts = Data("V", new[] { "1.2" }, "1", "2");
+            var millivolts = Data("mV", new[] { "1500" }, "1200", "1800");
+            var merged = Merge(volts, millivolts);
+            Check(merged.Items.Count == 1 && merged.Items[0].Unit == "V" && Close(merged.Items[0].Values[1].Value, 1.5), "CSV measurement values convert to the existing item's unit");
+            Check(merged.Items[0].LowLimit == 1 && merged.Items[0].HighLimit == 2, "keep-old-limits still preserves existing thresholds");
+            var newLimits = Merge(volts, millivolts, newer: true);
+            Check(Close(newLimits.Items[0].LowLimit!.Value, 1.2) && Close(newLimits.Items[0].HighLimit!.Value, 1.8), "use-new-limits converts both thresholds with the measurement factor");
+            Check(StatisticsService.Calculate(newLimits.Items[0].Values, newLimits.Items[0].LowLimit, newLimits.Items[0].HighLimit).InSpec == 2, "statistics compare normalized measurements and thresholds");
+            Check(newLimits.ImportWarning.Contains("mV → V") && volts.Items[0].Unit == "V" && millivolts.Items[0].Values[0].Value == 1500 && millivolts.Items[0].LowLimit == 1200, "conversion is reported without mutating either input snapshot");
+            Check(ReferenceEquals(merged.Records[1].Measurements.RawStore, millivolts.Records[0].Measurements.RawStore) &&
+                merged.Records[1].Measurements.TryGetOriginalText(merged.Items[0].Id, out var original) && original.SequenceEqual("1500"), "converted records share original raw storage rather than duplicating the dataset");
+            Check(merged.Records[1].Measurements[merged.Items[0].Id] == "1.5" && merged.Items[0].Values[1].RawText == "1.5", "normal cell access and value details use the normalized unit");
+            var noUnit = Merge(Data("", new[] { "1500" }, "1000", "2000"), Data("mV", new[] { "1600" }));
+            Check(noUnit.Items[0].Unit == "mV" && noUnit.Items[0].Values[0].Value == 1500 && noUnit.Items[0].LowLimit == 1000, "an existing empty unit adopts the incoming unit without scaling values or old limits");
+            var emptyIncoming = Merge(volts, Data("", new[] { "1.6" }));
+            Check(emptyIncoming.Items.Count == 1 && emptyIncoming.Items[0].Unit == "V" && emptyIncoming.Items[0].Values[1].Value == 1.6, "an incoming empty unit adopts the existing unit without scaling");
+            Check(Merge(Data("", new[] { "1" }), Data("", new[] { "2" })).Items[0].Unit == "", "two empty units continue merging normally");
+            var alias = Merge(Data("uA", new[] { "1" }), Data("µA", new[] { "2" }));
+            Check(alias.Items.Count == 1 && alias.Items[0].Values[1].Value == 2, "micro-prefix aliases merge without a spurious scale factor");
+            var different = Merge(volts, Data("A", new[] { "0.002" }));
+            Check(different.Items.Count == 2 && different.Items.All(i => i.DisplayName.EndsWith("[" + i.Unit + "]")) && different.Items.Select(i => i.TestNumber).Distinct().Count() == 2, "incompatible units split into labelled, separately numbered items instead of aborting");
+            var third = Merge(different, Data("mA", new[] { "3" }));
+            Check(third.Items.Count == 2 && Close(third.Items.Single(i => i.Unit == "A").Values.Last().Value, .003), "later files find the compatible unit variant without creating another duplicate");
+            Check(Merge(third, Data("", new[] { "1.7" })).Items.Count == 2, "empty units use the first established unit even after a split");
+            var previousVariants = new List<TestItemData> { new() { Name = "Voltage", DisplayName = "Voltage", TestNumber = "100[1]", Unit = "V", ColumnIndex = 0, IsStdfMeasurement = true },
+                new() { Name = "Voltage", DisplayName = "Voltage", TestNumber = "100[2]", Unit = "A", ColumnIndex = 1, IsStdfMeasurement = true } };
+            var variantRow = new CsvRecord { WaferId = "W1", SerialNumber = "S", X = 0, Y = 0, HBin = "5" };
+            variantRow.Measurements.Add(previousVariants[0].Id, "1"); variantRow.Measurements.Add(previousVariants[1].Id, "0.002");
+            var reusedVariant = Merge(DatasetService.Build(previousVariants, new() { variantRow }), Data("mA", new[] { "3" }));
+            Check(reusedVariant.Items.Count == 2 && Close(reusedVariant.Items.Single(i => i.Unit == "A").Values.Last().Value, .003), "a subset file reuses an unambiguous preexisting STDF unit variant");
+            var byName = Merge(DataFileService.Parse(Csv("V", new[] { "1.2" }, number: "101"), Config()), DataFileService.Parse(Csv("A", new[] { "0.002" }, number: "202"), Config()), byNumber: false);
+            Check(Merge(byName, DataFileService.Parse(Csv("mA", new[] { "4" }, number: "303"), Config()), byNumber: false).Items.Count == 2, "name-based matching retains stable unit variants across different source numbers");
+            Check(Merge(Data("ms", new[] { "1" }), Data("mS", new[] { "2" })).Items.Count == 2 && Merge(Data("foo", new[] { "1" }), Data("bar", new[] { "2" })).Items.Count == 2, "case-sensitive dimensions and unknown units split safely");
+            var overflow = Merge(Data("mV", new[] { "1" }), Data("V", new[] { "1e308" }));
+            Check(overflow.Items.Count == 2 && overflow.Items.Single(i => i.Unit == "V").Values[0].Value == 1e308, "unsafe overflow conversions retain a separate original-unit item");
+            var invalid = Merge(volts, Data("mV", new[] { "1500", "ERR", "" }));
+            Check(invalid.Items[0].Values.Count == 2 && invalid.Records[2].Measurements[invalid.Items[0].Id] == "ERR" && invalid.Records[3].Measurements[invalid.Items[0].Id] == "", "invalid tokens and actual blank measurements remain intact");
+            var composed = Merge(Data("A", new[] { "0.005" }), Merge(Data("uA", new[] { "1000" }), Data("mA", new[] { "2" })));
+            Check(Close(composed.Items[0].Values[1].Value, .001) && Close(composed.Items[0].Values[2].Value, .002), "unit factors compose once when importing an already merged snapshot");
+            var retest = Merge(volts, millivolts, sameWafer: true);
+            Check(Close(DatasetService.SelectRetests(retest, RetestMode.Last).Items[0].Values.Single().Value, 1.5), "latest-retest views retain unit conversion metadata");
+            var filtered = SampleFilterService.Apply(retest, new[] { new SampleRange(retest.Items[0].Id, 1.4, 1.6) }, RetestMode.All, SampleMatchMode.Intersection, Config());
+            Check(filtered.Records.Count == 1 && Close(filtered.Items[0].Values.Single().Value, 1.5), "sample filtering uses normalized values");
+            var snapshot = SimulationSnapshot.Build(retest, Config(), RetestMode.Last, default);
+            Check(Close(snapshot.Value(0, 0), 1.5), "yield prediction uses the normalized column values");
+            string integrated = Path.Combine(folder, "normalized.csv"); IntegratedCsvService.Save(integrated, third);
+            var restored = IntegratedCsvService.Load(integrated);
+            Check(File.ReadLines(integrated).First().StartsWith("#CSVAnalyzerIntegrated,6,") && restored.Items.Count == 2 &&
+                Merge(restored, Data("mA", new[] { "4" })).Items.Count == 2, "integrated CSV preserves unit variants for subsequent imports");
+            Check(Close(restored.Items.Single(i => i.Unit == "A").Values.Last().Value, .003), "normalized values and units round-trip together");
+            string old = Path.Combine(folder, "legacy.csv"); IntegratedCsvService.Save(old, volts);
+            Check(File.ReadLines(old).First() == "#CSVAnalyzerIntegrated,2" && IntegratedCsvService.Load(old).Records.Count == 1, "unchanged datasets keep the existing integrated CSV format");
+            string fail = Path.Combine(folder, "fail.xlsx"); FailChipXlsxService.Save(fail, newLimits, Config(), newLimits.Wafers, RetestMode.All);
+            using (var doc = SpreadsheetDocument.Open(fail, false))
+            {
+                var sheet = doc.WorkbookPart!.WorksheetParts.First().Worksheet;
+                var value = sheet.Descendants<Cell>().Single(c => c.CellReference == "M9");
+                Check(value.DataType!.Value == CellValues.Number && Close(double.Parse(value.CellValue!.Text, CultureInfo.InvariantCulture), 1.5), "Fail-chip XLSX writes normalized numbers");
+            }
+            var ft = Config(); ft.TestMode = TestAnalysisMode.FT; ft.UuidTestNumbers = new() { "100" };
+            var identity = RetestIdentityService.Prepare(Merge(DataFileService.Parse(Csv("A", new[] { "000001" }), ft), DataFileService.Parse(Csv("uA", new[] { "001000" }), ft)), ft);
+            Check(identity.Records.Select(r => r.RetestUuid).SequenceEqual(new[] { "000001", "001000" }), "FT UUIDs still read original raw fields after numeric unit conversion");
+            string ftExport = Path.Combine(folder, "ft.csv"); IntegratedCsvService.Save(ftExport, identity);
+            Check(DataFileService.Parse(ftExport, ft).Records.Select(r => r.RetestUuid).SequenceEqual(new[] { "000001", "001000" }), "extended integrated CSV keeps original UUIDs after normalized values are exported");
+            var unknownIdentity = DatasetService.CloneRecord(identity.Records[1]); unknownIdentity.RetestUuid = "";
+            string unknownExport = Path.Combine(folder, "ft-unknown.csv");
+            IntegratedCsvService.Save(unknownExport, DatasetService.Build(identity.Items.Select(DatasetService.CloneItem).ToList(), new() { unknownIdentity }));
+            Check(DataFileService.Parse(unknownExport, ft).Records[0].RetestUuid == "", "unknown cached UUIDs stay unknown instead of being reconstructed from normalized measurements");
+            var ftSplit = RetestIdentityService.Prepare(Merge(DataFileService.Parse(Csv("A", new[] { "000001" }), ft), DataFileService.Parse(Csv("V", new[] { "000001" }), ft)), ft);
+            Check(ftSplit.Items.Count == 2 && ftSplit.Records.All(r => r.RetestUuid == "000001"), "unit-only variants do not make a formerly unique UUID definition ambiguous");
+            var ftDisplay = DataFileService.Parse(Stdf("A", .001f), ft);
+            string displayedUuid = Path.Combine(folder, "ft-display.csv"); IntegratedCsvService.Save(displayedUuid, ftDisplay);
+            Check(DataFileService.Parse(displayedUuid, ft).Records[0].RetestUuid == ftDisplay.Records[0].RetestUuid, "display-prefix scaling also preserves verified UUIDs in integrated exports");
+            var binary = DataFileService.Parse(Stdf("mV", 1600), Config());
+            var binaryMerge = Merge(volts, binary, newer: true);
+            Check(Close(binaryMerge.Items[0].Values.Last().Value, 1.6) && binaryMerge.Items[0].LowLimit == 1 && binaryMerge.Items[0].HighLimit == 2, "STDF binary-number fast paths convert values and limits exactly once");
+            string xlsx = Path.Combine(folder, "input.xlsx");
+            using (var workbook = new XLWorkbook())
+            {
+                var sheet = workbook.AddWorksheet("CP"); int row = 0;
+                foreach (string line in File.ReadLines(Csv("mV", new[] { "1500" }))) { row++; var cells = CsvParser.ParseLine(line, ',', true); for (int col = 0; col < cells.Length; col++) sheet.Cell(row, col + 1).Value = cells[col]; }
+                workbook.SaveAs(xlsx);
+            }
+            string zipPath = Path.Combine(folder, "sources.zip");
+            using (var file = File.Create(zipPath)) using (var zip = new ZipArchive(file, ZipArchiveMode.Create))
+            { zip.CreateEntryFromFile(xlsx, "office/input.xlsx"); zip.CreateEntryFromFile(Stdf("mV", 1600), "cp/input.stdf"); }
+            var mixed = DatasetService.LoadSources(new[] { new CsvImportSource(Csv("V", new[] { "1.2" })),
+                new CsvImportSource(zipPath, new(false, "", true, false), ArchiveEntry: "office/input.xlsx", Worksheet: "CP"),
+                new CsvImportSource(zipPath, new(false, "", true, false), ArchiveEntry: "cp/input.stdf") }, Config());
+            Check(mixed.Items.Count == 1 && mixed.Items[0].Values.Count == 3 && Close(mixed.Items[0].Values.Last().Value, 1.6), "CSV, ZIP Excel and ZIP STDF share the same unit merge policy");
+            Console.WriteLine($"{checks} unit merge checks passed"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

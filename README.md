@@ -1,6 +1,6 @@
 # Semiconductor Data Analyzer
 
-**CSV Analyzer V2.0.14 · GYF**
+**CSV Analyzer V2.0.15 · GYF**
 
 A Windows desktop application for semiconductor CSV / STDF test-data analysis, built with .NET 8 and WPF.
 
@@ -28,6 +28,16 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 - 良率明细“打开所在位置”按目录去重，每次最多请求 5 个窗口，超出部分在状态栏提示；文件存在性检查在后台进行，可取消。
 
 只启动独立分析器可使用 `SemiconductorCsvAnalyzer.exe --analyzer`。详细口径见 [使用手册](Docs/UserGuide.md)。
+
+## V2.0.15 更新
+
+- 合并 CSV、Excel、STDF 及 ZIP 内数据时，测试项单位不一致不再直接中断。`uA / µA / μA` 等别名统一；已知同物理量的 SI 单位按已有测项单位换算测量值，“使用新阈值”时 LSL / USL 同步换算，“使用旧阈值”保持原值。
+- 一边为空单位时采用另一边的单位，所有原数值保持不变；两边都空沿用原逻辑。不同物理量、未知换算或数值溢出时按单位独立保留测项，名称显示单位，数值测试编号沿用 `[1]` / `[2]` 区分；后续文件会匹配已有的兼容单位分项。
+- 导入完成后汇总单位换算、空单位解释和分项信息。大小写保留 SI 含义，例如 `ms` 与 `mS` 不合并；`mA` 与 `MA` 按真实倍率换算。
+- 换算系数按测项布局共享，原始磁盘快照不重写，不为每个测量值增加对象；统计、筛选、复测、良率预测、图表和导出共用换算后的数值。FT UUID 继续读取换算前原文。
+- 含单位分项或换算的整合 CSV 使用扩展格式 6 保存合并定义，并保留原 UUID；继续读取旧版 1–5，未涉及该功能的数据仍使用原格式。
+
+单位合并定向检查：`bash Tests/run-unit-merge.sh`。
 
 ## V2.0.14 更新
 

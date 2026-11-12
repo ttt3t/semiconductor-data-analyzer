@@ -7,7 +7,8 @@ public static partial class TestNumberLabel
     internal static void Disambiguate(IEnumerable<TestItemData> items)
     {
         foreach (var group in items.GroupBy(i => i.BaseTestNumber)
-            .Where(g => g.Skip(1).Any() && g.Any(i => i.IsStdfMeasurement || IsQualified(i.TestNumber))))
+            .Where(g => g.Skip(1).Any() && (g.Any(i => i.IsStdfMeasurement || IsQualified(i.TestNumber)) ||
+                ulong.TryParse(g.Key, out _) && g.Any(i => i.UnitMergeSlot > 0))))
         {
             int index = 0;
             foreach (var item in group.OrderBy(i => i.Name, StringComparer.Ordinal)
