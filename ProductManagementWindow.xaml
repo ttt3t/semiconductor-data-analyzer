@@ -164,7 +164,7 @@
                             <DataGridTextColumn x:Name="CategoryPeriodColumn" Header="统计期间" Binding="{Binding PeriodLabel}" Width="130" Visibility="Collapsed"/>
                             <DataGridTextColumn Header="批次" Binding="{Binding Lot}" Width="160"/><DataGridTextColumn Header="晶圆" Binding="{Binding Wafer}" Width="160"/>
                             <DataGridTextColumn Header="分类" Binding="{Binding Category}" Width="200"/><DataGridTextColumn Header="数量" Binding="{Binding Count}" Width="100"/>
-                            <DataGridTextColumn Header="有效 SBIN" Binding="{Binding Total}" Width="110"/><DataGridTextColumn Header="占比 %" Binding="{Binding Percent, StringFormat=F2, TargetNullValue=–}" Width="110"/>
+                            <DataGridTextColumn Header="有效 SBIN" Binding="{Binding Total}" Width="110"/><DataGridTextColumn Header="占比 %" Binding="{Binding Percent, StringFormat='{}{0:F2}%', TargetNullValue=–}" Width="110"/>
                         </DataGrid.Columns></DataGrid>
                         <controls:ManagementTrendView x:Name="CategoryTrend" ChartMinHeight="195" TableMaxHeight="160"/>
                     </DockPanel>

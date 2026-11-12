@@ -192,7 +192,7 @@
                     </DataGridTemplateColumn>
                     <DataGridTextColumn Header="Bin"  Binding="{Binding Category, Mode=OneTime}" Width="60"/>
                     <DataGridTextColumn Header="数量" Binding="{Binding Count, Mode=OneTime}" Width="45"/>
-                    <DataGridTextColumn Header="占比%" Binding="{Binding Percent, Mode=OneTime, StringFormat=F2}" Width="58"/>
+                    <DataGridTextColumn Header="占比%" Binding="{Binding Percent, Mode=OneTime, StringFormat='{}{0:F2}%'}" Width="58"/>
                 </DataGrid.Columns>
             </DataGrid>
         </Grid>

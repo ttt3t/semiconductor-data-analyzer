@@ -954,8 +954,8 @@ public partial class MainWindow : Window
             var stats = result.Statistics;
             TxtItemTitle.Text = itemTitle;
             TxtUnit.Text = string.IsNullOrWhiteSpace(request.Item.ShownUnit)
-                ? $"Count={stats.Count}  InSpec%={stats.InSpecPercent:F1}"
-                : $"Unit：{request.Item.ShownUnit}    Count={stats.Count}  InSpec%={stats.InSpecPercent:F1}";
+                ? $"Count={stats.Count}  InSpec%={stats.InSpecPercent:F1}%"
+                : $"Unit：{request.Item.ShownUnit}    Count={stats.Count}  InSpec%={stats.InSpecPercent:F1}%";
             Histogram.Title = ScatterPlot.Title = request.Item.DisplayName;
             if (!ReferenceEquals(_displayedBins, result.Bins))
                 Histogram.Apply(result.Bins, request.Item.DisplayLowLimit, request.Item.DisplayHighLimit,
@@ -1072,7 +1072,7 @@ public partial class MainWindow : Window
               .Append(s.RobustMean?.ToString("G6") ?? "-").Append('\t')
               .Append(s.RobustSigma?.ToString("G6") ?? "-").Append('\t')
               .Append(s.Cpk.HasValue ? s.Cpk.Value.ToString("F3") : "-").Append('\t')
-              .Append(s.InSpecPercent.ToString("F1"))
+              .Append(s.InSpecPercent.ToString("F1")).Append('%')
               .AppendLine();
         }
 

@@ -667,7 +667,7 @@
                                 </StackPanel>
                             </DataGridTextColumn.Header>
                         </DataGridTextColumn>
-                        <DataGridTextColumn CellStyle="{StaticResource YieldHeatCell}" ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding InSpecPercent, StringFormat=F1, Mode=OneTime}" SortMemberPath="InSpecPercent" Width="70">
+                        <DataGridTextColumn CellStyle="{StaticResource YieldHeatCell}" ElementStyle="{StaticResource SummaryCellText}" Binding="{Binding InSpecPercent, StringFormat='{}{0:F1}%', Mode=OneTime}" SortMemberPath="InSpecPercent" Width="70">
                             <DataGridTextColumn.Header>
                                 <StackPanel>
                                     <TextBlock Text="InSpec%" Style="{StaticResource ColHeaderLabel}" ToolTip="良率色标：0% 红色 → 50% 黄色 → 100% 绿色；无有效数值时不着色"/>

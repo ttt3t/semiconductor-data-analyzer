@@ -99,6 +99,8 @@ public partial class MainWindow
     private void FillColumnSearchFromCell(DataGridColumn column, string text)
     {
         if (FilterBox(column) is not { Tag: string key } box) return;
+        // The cell copies its visible percent sign; numeric searches still use the 0–100 value.
+        if (key == "InSpec") text = text.TrimEnd().TrimEnd('%').TrimEnd();
         var state = ColumnSearch(key);
         bool wasActive = state.IsSearchActive;
         state.FillFromCell(text);

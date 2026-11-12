@@ -366,7 +366,7 @@ public partial class WaferMapWindow : Window
         {
             sb.Append(r.Category).Append('\t')
               .Append(r.Count).Append('\t')
-              .Append(r.Percent.ToString("F2"))
+              .Append(r.Percent.ToString("F2")).Append('%')
               .AppendLine();
         }
 

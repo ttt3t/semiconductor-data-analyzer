@@ -58,7 +58,7 @@ public partial class WaferTableWindow : Window
     }
 
     private static Binding ValueBinding(int index, bool counts) => new($"Values[{index}]")
-    { Mode = BindingMode.OneTime, StringFormat = counts ? "F0" : "F2", TargetNullValue = "–" };
+    { Mode = BindingMode.OneTime, StringFormat = counts ? "F0" : "{0:F2}%", TargetNullValue = "–" };
 
     private void Mode_Changed(object sender, RoutedEventArgs e)
     {
@@ -111,7 +111,8 @@ public partial class WaferTableWindow : Window
             Row(new[] { title });
             Row(headers.Concat(_wafers));
             foreach (var row in grid.Items.OfType<DisplayRow>())
-                Row(labels(row).Concat(row.Values.Select(v => v?.ToString(counts ? "F0" : "F2", CultureInfo.CurrentCulture) ?? "–")));
+                Row(labels(row).Concat(row.Values.Select(v => v.HasValue
+                    ? v.Value.ToString(counts ? "F0" : "F2", CultureInfo.CurrentCulture) + (counts ? "" : "%") : "–")));
             Row(new[] { denominatorName }.Concat(Enumerable.Repeat("", headers.Length - 1)).Concat(_wafers.Select(w =>
             {
                 int index = result?.Wafers.IndexOf(w) ?? -1;

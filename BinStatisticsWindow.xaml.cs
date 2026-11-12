@@ -23,7 +23,7 @@ public partial class BinStatisticsWindow : Window
             DgSites.Columns.Add(new DataGridTextColumn
             {
                 Header = $"Site {_sites[i]}\n占比%", Width = 110, CanUserSort = false,
-                Binding = new Binding($"Percentages[{i}]") { Mode = BindingMode.OneTime, StringFormat = "F2", TargetNullValue = "–" }
+                Binding = new Binding($"Percentages[{i}]") { Mode = BindingMode.OneTime, StringFormat = "{0:F2}%", TargetNullValue = "–" }
             });
         var colors = new CategoryBrushConverter(first.Categories.Concat(last.Categories).Select(r => r.Category));
         var categoryStyle = new Style(typeof(DataGridCell));
@@ -95,7 +95,7 @@ public partial class BinStatisticsWindow : Window
             ? "\"" + value.Replace("\"", "\"\"") + "\"" : value;
         void Row(params string[] cells) => text.AppendLine(string.Join("\t", cells.Select(Cell)));
         static string Number(int value) => value.ToString(CultureInfo.CurrentCulture);
-        static string Percent(double value) => value.ToString("F2", CultureInfo.CurrentCulture);
+        static string Percent(double value) => value.ToString("F2", CultureInfo.CurrentCulture) + "%";
         Row("复测模式", FirstMode.IsChecked == true ? "只保留首测" : "复测覆盖首测");
         text.AppendLine();
         Row("SBIN 明细");
