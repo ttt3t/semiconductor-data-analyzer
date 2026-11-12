@@ -260,7 +260,7 @@ public partial class MainWindow : Window
     private void UpdateWindowTitle()
     {
         string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
-        Title = $"CSV Analyzer · V2.0.13 | 当前数据：{_currentDataName} | 配置：{configName}";
+        Title = $"CSV Analyzer · V2.0.14 | 当前数据：{_currentDataName} | 配置：{configName}";
     }
 
     private void UpdateConfigInfo()
@@ -312,7 +312,7 @@ public partial class MainWindow : Window
         var dlg = new OpenFileDialog
         {
             Filter = DataFileService.OpenFilter,
-            Title = "打开 CSV / STDF（支持批量选择）",
+            Title = "打开 CSV / STDF / Excel / ZIP（支持批量选择）",
             Multiselect = true
         };
 
@@ -333,34 +333,28 @@ public partial class MainWindow : Window
     private async Task OpenCsvAsync(string path)
     {
         if (_isBusy) throw new InvalidOperationException("正在处理数据，请稍后重试。");
-        var mode = SelectStdfMode(path);
-        await OpenDataAsync(path, mode);
+        await OpenSelectedFilesAsync(new[] { path });
     }
 
-    private StdfImportMode SelectStdfMode(string path)
-    {
-        if (!File.Exists(path)) throw new FileNotFoundException("找不到数据文件：" + path);
-        if (!DataFileService.IsStdf(path)) return StdfImportMode.Standard;
-        return _windowPreferences.DefaultStdfMode;
-    }
-
-    private async Task OpenDataAsync(string path, StdfImportMode mode)
+    private async Task OpenDataAsync(string path, StdfImportMode mode, CsvImportSource? selected = null)
     {
         if (_isBusy) throw new InvalidOperationException("正在处理数据，请稍后重试。");
         if (!File.Exists(path)) throw new FileNotFoundException("找不到数据文件：" + path);
-        if (!_managedConfigLoaded && string.IsNullOrEmpty(_lastConfigPath) && !DataFileService.IsStdf(path) && !IntegratedCsvService.IsIntegrated(path))
-            throw new InvalidOperationException("普通 CSV 需要先在设置中加载行列配置；STDF 可直接打开。");
+        selected ??= new(path, StdfMode: mode);
+        if (!_managedConfigLoaded && string.IsNullOrEmpty(_lastConfigPath) && await Task.Run(() => DataFileService.NeedsLayout(selected)))
+            throw new InvalidOperationException("CSV / Excel 需要先在设置中加载行列配置；STDF 可直接打开。");
         await RunImportAsync(async () =>
         {
             TxtStatus.Text = "正在导入文件…";
-            var result = await ReadImportAsync(() => DataFileService.Parse(path, _config, stdfMode: mode));
+            var result = await ReadImportAsync(() => DataFileService.Parse(path, _config, stdfMode: mode,
+                archiveEntry: selected.ArchiveEntry, worksheet: selected.Worksheet));
             var prepared = await PrepareAnalysisAsync(result, _config);
             _columnValueFilters.Clear();
             UpdateValueFilterHeaders();
             CommitAnalysis(result, prepared);
-            _sources = new List<CsvImportSource> { new(path, StdfMode: mode) };
+            _sources = new List<CsvImportSource> { selected };
             _currentCsvPath = path;
-            _currentDataName = Path.GetFileName(path);
+            _currentDataName = ImportContainerService.DisplayName(selected);
             UpdateWindowTitle();
             TxtStatus.Text = _recentFiles.RememberCsv(path) ? "解析完成" : "解析完成（最近文件记录未能保存）";
             if (result.SourceDescription.Length > 0) TxtStatus.Text += " | " + result.SourceDescription;
@@ -404,7 +398,7 @@ public partial class MainWindow : Window
             _columnValueFilters.Clear(); UpdateValueFilterHeaders();
             CommitAnalysis(result, prepared);
             _sources = sources.ToList(); _currentCsvPath = sources[0].Path;
-            _currentDataName = sources.Count == 1 ? Path.GetFileName(sources[0].Path) : $"整合数据（{sources.Count} 个文件 / {result.Wafers.Count} 个 wafer）";
+            _currentDataName = sources.Count == 1 ? ImportContainerService.DisplayName(sources[0]) : $"整合数据（{sources.Count} 个文件 / {result.Wafers.Count} 个 wafer）";
             UpdateConfigInfo();
             TxtStatus.Text = "已按登记顺序打开，保留全部原始测试记录；复测显示沿用产品设置。";
             ShowSerialNumberNotice(_data);
@@ -419,14 +413,16 @@ public partial class MainWindow : Window
         var file = new OpenFileDialog { Filter = DataFileService.OpenFilter, Title = "选择要追加的数据（支持多选 / 批量导入）", Multiselect = true };
         if (file.ShowDialog(this) != true) return;
         var source = _data;
-        var choices = new ImportDataWindow(file.FileNames, _data.Wafers);
-        if (!await IndependentWindow.ShowAsync(choices)) return;
         try
         {
+            var selected = await ImportSourceSelection.SelectAsync(file.FileNames);
+            if (selected == null) return;
             EnsureWindowSource(source);
-            var paths = choices.SelectedFiles;
+            var choices = new ImportDataWindow(selected, _data.Wafers);
+            if (!await IndependentWindow.ShowAsync(choices)) return;
+            EnsureWindowSource(source);
             var mode = _windowPreferences.DefaultStdfMode;
-            var sources = paths.Select(path => new CsvImportSource(path, choices.Options, mode)).ToArray();
+            var sources = choices.SelectedSources.Select(selected => selected with { Options = choices.Options, StdfMode = mode }).ToArray();
             await AppendFilesAsync(sources);
         }
         catch (OperationCanceledException) { }

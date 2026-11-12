@@ -7,25 +7,33 @@ namespace SemiconductorCsvAnalyzer;
 public partial class ImportDataWindow : Window
 {
     public ImportOptions? Options { get; private set; }
-    private sealed record ImportFile(string Path) { public string Name => System.IO.Path.GetFileName(Path); }
+    private sealed record ImportFile(CsvImportSource Source)
+    {
+        public string Path => Source.Path;
+        public string Name => ImportContainerService.DisplayName(Source);
+    }
     private readonly ObservableCollection<ImportFile> _files;
     private readonly bool _initialImport;
     public string[] SelectedFiles => _files.Select(f => f.Path).ToArray();
+    public CsvImportSource[] SelectedSources => _files.Select(f => f.Source).ToArray();
     public ImportDataWindow(string fileName, IReadOnlyList<string> wafers) : this(new[] { fileName }, wafers) { }
 
     public ImportDataWindow(IReadOnlyList<string> files, IReadOnlyList<string> wafers, bool initialImport = false)
+        : this(files.Select(p => new CsvImportSource(p)).ToArray(), wafers, initialImport) { }
+
+    public ImportDataWindow(IReadOnlyList<CsvImportSource> files, IReadOnlyList<string> wafers, bool initialImport = false)
     {
         InitializeComponent();
         _initialImport = initialImport;
-        _files = new ObservableCollection<ImportFile>(files.Select(path => new ImportFile(path)));
+        _files = new ObservableCollection<ImportFile>(files.Select(source => new ImportFile(source)));
         TxtFile.Text = $"已选择 {files.Count} 个文件";
         FileList.ItemsSource = _files;
         FileList.SelectedIndex = files.Count > 0 ? 0 : -1;
         CmbTargetWafer.ItemsSource = wafers;
         CmbTargetWafer.SelectedIndex = wafers.Count > 0 ? 0 : -1;
         // No pre-scan: import already reads WIR/WRR during its definition pass.
-        AutoWafer.IsChecked = files.Any(path => new[] { ".std", ".stdf", ".std.gz", ".stdf.gz" }
-            .Any(extension => path.EndsWith(extension, StringComparison.OrdinalIgnoreCase)));
+        AutoWafer.IsChecked = files.Any(source => new[] { ".std", ".stdf", ".std.gz", ".stdf.gz" }
+            .Any(extension => (source.ArchiveEntry ?? source.Path).EndsWith(extension, StringComparison.OrdinalIgnoreCase)));
         if (initialImport)
         {
             Title = "打开 / 批量导入";

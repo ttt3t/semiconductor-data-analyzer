@@ -1,0 +1,130 @@
+using System.IO.Compression;
+using System.Text;
+using System.Text.Json;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static void Check(bool ok, string message) { if (!ok) throw new Exception(message); checks++; Console.WriteLine("PASS " + message); }
+    static void Throws<T>(Action action, string message) where T : Exception
+    { try { action(); } catch (T) { Check(true, message); return; } throw new Exception("Expected " + typeof(T).Name + ": " + message); }
+    static AnalyzerConfig Config() => new() { TestItemRow = 1, LowLimitRow = 0, HighLimitRow = 0, UnitRow = 0,
+        DataStartRow = 2, TestItemStartColumn = 8, SerialNumberColumn = 1, XColumn = 2, YColumn = 3,
+        SiteColumn = 4, SBinColumn = 5, HBinColumn = 6, WaferColumn = 7, Delimiter = ';', EncodingName = "GB18030" };
+    static void Entry(ZipArchive zip, string name, string content)
+    { using var writer = new StreamWriter(zip.CreateEntry(name).Open(), new UTF8Encoding(false)); writer.Write(content); }
+    static string Cell(string address, string value, string type = "n", string formula = "") =>
+        $"<c r=\"{address}\" t=\"{type}\">{formula}<v>{value}</v></c>";
+    static string Sheet(double first, bool uncached)
+    {
+        string headers = string.Concat(Enumerable.Range(0, 8).Select(i => Cell(((char)('A' + i)) + "1", (i == 7 ? 11 : i).ToString(), "s")));
+        string Row(int row, int sn, string hbin, string value) => $"<row r=\"{row}\">" +
+            Cell("A" + row, sn.ToString(), "s") + Cell("B" + row, row.ToString()) + Cell("C" + row, "-2") +
+            Cell("D" + row, "1") + Cell("E" + row, hbin) + Cell("F" + row, hbin) + Cell("G" + row, "10", "s") + value + "</row>";
+        return "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><dimension ref=\"A1:H3\"/><sheetData><row r=\"1\">" + headers + "</row>" +
+            Row(2, 8, "1", Cell("H2", first.ToString(System.Globalization.CultureInfo.InvariantCulture), formula: "<f>SUM(1,0.25)</f>")) +
+            Row(3, 9, "5", uncached ? "<c r=\"H3\"><f>SUM(2,0.5)</f></c>" : Cell("H3", "2.5")) + "</sheetData></worksheet>";
+    }
+    static string Workbook(string directory, string name, bool uncached = false, bool sparse = false)
+    {
+        string path = Path.Combine(directory, name);
+        using var file = File.Create(path); using var zip = new ZipArchive(file, ZipArchiveMode.Create);
+        Entry(zip, "_rels/.rels", "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"r1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>");
+        Entry(zip, "xl/workbook.xml", "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"Hidden\" state=\"hidden\" sheetId=\"1\" r:id=\"s1\"/><sheet name=\"Data\" sheetId=\"2\" r:id=\"s2\"/></sheets></workbook>");
+        Entry(zip, "xl/_rels/workbook.xml.rels", "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"s1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/><Relationship Id=\"s2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/><Relationship Id=\"strings\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings\" Target=\"sharedStrings.xml\"/></Relationships>");
+        string[] texts = { "SN", "X", "Y", "Site", "SBIN", "HBIN", "Wafer", "Unused", "000001", "000002", "W1" };
+        Entry(zip, "xl/sharedStrings.xml", "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
+            string.Concat(texts.Select(t => "<si><t>" + t + "</t></si>")) + "<si><r><t>电压 </t></r><r><t>&quot;A&quot;</t></r><rPh sb=\"0\" eb=\"1\"><t>IGNORE</t></rPh></si></sst>");
+        Entry(zip, "xl/worksheets/sheet1.xml", Sheet(9.25, false));
+        Entry(zip, "xl/worksheets/sheet2.xml", sparse ? "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData><row r=\"2\"><c r=\"C2\" t=\"inlineStr\"><is><t>quote,&quot;value&quot;_x000A_line</t></is></c><c r=\"F2\"><v>42</v></c></row><row r=\"4\"><c r=\"B4\"><v>-3</v></c></row></sheetData></worksheet>" : Sheet(1.25, uncached));
+        if (name.EndsWith(".xlsm")) Entry(zip, "xl/vbaProject.bin", "not executed");
+        return path;
+    }
+    static string CompressedStdf(string directory)
+    {
+        string path = Path.Combine(directory, "test.stdf.gz");
+        using var file = File.Create(path); using var gzip = new GZipStream(file, CompressionLevel.Fastest); using var output = new BinaryWriter(gzip);
+        void C(BinaryWriter writer, string value) { byte[] bytes = Encoding.ASCII.GetBytes(value); writer.Write((byte)bytes.Length); writer.Write(bytes); }
+        void R(byte type, byte sub, Action<BinaryWriter> fill)
+        {
+            using var body = new MemoryStream(); using (var w = new BinaryWriter(body, Encoding.ASCII, true)) fill(w);
+            output.Write((ushort)body.Length); output.Write(type); output.Write(sub); output.Write(body.ToArray());
+        }
+        R(0, 10, w => { w.Write((byte)2); w.Write((byte)4); });
+        R(1, 10, w => { w.Write(0u); w.Write(0u); w.Write((byte)1); w.Write((byte)'P'); w.Write((byte)' '); w.Write((byte)' '); w.Write((ushort)0); w.Write((byte)' '); foreach (var s in new[] { "LOT-ZIP", "PRODUCT", "NODE", "TESTER", "JOB", "REV" }) C(w, s); });
+        R(5, 10, w => { w.Write((byte)1); w.Write((byte)1); });
+        R(15, 10, w => { w.Write(101u); w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((byte)0); w.Write(2.25f); C(w, "Voltage"); C(w, ""); });
+        R(5, 20, w => { w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((ushort)1); w.Write((ushort)1); w.Write((ushort)1); w.Write((short)3); w.Write((short)-2); w.Write(0u); C(w, "SN1"); });
+        R(1, 20, w => { w.Write(0u); w.Write((byte)' '); });
+        return path;
+    }
+    static int Main(string[] args)
+    {
+        try
+        {
+            string directory = Path.GetFullPath(args[0]); Directory.CreateDirectory(directory);
+            using var operation = new AnalysisOperation(); var config = Config(); string originalConfig = ConfigLoader.Serialize(config);
+            string xlsx = Workbook(directory, "measurements.xlsx");
+            var sheets = SpreadsheetImportService.Worksheets(new(xlsx));
+            Check(sheets.Length == 2 && sheets[0].Hidden && sheets[1].Name == "Data", "worksheet order, names and hidden state are preserved");
+            var data = DataFileService.Parse(xlsx, config);
+            Check(data.Records.Count == 2 && data.Items.Single().Values.Select(v => v.Value).SequenceEqual(new[] { 1.25, 2.5 }), "first visible worksheet, cached formula and numeric values enter the CSV analysis pipeline");
+            Check(data.Records[0].ChipSerialNumber == "000001" && data.Records[0].Y == -2 && data.Items[0].Name == "电压 \"A\"", "shared rich text, leading-zero identities, quoted names and signed coordinates survive");
+            Check(ConfigLoader.Serialize(config) == originalConfig, "spreadsheet CSV normalization does not mutate the user's delimiter or encoding");
+            var hidden = DataFileService.Parse(xlsx, config, worksheet: "Hidden");
+            Check(hidden.Items[0].Values[0].Value == 9.25, "explicit worksheet selection is used rather than silently taking the first sheet");
+            Throws<InvalidDataException>(() => DataFileService.Parse(xlsx, config, worksheet: "Removed"), "missing worksheets fail clearly");
+            string xlsm = Workbook(directory, "macro-enabled.xlsm");
+            Check(DataFileService.Parse(xlsm, config, worksheet: "Data").Items[0].Values[0].Value == 1.25, "xlsm worksheet data reads without loading or running VBA");
+            string missing = Workbook(directory, "uncached.xlsx", uncached: true);
+            var warning = DataFileService.Parse(missing, config, worksheet: "Data");
+            Check(warning.ImportWarning.Contains("1 个公式") && warning.Items[0].Values.Count == 1 && warning.Records.Count == 2, "uncached formulas warn and stay missing without inventing a pass value");
+            string sparse = Workbook(directory, "sparse.xlsx", sparse: true);
+            using (var csv = SpreadsheetImportService.Convert(sparse, "Data", default))
+            {
+                using var reader = File.OpenText(csv.File.Path);
+                var rows = CsvText.ReadRecords(reader, true).Select(r => CsvParser.ParseLine(r, ',', true)).ToArray();
+                Check(rows.Length == 4 && rows[1].Length == 6 && rows[1][0] == "" && rows[1][1] == "" && rows[1][2] == "quote,\"value\"\nline" && rows[1][5] == "42" && rows[3][1] == "-3", "sparse rows, leading/interior column gaps and multiline quoted text keep exact positions");
+            }
+            string zipPath = Path.Combine(directory, "batch.zip");
+            const string csvText = "SN,X,Y,Site,SBIN,HBIN,Wafer,A\n000003,1,2,1,1,1,W2,3.5\n";
+            using (var zipFile = File.Create(zipPath))
+            using (var zip = new ZipArchive(zipFile, ZipArchiveMode.Create))
+            { zip.CreateEntryFromFile(xlsx, "office/measurements.xlsx"); Entry(zip, "a/test.csv", csvText); Entry(zip, "b/test.csv", csvText.Replace("3.5", "7.5")); Entry(zip, "../escape.csv", csvText); Entry(zip, "README.md", "ignored"); }
+            var entries = ImportContainerService.ZipEntries(zipPath);
+            Check(entries.Length == 4 && entries.Count(e => e.ArchiveEntry!.EndsWith("test.csv")) == 2, "ZIP listing filters supported types and retains full paths for duplicate basenames");
+            Check(SpreadsheetImportService.Worksheets(new(zipPath, ArchiveEntry: "office/measurements.xlsx")).Length == 2, "worksheets can be enumerated inside a selected ZIP member");
+            var zippedExcel = DataFileService.Parse(zipPath, config, archiveEntry: "office/measurements.xlsx", worksheet: "Hidden");
+            Check(zippedExcel.Items[0].Values[0].Value == 9.25 && zippedExcel.SourceDescription.Contains("office/measurements.xlsx"), "ZIP Excel keeps member and sheet selection, including provenance");
+            var csvConfig = Config(); csvConfig.Delimiter = ','; csvConfig.EncodingName = "UTF-8";
+            var sources = new[] { new CsvImportSource(zipPath, ArchiveEntry: "a/test.csv"), new CsvImportSource(zipPath, new(false, "", false, false), ArchiveEntry: "b/test.csv") };
+            var merged = DatasetService.LoadSources(sources, csvConfig);
+            Check(merged.Records.Count == 2 && merged.Items[0].Values.Select(v => v.Value).SequenceEqual(new[] { 3.5, 7.5 }), "batch merge reads only selected ZIP members without basename collisions");
+            Check(DatasetService.LoadSources(sources, csvConfig).Records.Count == 2, "reload reopens original archive and exact members after temporary files are removed");
+            _ = DataFileService.Parse(zipPath, csvConfig, archiveEntry: "../escape.csv");
+            Check(!File.Exists(Path.Combine(directory, "escape.csv")), "ZIP traversal names cannot write outside the private temporary directory");
+            Throws<InvalidDataException>(() => DataFileService.Parse(zipPath, config, archiveEntry: "missing.csv"), "removed archive members fail clearly");
+            using (var cancel = new CancellationTokenSource()) { cancel.Cancel(); Throws<OperationCanceledException>(() => DataFileService.Parse(zipPath, config, cancellationToken: cancel.Token, archiveEntry: "office/measurements.xlsx"), "container imports respect cancellation"); }
+            var saved = new ManagedDataFile { FilePath = zipPath, ArchiveEntry = "office/measurements.xlsx", Worksheet = "Hidden" };
+            var reopened = JsonSerializer.Deserialize<ManagedDataFile>(JsonSerializer.Serialize(saved))!;
+            Check(reopened.ArchiveEntry == saved.ArchiveEntry && reopened.Worksheet == "Hidden" && reopened.FileName.Contains("Hidden"), "product catalog persists archive member and worksheet identity");
+            var product = new ManagedProduct { Name = "ZIP workbook", ConfigText = ConfigLoader.Serialize(config),
+                Flow = new() { new ProductTestStage { Id = "CP1", Kind = "CP", Name = "CP" } },
+                Files = new() { new ManagedDataFile { FilePath = zipPath, ArchiveEntry = "office/measurements.xlsx", Worksheet = "Data", StageId = "CP1", Lot = "LOT1" } } };
+            var management = ProductYieldService.Calculate(product);
+            Check(management.Files.Single().Error.Length == 0 && management.Yields.Any(r => r.StageId == "CP1" && r.Total == 2 && r.Good == 1), "product manager calculates yield from the registered ZIP workbook and worksheet");
+            var managedSources = ManagedAnalysisService.Sources(product, product.Files.Select(f => f.Id));
+            Check(managedSources[0].ArchiveEntry == "office/measurements.xlsx" && managedSources[0].Worksheet == "Data" &&
+                DatasetService.LoadSources(managedSources, config).Records.Count == 2, "manager merge-open preserves archive and sheet selection");
+            string compressed = CompressedStdf(directory);
+            using (var archive = ZipFile.Open(zipPath, ZipArchiveMode.Update)) archive.CreateEntryFromFile(compressed, "cp/test.stdf.gz");
+            var zippedStdf = DataFileService.Parse(zipPath, config, archiveEntry: "cp/test.stdf.gz");
+            Check(zippedStdf.Records.Count == 1 && zippedStdf.Items.Single().Values.Single().Value == 2.25, "ZIP members containing gzip STDF reuse the STDF parser");
+            Check(ImportContainerService.ReadStdfMetadata(zipPath, "cp/test.stdf.gz", default).LotId == "LOT-ZIP", "ZIP STDF metadata is available to registration and Lot Info");
+            Console.WriteLine($"{checks} focused import checks passed"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

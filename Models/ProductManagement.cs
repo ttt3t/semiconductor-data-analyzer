@@ -47,6 +47,8 @@ public sealed class ManagedDataFile
     public string WaferOverride { get; set; } = "";
     public string ConfigText { get; set; } = "";
     public StdfImportMode StdfMode { get; set; }
+    public string? ArchiveEntry { get; set; }
+    public string? Worksheet { get; set; }
     public DateTime RegisteredUtc { get; set; } = DateTime.UtcNow;
     public DateTime? TestTime { get; set; }
     public bool UseStdfTestTime { get; set; }
@@ -64,7 +66,8 @@ public sealed class ManagedDataFile
     public double? SpecifiedPercent { get; set; }
     public bool SpecifiedIncludePartial { get; set; }
     public string SpecifiedOrigin { get; set; } = "物理分 Bin";
-    [JsonIgnore] public string FileName => FilePath.Length == 0 ? "指定良率（无原文件）" : Path.GetFileName(FilePath);
+    [JsonIgnore] public string FileName => FilePath.Length == 0 ? "指定良率（无原文件）" :
+        Services.ImportContainerService.DisplayName(new(FilePath, ArchiveEntry: ArchiveEntry, Worksheet: Worksheet));
 }
 
 public sealed class ManagementSnapshot

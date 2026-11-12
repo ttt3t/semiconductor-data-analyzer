@@ -280,7 +280,7 @@ public static partial class ProductYieldService
         state.Length = length; state.LastWriteUtc = modified;
         var config = FileConfig(product, file);
         if (stage.Kind == "FT" && config.UuidTestNumbers.Count == 0) throw new InvalidDataException("FT 自动计算需要在产品流程中指定 UUID Test Num；指定汇总良率可不提供 UUID。");
-        var data = DataFileService.ReadForYield(file.FilePath, config, token, file.StdfMode);
+        var data = DataFileService.ReadForYield(file.FilePath, config, token, file.StdfMode, file.ArchiveEntry, file.Worksheet);
         state.Warning = data.ImportWarning;
         token.ThrowIfCancellationRequested();
         bool Blank(CsvRecord record) => !record.X.HasValue && !record.Y.HasValue &&

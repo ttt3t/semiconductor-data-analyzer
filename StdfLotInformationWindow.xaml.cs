@@ -8,14 +8,16 @@ namespace SemiconductorCsvAnalyzer;
 
 public partial class StdfLotInformationWindow : Window
 {
-    private sealed record SourceFile(string Path)
+    private sealed record SourceFile(CsvImportSource Source)
     {
-        public string Name => System.IO.Path.GetFileName(Path);
+        public string Path => Source.Path;
+        public string Name => ImportContainerService.DisplayName(Source);
+        public string Key => Path.ToUpperInvariant() + "\0" + Source.ArchiveEntry;
         public string Directory => System.IO.Path.GetDirectoryName(Path) ?? "";
     }
     private sealed record WaferEntry(string Name, StdfWaferMetadata Metadata);
     private sealed record CachedInformation(StdfFileMetadata Metadata, long Length, DateTime Modified);
-    private readonly Dictionary<string, CachedInformation> _cache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CachedInformation> _cache = new(StringComparer.Ordinal);
     private CancellationTokenSource? _sourceCancellation, _readCancellation;
     private StdfFileMetadata? _displayed;
     private string _displayedPath = "";
@@ -25,6 +27,9 @@ public partial class StdfLotInformationWindow : Window
     public Task InformationLoading { get; private set; } = Task.CompletedTask;
 
     public StdfLotInformationWindow(IEnumerable<string> paths)
+        : this(paths.Select(p => new CsvImportSource(p))) { }
+
+    public StdfLotInformationWindow(IEnumerable<CsvImportSource> paths)
     {
         InitializeComponent();
         Closed += (_, _) =>
@@ -37,10 +42,13 @@ public partial class StdfLotInformationWindow : Window
     }
 
     public void UpdateSources(IEnumerable<string> paths)
+        => UpdateSources(paths.Select(p => new CsvImportSource(p)));
+
+    public void UpdateSources(IEnumerable<CsvImportSource> paths)
     {
         if (_closed) return;
-        var distinct = paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        string? selected = (LstFiles.SelectedItem as SourceFile)?.Path;
+        var distinct = paths.Select(p => new SourceFile(p)).DistinctBy(f => f.Key).ToArray();
+        string? selected = (LstFiles.SelectedItem as SourceFile)?.Key;
         _sourceCancellation?.Cancel(); _readCancellation?.Cancel(); _readVersion++;
         var cancel = new CancellationTokenSource(); _sourceCancellation = cancel;
         long version = ++_sourceVersion;
@@ -49,22 +57,23 @@ public partial class StdfLotInformationWindow : Window
         SourcesLoading = DiscoverSourcesAsync(distinct, selected, version, cancel);
     }
 
-    private async Task DiscoverSourcesAsync(string[] paths, string? selected, long version, CancellationTokenSource cancel)
+    private async Task DiscoverSourcesAsync(SourceFile[] paths, string? selected, long version, CancellationTokenSource cancel)
     {
         try
         {
-            var files = await Task.Run(() => paths.Where(path =>
+            var files = await Task.Run(() => paths.Where(file =>
             {
                 cancel.Token.ThrowIfCancellationRequested();
                 // Known extensions remain selectable even if the original file has moved.
-                string name = path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase) ? path[..^3] : path;
-                if (name.EndsWith(".std", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".stdf", StringComparison.OrdinalIgnoreCase)) return true;
-                try { return DataFileService.IsStdf(path); }
+                string name = file.Source.ArchiveEntry ?? file.Path;
+                if (ImportContainerService.IsStdfName(name)) return true;
+                if (file.Source.ArchiveEntry != null || ImportContainerService.IsSpreadsheet(name)) return false;
+                try { return DataFileService.IsStdf(file.Path); }
                 catch (IOException) { return false; }
                 catch (UnauthorizedAccessException) { return false; }
-            }).Select(p => new SourceFile(p)).ToArray(), cancel.Token);
+            }).ToArray(), cancel.Token);
             if (_closed || version != _sourceVersion || cancel.IsCancellationRequested) return;
-            var kept = files.Select(f => f.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var kept = files.Select(f => f.Key).ToHashSet(StringComparer.Ordinal);
             foreach (string key in _cache.Keys.Where(k => !kept.Contains(k)).ToArray()) _cache.Remove(key);
             TxtSourceCount.Text = $"STDF 文件（{files.Length}）";
             LstFiles.ItemsSource = files;
@@ -73,7 +82,7 @@ public partial class StdfLotInformationWindow : Window
                 TxtStatus.Text = "当前数据中没有 STDF 源文件。请先在分析器中打开或追加导入 STDF。";
                 return;
             }
-            LstFiles.SelectedItem = files.FirstOrDefault(f => string.Equals(f.Path, selected, StringComparison.OrdinalIgnoreCase)) ?? files[0];
+            LstFiles.SelectedItem = files.FirstOrDefault(f => f.Key == selected) ?? files[0];
             await InformationLoading;
         }
         catch (OperationCanceledException) { }
@@ -83,35 +92,35 @@ public partial class StdfLotInformationWindow : Window
 
     private void File_Changed(object sender, SelectionChangedEventArgs e)
     {
-        if (LstFiles.SelectedItem is SourceFile file) StartRead(file.Path, false);
+        if (LstFiles.SelectedItem is SourceFile file) StartRead(file, false);
     }
     private void Refresh_Click(object sender, RoutedEventArgs e)
     {
-        if (LstFiles.SelectedItem is SourceFile file) StartRead(file.Path, true);
+        if (LstFiles.SelectedItem is SourceFile file) StartRead(file, true);
     }
-    private void StartRead(string path, bool force)
+    private void StartRead(SourceFile source, bool force)
     {
         _readCancellation?.Cancel();
         var cancel = new CancellationTokenSource(); _readCancellation = cancel;
         long version = ++_readVersion;
-        _cache.TryGetValue(path, out var cached);
-        ClearInformation(); TxtPath.Text = path; TxtSummary.Text = Path.GetFileName(path);
+        _cache.TryGetValue(source.Key, out var cached);
+        ClearInformation(); TxtPath.Text = source.Path + (source.Source.ArchiveEntry == null ? "" : " ▸ " + source.Source.ArchiveEntry); TxtSummary.Text = source.Name;
         TxtStatus.Text = "正在读取 Lot Information…"; BtnRefresh.IsEnabled = true;
-        InformationLoading = ReadInformationAsync(path, force ? null : cached, version, cancel);
+        InformationLoading = ReadInformationAsync(source, force ? null : cached, version, cancel);
     }
-    private async Task ReadInformationAsync(string path, CachedInformation? cached, long version, CancellationTokenSource cancel)
+    private async Task ReadInformationAsync(SourceFile source, CachedInformation? cached, long version, CancellationTokenSource cancel)
     {
         try
         {
             var info = await Task.Run(() =>
             {
                 cancel.Token.ThrowIfCancellationRequested();
-                var file = new FileInfo(path); long length = file.Length; DateTime modified = file.LastWriteTimeUtc;
+                var file = new FileInfo(source.Path); long length = file.Length; DateTime modified = file.LastWriteTimeUtc;
                 return cached != null && cached.Length == length && cached.Modified == modified ? cached :
-                    new CachedInformation(StdfMetadataService.Read(path, cancel.Token), length, modified);
+                    new CachedInformation(ImportContainerService.ReadStdfMetadata(source.Path, source.Source.ArchiveEntry, cancel.Token), length, modified);
             }, cancel.Token);
             if (_closed || version != _readVersion || cancel.IsCancellationRequested) return;
-            _cache[path] = info; _displayed = info.Metadata; _displayedPath = path;
+            _cache[source.Key] = info; _displayed = info.Metadata; _displayedPath = source.Name;
             TxtSummary.Text = $"Lot: {(_displayed.LotId.Length > 0 ? _displayed.LotId : "未提供")}  ·  {_displayed.Wafers.Count} 个晶圆记录";
             DgLot.ItemsSource = _displayed.LotFields;
             LstWafers.ItemsSource = _displayed.Wafers.Select((w, i) => new WaferEntry($"{i + 1}. {(w.WaferId.Length > 0 ? w.WaferId : "未命名晶圆")}", w)).ToArray();
@@ -127,7 +136,7 @@ public partial class StdfLotInformationWindow : Window
         catch (Exception ex)
         {
             if (!_closed && version == _readVersion)
-            { _cache.Remove(path); TxtStatus.Text = "读取失败：" + ex.Message; }
+            { _cache.Remove(source.Key); TxtStatus.Text = "读取失败：" + ex.Message; }
         }
         finally { if (ReferenceEquals(_readCancellation, cancel)) _readCancellation = null; cancel.Dispose(); }
     }

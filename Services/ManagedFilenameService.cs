@@ -59,7 +59,7 @@ public static class ManagedFilenameService
     public static string Apply(ManagedDataFile file, ManagedFilenameRule rule, bool overwrite = false)
     {
         if (file.FilePath.Length == 0) return "";
-        string stem = Stem(file.FilePath); var warnings = new List<string>();
+        string stem = Stem(file.ArchiveEntry ?? file.FilePath); var warnings = new List<string>();
         if (rule.ExtractWafer && (overwrite || file.WaferOverride.Length == 0))
         {
             try { file.WaferOverride = Slice(stem, rule.WaferStart, rule.WaferLength); }

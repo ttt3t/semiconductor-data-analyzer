@@ -20,13 +20,16 @@ public partial class ManagedImportWindow : Window
     private bool _metadataStarted, _readingMetadata, _closed;
     private CancellationTokenSource? _metadataCancellation;
     public Task MetadataLoading { get; private set; } = Task.CompletedTask;
-    public ManagedImportWindow(ManagedProduct product, IEnumerable<string> paths, bool specified = false, ManagedDataFile? existing = null)
+    public ManagedImportWindow(ManagedProduct product, IEnumerable<string> paths, bool specified = false, ManagedDataFile? existing = null,
+        IReadOnlyList<CsvImportSource>? selectedSources = null)
     {
         InitializeComponent();
         _product = product;
         _editingExisting = existing != null;
         FilenameRule = ProductCatalogStore.Clone(product.FilenameRule);
-        Files = paths.Distinct(StringComparer.OrdinalIgnoreCase).Select(path => new ManagedDataFile { FilePath = Path.GetFullPath(path), Lot = product.Files.LastOrDefault()?.Lot ?? "" }).ToList();
+        Files = (selectedSources ?? paths.Distinct(StringComparer.OrdinalIgnoreCase).Select(p => new CsvImportSource(p)).ToArray())
+            .Select(source => new ManagedDataFile { FilePath = Path.GetFullPath(source.Path), ArchiveEntry = source.ArchiveEntry,
+                Worksheet = source.Worksheet, Lot = product.Files.LastOrDefault()?.Lot ?? "" }).ToList();
         if (Files.Count == 0) Files.Add(new() { Lot = product.Files.LastOrDefault()?.Lot ?? "" });
         if (existing != null) { Files.Clear(); Files.Add(ProductCatalogStore.Clone(existing)); }
         DgFiles.ItemsSource = Files; StageList.ItemsSource = product.Flow; StageList.SelectedIndex = 0;
@@ -57,9 +60,7 @@ public partial class ManagedImportWindow : Window
     {
         if (_metadataStarted || _editingExisting || _closed) return;
         _metadataStarted = true;
-        var files = Files.Where(f => f.FilePath.EndsWith(".std", StringComparison.OrdinalIgnoreCase) ||
-            f.FilePath.EndsWith(".stdf", StringComparison.OrdinalIgnoreCase) || f.FilePath.EndsWith(".std.gz", StringComparison.OrdinalIgnoreCase) ||
-            f.FilePath.EndsWith(".stdf.gz", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var files = Files.Where(f => ImportContainerService.IsStdfName(f.ArchiveEntry ?? f.FilePath)).ToArray();
         if (files.Length > 0) MetadataLoading = ReadMetadataAsync(files);
     }
     private async Task ReadMetadataAsync(ManagedDataFile[] files)
@@ -78,7 +79,7 @@ public partial class ManagedImportWindow : Window
                 foreach (var file in files)
                 {
                     cancellation.Token.ThrowIfCancellationRequested(); ((IProgress<string>)progress).Report("读取 STDF 基本信息：" + file.FileName);
-                    try { result.Add((file, StdfMetadataService.Read(file.FilePath, cancellation.Token), "")); }
+                    try { result.Add((file, ImportContainerService.ReadStdfMetadata(file.FilePath, file.ArchiveEntry, cancellation.Token), "")); }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
                     { result.Add((file, null, ex.Message)); }

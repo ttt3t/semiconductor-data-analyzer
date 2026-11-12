@@ -9,15 +9,17 @@ public partial class MainWindow
     private async Task OpenSelectedFilesAsync(IReadOnlyList<string> paths)
     {
         if (paths.Count == 0) return;
-        if (paths.Count == 1) { await OpenCsvAsync(paths[0]); return; }
         var source = _data;
-        var choices = new ImportDataWindow(paths, Array.Empty<string>(), initialImport: true);
+        var selected = await ImportSourceSelection.SelectAsync(paths);
+        if (selected == null) return;
+        EnsureWindowSource(source);
+        var mode = _windowPreferences.DefaultStdfMode;
+        if (selected.Length == 1) { await OpenDataAsync(selected[0].Path, mode, selected[0] with { StdfMode = mode }); return; }
+        var choices = new ImportDataWindow(selected, Array.Empty<string>(), initialImport: true);
         if (!await IndependentWindow.ShowAsync(choices)) return;
         EnsureWindowSource(source);
-        var ordered = choices.SelectedFiles;
-        var mode = _windowPreferences.DefaultStdfMode;
-        var sources = ordered.Select((path, index) => new CsvImportSource(path,
-            index == 0 ? null : choices.Options, mode)).ToArray();
+        var sources = choices.SelectedSources.Select((selected, index) => selected with
+            { Options = index == 0 ? null : choices.Options, StdfMode = mode }).ToArray();
         await OpenBatchAsync(sources);
     }
 
@@ -26,8 +28,8 @@ public partial class MainWindow
         if (_isBusy) throw new InvalidOperationException("正在处理数据，请稍后重试。");
         if (sources.Count == 0) throw new InvalidDataException("请至少选择一个文件。");
         if (!_managedConfigLoaded && string.IsNullOrEmpty(_lastConfigPath) &&
-            sources.Any(s => !DataFileService.IsStdf(s.Path) && !IntegratedCsvService.IsIntegrated(s.Path)))
-            throw new InvalidOperationException("普通 CSV 需要先在设置中加载配置，或点击 CSV 格式识别并应用结果。");
+            await Task.Run(() => sources.Any(DataFileService.NeedsLayout)))
+            throw new InvalidOperationException("CSV / Excel 需要先在设置中加载行列配置；Excel 沿用 CSV 的行列定义。");
         await RunImportAsync(async () =>
         {
             var result = await ReadImportAsync(() => DatasetService.LoadSources(sources, _config));

@@ -1,6 +1,6 @@
 # Semiconductor Data Analyzer
 
-**CSV Analyzer V2.0.13 · GYF**
+**CSV Analyzer V2.0.14 · GYF**
 
 A Windows desktop application for semiconductor CSV / STDF test-data analysis, built with .NET 8 and WPF.
 
@@ -28,6 +28,16 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 - 良率明细“打开所在位置”按目录去重，每次最多请求 5 个窗口，超出部分在状态栏提示；文件存在性检查在后台进行，可取消。
 
 只启动独立分析器可使用 `SemiconductorCsvAnalyzer.exe --analyzer`。详细口径见 [使用手册](Docs/UserGuide.md)。
+
+## V2.0.14 更新
+
+- 支持打开及追加 `.xlsx`、`.xlsm`，可勾选工作表并按原有选项合并；行列与阈值定义沿用 CSV / INI 配置。读取原始数值和文本、保留空行及稀疏列的位置，公式使用文件保存的缓存结果；缺少公式缓存时警告并作为缺失值导入，不执行 VBA 宏。
+- 支持直接打开 ZIP，按内部完整路径列出 CSV、TXT、TSV、STDF / gzip STDF 及 Excel，可搜索并勾选所需文件；选中的 Excel 还可选择工作表，不递归展开嵌套压缩包。
+- ZIP 只临时展开选中的文件；Excel 逐行转换，共享文本和中间数据放在磁盘，导入结束或取消后清理。源文件路径、ZIP 内部路径和工作表选择保留，配置重算时重新读取原文件。
+- 分析器、产品数据登记、良率重算及管理器合并打开共用该导入路径；ZIP 内的 STDF 支持批次 / 晶圆信息和 Lot Info。产品登记保存具体成员与工作表，资源管理器定位仍指向原压缩包。
+- 继续发布自带运行时和依赖 .NET 8 Desktop Runtime x64 的两种单 EXE ZIP；无需安装 Office 或外部解压软件。
+
+新增解析路径的定向检查：`bash Tests/run-office-zip-import.sh`，覆盖工作表选择、共享文本、稀疏位置、公式缓存、ZIP 内同名文件、gzip STDF、重新读取和管理器登记 / 计算。
 
 ## V2.0.13 更新
 

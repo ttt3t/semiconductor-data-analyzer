@@ -9,7 +9,7 @@ public sealed record ImportOptions(bool SameWafer, string TargetWafer, bool Matc
     bool PreserveWaferNames = false, bool AutoMatch = false, bool AutoWafer = false);
 public sealed record CsvImportSource(string Path, ImportOptions? Options = null,
     StdfImportMode StdfMode = StdfImportMode.Standard, string ConfigText = "", string? WaferOverride = null,
-    string? LotOverride = null, bool ShowLotInWafer = false);
+    string? LotOverride = null, bool ShowLotInWafer = false, string? ArchiveEntry = null, string? Worksheet = null);
 
 public static partial class DatasetService
 {
@@ -279,7 +279,7 @@ public static partial class DatasetService
                 ImportProgress.Report(1, true);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
-            { throw new InvalidDataException($"文件“{Path.GetFileName(source.Path)}”导入失败：{ex.Message}", ex); }
+            { throw new InvalidDataException($"文件“{ImportContainerService.DisplayName(source)}”导入失败：{ex.Message}", ex); }
             consumed += weights[i];
         }
         if (!merge) return result!;
@@ -436,7 +436,8 @@ public static partial class DatasetService
             layout.PassHBins = config.PassHBins; layout.PartialPassHBins = config.PartialPassHBins;
             layout.MissingTokens = config.MissingTokens; layout.NotApplicableTokens = config.NotApplicableTokens;
         }
-        var data = DataFileService.Parse(source.Path, layout, cancellationToken: AnalysisOperation.Token, stdfMode: source.StdfMode);
+        var data = DataFileService.Parse(source.Path, layout, cancellationToken: AnalysisOperation.Token, stdfMode: source.StdfMode,
+            archiveEntry: source.ArchiveEntry, worksheet: source.Worksheet);
         if (source.WaferOverride is { Length: > 0 } && data.Devices.Select(d => d.WaferId).Distinct().Skip(1).Any())
             throw new InvalidDataException("含多晶圆的文件不能整体覆盖为一个片号，请在登记中清空晶圆覆盖值。");
         if (source.WaferOverride != null || source.LotOverride != null || source.ShowLotInWafer)

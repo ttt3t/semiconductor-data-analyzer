@@ -40,6 +40,7 @@ public static class ManagedAnalysisService
         foreach (var file in selected) if (!File.Exists(file.FilePath)) throw new FileNotFoundException("找不到原文件，请重新定位：" + file.FileName);
         return selected.Select((file, i) => new CsvImportSource(file.FilePath,
             i == 0 ? null : new(false, "", true, false, PreserveWaferNames: true, AutoMatch: true), file.StdfMode,
-            ConfigLoader.Serialize(ProductYieldService.FileConfig(product, file)), file.WaferOverride, file.Lot, multipleLots)).ToArray();
+            ConfigLoader.Serialize(ProductYieldService.FileConfig(product, file)), file.WaferOverride, file.Lot, multipleLots,
+            file.ArchiveEntry, file.Worksheet)).ToArray();
     }
 }

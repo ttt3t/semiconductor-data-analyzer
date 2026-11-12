@@ -217,14 +217,19 @@ public partial class ProductManagementWindow : Window
         if (_product == null || _busy) return;
         var files = new OpenFileDialog { Filter = DataFileService.OpenFilter, Multiselect = true, Title = "选择产品数据文件（保留原路径）" };
         if (files.ShowDialog() != true) return;
-        var dialog = new ManagedImportWindow(_product, files.FileNames) { Owner = this };
+        string productId = _product.Id;
+        var selected = await ImportSourceSelection.SelectAsync(files.FileNames);
+        if (selected == null || _closed) return;
+        if (_product?.Id != productId || _busy) { TxtStatus.Text = "产品或处理状态已变化，请重新选择导入。"; return; }
+        var dialog = new ManagedImportWindow(_product, Array.Empty<string>(), selectedSources: selected) { Owner = this };
         if (dialog.ShowDialog() != true) return;
         try
         {
             var product = ProductCatalogStore.Clone(_product);
             product.FilenameRule = dialog.FilenameRule;
             foreach (var file in dialog.Files)
-                if (!product.Files.Any(f => string.Equals(f.FilePath, file.FilePath, StringComparison.OrdinalIgnoreCase) && f.StageId == file.StageId && f.Lot == file.Lot && f.WaferOverride == file.WaferOverride)) product.Files.Add(file);
+                if (!product.Files.Any(f => string.Equals(f.FilePath, file.FilePath, StringComparison.OrdinalIgnoreCase) && f.ArchiveEntry == file.ArchiveEntry &&
+                    f.Worksheet == file.Worksheet && f.StageId == file.StageId && f.Lot == file.Lot && f.WaferOverride == file.WaferOverride)) product.Files.Add(file);
             SaveProduct(product); await CalculateAsync(product.Id);
         }
         catch (Exception ex) { TxtStatus.Text = ex.Message; }
