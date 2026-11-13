@@ -959,6 +959,7 @@ public partial class MainWindow : Window
                     request.ShowThreeSigma, request.Item.ShownUnit);
             if (!ReferenceEquals(_displayedScatter, result.Scatter))
                 ScatterPlot.SetSeries(result.Scatter, request.Item.DisplayLowLimit, request.Item.DisplayHighLimit, request.Item.ShownUnit);
+            ScatterPlot.ShowConnections = _config.ScatterShowConnections;
             ScatterPlot.SetReferenceLines(stats.Count > 0 ? stats.Mean * request.Item.DisplayFactor : null,
                 stats.Count > 0 ? stats.StdDev * request.Item.DisplayFactor : null,
                 _config.ScatterShowLowLimit, _config.ScatterShowHighLimit, _config.ScatterShowMean, _config.ScatterShowThreeSigma);

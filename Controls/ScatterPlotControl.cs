@@ -39,6 +39,17 @@ public class ScatterPlotControl : CachedPlotControl
     public bool ShowUsl { get; private set; } = true;
     public bool ShowMean { get; private set; }
     public bool ShowThreeSigma { get; private set; }
+    private bool _showConnections = true;
+    public bool ShowConnections
+    {
+        get => _showConnections;
+        set
+        {
+            if (_showConnections == value) return;
+            _showConnections = value;
+            InvalidatePlot();
+        }
+    }
 
     // Reuse the detail worker's statistics. Drawing reference lines never scans the samples.
     public void SetReferenceLines(double? mean, double? sigma, bool showLsl, bool showUsl, bool showMean, bool showThreeSigma)
@@ -728,8 +739,9 @@ public class ScatterPlotControl : CachedPlotControl
         double edgeSamples = scaleX > 0 ? (r + 1) / scaleX : 1;
         int start = ScatterSeries.LowerBound(points, visMinX - edgeSamples);
         // Connections share the existing bitmap and scratch storage, behind every point.
-        ScatterRaster.DrawConnections(_pixelBuffer, bmpW, bmpH, _series,
-            visMinX, visMaxX, scaleX, biasX, scaleY, biasY);
+        if (ShowConnections)
+            ScatterRaster.DrawConnections(_pixelBuffer, bmpW, bmpH, _series,
+                visMinX, visMaxX, scaleX, biasX, scaleY, biasY);
 
         for (int i = start; i < points.Length && points[i].Index <= visMaxX + edgeSamples; i++)
         {

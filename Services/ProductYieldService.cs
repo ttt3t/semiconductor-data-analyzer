@@ -23,6 +23,7 @@ public static partial class ProductYieldService
             if (!group.Any(s => s.Required)) throw new InvalidDataException($"{group.Key} 至少要有一个必测步骤。");
         _ = RetestIdentityService.ParseTestNumbers(product.UuidTestNumbers);
         if (product.RetestMode is not (RetestMode.First or RetestMode.Last)) throw new InvalidDataException("管理统计仅支持首测或末次整条记录。");
+        if (!Enum.IsDefined(product.TestItemMatch)) throw new InvalidDataException("测项合并依据无效，请重新选择自动、测试编号或测试项名称。");
         _ = ConfigLoader.Parse(product.ConfigText);
     }
 

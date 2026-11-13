@@ -27,6 +27,36 @@ static class Probe
     static CsvParseResult Data(string unit, string[] values, string low = "", string high = "") => DataFileService.Parse(Csv(unit, values, low, high), Config());
     static CsvParseResult Merge(CsvParseResult a, CsvParseResult b, bool newer = false, bool byNumber = true, bool sameWafer = false) =>
         DatasetService.Merge(a, b, new(sameWafer, sameWafer ? "W1" : "", byNumber, newer));
+    static void ManagedMergeOptions()
+    {
+        var legacy = System.Text.Json.JsonSerializer.Deserialize<ManagedProduct>("{}")!;
+        Check(legacy.TestItemMatch == ManagedTestItemMatch.Auto && !legacy.MergeUseNewLimits,
+            "old product catalogs retain automatic matching and existing limits");
+        var product = new ManagedProduct { Name = "Merge options", ConfigText = ConfigLoader.Serialize(Config()) };
+        product.Flow.Add(new());
+        product.Files.Add(new() { FilePath = Csv("V", new[] { "1.2" }, "1", "2"), StageId = product.Flow[0].Id, Lot = "LOT" });
+        product.Files.Add(new() { FilePath = Csv("V", new[] { "1.5" }, "1.1", "1.9", name: "Renamed"), StageId = product.Flow[0].Id, Lot = "LOT" });
+        CsvParseResult Load() => DatasetService.LoadSources(ManagedAnalysisService.Sources(product, product.Files.Select(f => f.Id)), Config());
+        Check(Load().Items.Count == 1, "manager default matches unique numbers even when names change");
+        product.TestItemMatch = ManagedTestItemMatch.Number;
+        var numbered = Load();
+        Check(numbered.Items.Count == 1 && numbered.Records.Count == 2 && numbered.Items[0].LowLimit == 1,
+            "manager explicit number matching joins renamed items and retains old limits");
+        product.MergeUseNewLimits = true;
+        Check(Load().Items[0].LowLimit == 1.1, "manager can select the later file's thresholds");
+        product.TestItemMatch = ManagedTestItemMatch.Name;
+        Check(Load().Items.Count == 2, "manager explicit name matching keeps different names separate");
+        product.Files[1].FilePath = Csv("V", new[] { "1.5" }, number: "200");
+        Check(Load().Items.Count == 1, "manager name matching joins equal names with different numbers");
+        product.TestItemMatch = ManagedTestItemMatch.Number;
+        Check(Load().Items.Count == 2, "manager number matching keeps different numbers separate");
+        var clone = ProductCatalogStore.Clone(product);
+        Check(clone.TestItemMatch == ManagedTestItemMatch.Number && clone.MergeUseNewLimits,
+            "product catalog JSON preserves matching mode and threshold choice");
+        Check(ConfigLoader.Parse("[Scatter]\n").ScatterShowConnections &&
+            !ConfigLoader.Parse(ConfigLoader.Serialize(new AnalyzerConfig { ScatterShowConnections = false })).ScatterShowConnections,
+            "scatter connections default on for old INI and retain disabled state after save/load");
+    }
     static string Stdf(string unit, float number)
     {
         string path = Path.Combine(folder, "binary-" + ++sequence + ".stdf");
@@ -46,6 +76,7 @@ static class Probe
         {
             folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
             using var operation = new AnalysisOperation();
+            ManagedMergeOptions();
             Check(UnitConversion.Normalize(" µA ") == "uA" && UnitConversion.Normalize("μA") == "uA" && UnitConversion.Normalize("Ohm") == "Ω", "unit aliases normalize without losing prefix case");
             Check(Close(UnitConversion.Factor("mV", "V")!.Value, .001) && UnitConversion.Factor("ms", "mS") == null && UnitConversion.Factor("V", "A") == null,
                 "known SI dimensions convert and different dimensions remain separate");

@@ -21,10 +21,10 @@ static class Probe
         {
             uint Premultiplied(int alpha, int r, int g, int b) => (uint)(alpha << 24 |
                 (r * alpha + 127) / 255 << 16 | (g * alpha + 127) / 255 << 8 | (b * alpha + 127) / 255);
-            Check(ScatterRaster.Pass == Premultiplied(128, 28, 128, 28) &&
+            Check(ScatterRaster.Pass == Premultiplied(128, 20, 100, 20) &&
                 ScatterRaster.Fail == Premultiplied(128, 220, 60, 60) &&
                 ScatterRaster.Mark == Premultiplied(128, 30, 120, 200), "green/red/blue crosses use 50% alpha and correctly premultiplied RGB");
-            Check(ScatterRaster.Connection == Premultiplied(128, 28, 128, 28), "connections use 50% alpha and retain the same green hue");
+            Check(ScatterRaster.Connection == Premultiplied(128, 30, 120, 200), "connections use blue with 50% alpha");
             const int w = 128, h = 100;
             var pixels = new uint[w * h + 16];
             foreach (double dpi in new[] { 1.0, 1.5, 2.0, 3.0 })
@@ -51,7 +51,7 @@ static class Probe
 
             Array.Clear(pixels);
             Connections(pixels, w, h, Series(new[] { 20.0, 20 }), 100, -100);
-            Check(Enumerable.Range(0, w * h).All(i => pixels[i] == (i / w == 20 && i % w <= 100 && i % w % 6 < 3 ? ScatterRaster.Connection : 0)), "horizontal green connector has one-pixel width and three-on/three-off dashes");
+            Check(Enumerable.Range(0, w * h).All(i => pixels[i] == (i / w == 20 && i % w <= 100 && i % w % 6 < 3 ? ScatterRaster.Connection : 0)), "horizontal blue connector has one-pixel width and three-on/three-off dashes");
             Array.Clear(pixels);
             Connections(pixels, w, h, Series(new[] { -1e9, 1e9 }), 0, 30);
             Check(Enumerable.Range(0, w * h).All(i => pixels[i] == (i % w == 30 && i / w % 6 < 3 ? ScatterRaster.Connection : 0)), "vertical connector clips huge offscreen endpoints and stays one pixel wide");

@@ -29,6 +29,11 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 
 只启动独立分析器可使用 `SemiconductorCsvAnalyzer.exe --analyzer`。详细口径见 [使用手册](Docs/UserGuide.md)。
 
+## 当前源码增补（版本仍为 2.0.15）
+
+- 管理器“产品与流程”入口增加齿轮图标，采用蓝色强调并略微放大。产品可独立设置合并测项依据（自动 / 测试编号 / 测试项名称）及阈值取舍，应用于文件列表和良率明细的合并打开。旧产品保留原有自动规则。
+- 散点连接线改为蓝色虚线，良品绿色略加深；点与连接线仍为 50% 不透明度，保留原有位图渲染和重叠加深方式。“设置 → 统计与绘图”新增连接线开关，保存到 INI，复制 PNG 和 XLSX 报告同步生效。
+
 ## V2.0.15 更新
 
 - 合并 CSV、Excel、STDF 及 ZIP 内数据时，测试项单位不一致不再直接中断。`uA / µA / μA` 等别名统一；已知同物理量的 SI 单位按已有测项单位换算测量值，“使用新阈值”时 LSL / USL 同步换算，“使用旧阈值”保持原值。

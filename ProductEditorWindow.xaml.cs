@@ -29,6 +29,8 @@ public partial class ProductEditorWindow : Window
         HasFt.IsChecked = _flow.Any(s => s.Kind == "FT"); IncludePartial.IsChecked = Product.IncludePartialPass;
         FirstMode.IsChecked = Product.RetestMode == RetestMode.First;
         PreferGoodRetest.IsChecked = Product.PreferGoodRetest;
+        CmbTestItemMatch.SelectedIndex = (int)Product.TestItemMatch;
+        CmbMergeLimits.SelectedIndex = Product.MergeUseNewLimits ? 1 : 0;
         FirstMode.IsEnabled = Product.PreferGoodRetest == false;
         if (Product.PreferGoodRetest) LastMode.IsChecked = true;
     }
@@ -79,6 +81,8 @@ public partial class ProductEditorWindow : Window
             Product.ConfigText = TxtConfig.Text; Product.UuidTestNumbers = string.Join(",", RetestIdentityService.ParseTestNumbers(TxtUuid.Text));
             Product.IncludePartialPass = IncludePartial.IsChecked == true;
             Product.PreferGoodRetest = PreferGoodRetest.IsChecked == true;
+            Product.TestItemMatch = (ManagedTestItemMatch)CmbTestItemMatch.SelectedIndex;
+            Product.MergeUseNewLimits = CmbMergeLimits.SelectedIndex == 1;
             Product.RetestMode = FirstMode.IsChecked == true ? RetestMode.First : RetestMode.Last;
             Product.Flow = _flow.ToList();
             if (Product.Files.Any(f => !Product.Flow.Any(s => s.Id == f.StageId) &&

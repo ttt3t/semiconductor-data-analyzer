@@ -163,7 +163,8 @@ public static class XlsxReportService
                         config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, item.ShownUnit);
                     Plot(favorites, focusRow + 3, 2, histogram, "Histogram_" + i, histogramSize);
                     progress.At("绘制关注项散点图", item, i);
-                    var scatter = new ScatterPlotControl { Title = item.DisplayName, UseLimitRange = options.ScatterUseLimitRange };
+                    var scatter = new ScatterPlotControl { Title = item.DisplayName, UseLimitRange = options.ScatterUseLimitRange,
+                        ShowConnections = config.ScatterShowConnections };
                     scatter.SetSeries(detail.Scatter, item.DisplayLowLimit, item.DisplayHighLimit, item.ShownUnit);
                     scatter.SetReferenceLines(detail.Statistics.Count > 0 ? detail.Statistics.Mean * item.DisplayFactor : null,
                         detail.Statistics.Count > 0 ? detail.Statistics.StdDev * item.DisplayFactor : null,

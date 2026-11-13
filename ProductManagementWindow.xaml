@@ -62,7 +62,14 @@
                         <TextBlock x:Name="TxtProductInfo" Text="" Foreground="#64748B" Margin="0,1,8,0" TextWrapping="Wrap"/></StackPanel>
                 </DockPanel>
                 <WrapPanel x:Name="ProductActions" IsEnabled="False" Margin="0,0,0,3">
-                    <Button Content="产品与流程" Click="EditProduct_Click" Style="{StaticResource SmallButton}"/>
+                    <Button Click="EditProduct_Click" Style="{StaticResource SmallButton}" Background="{StaticResource AccentBrush}"
+                            BorderBrush="{StaticResource AccentBrush}" Foreground="White" FontWeight="SemiBold">
+                        <Button.LayoutTransform><ScaleTransform ScaleX="1.05" ScaleY="1.05"/></Button.LayoutTransform>
+                        <StackPanel Orientation="Horizontal">
+                            <controls:ActionIcon Kind="Settings" Width="15" Height="15" Stroke="White" Margin="0,0,5,0"/>
+                            <TextBlock Text="产品与流程" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
                     <Button Content="删除产品" Click="DeleteProduct_Click" Style="{StaticResource SmallButton}" Foreground="#B42318"/>
                     <Button Content="登记数据文件" Click="Import_Click" Style="{StaticResource SmallButton}"/>
                     <Button Content="登记物理分 Bin 良率" Click="SpecifiedYield_Click" Style="{StaticResource SmallButton}"/>

@@ -26,6 +26,20 @@
                         </WrapPanel>
                         <TextBlock Text="FT 自动计算 UUID：按顺序填写 eFuse / OTP Test Num，多个用逗号分隔；仅指定良率时可留空" TextWrapping="Wrap"/>
                         <TextBox x:Name="TxtUuid" Padding="8,6" Margin="0,5,0,12"/>
+                        <WrapPanel Margin="0,0,0,12">
+                            <TextBlock Text="合并测项依据" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <ComboBox x:Name="CmbTestItemMatch" Width="185" Padding="6,3" Margin="0,0,18,0"
+                                      ToolTip="用于同一步骤的文件合并打开。自动模式优先按唯一测试编号匹配，否则按名称匹配。">
+                                <ComboBoxItem Content="自动（保留现有规则）"/>
+                                <ComboBoxItem Content="测试编号（Test Num）"/>
+                                <ComboBoxItem Content="测试项名称（Test Item）"/>
+                            </ComboBox>
+                            <TextBlock Text="合并阈值" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <ComboBox x:Name="CmbMergeLimits" Width="160" Padding="6,3" ToolTip="合并打开时使用先登记或后登记文件的测项阈值；不改变管理良率的原始 HBIN 判定。">
+                                <ComboBoxItem Content="保留先登记文件阈值"/>
+                                <ComboBoxItem Content="使用后登记文件阈值"/>
+                            </ComboBox>
+                        </WrapPanel>
                         <DockPanel Margin="0,0,0,8">
                             <TextBlock Text="测试流程 · 必测步骤共同决定对应 CP / FT 综合良率" FontWeight="SemiBold" VerticalAlignment="Center"/>
                         </DockPanel>

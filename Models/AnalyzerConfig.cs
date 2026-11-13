@@ -62,6 +62,7 @@ public sealed class AnalyzerConfig
     public bool ScatterShowHighLimit { get; set; } = true;
     public bool ScatterShowMean { get; set; }
     public bool ScatterShowThreeSigma { get; set; }
+    public bool ScatterShowConnections { get; set; } = true;
 
     // Display
     public int DecimalPlaces { get; set; } = 6;

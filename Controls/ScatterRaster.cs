@@ -8,12 +8,12 @@ internal static class ScatterRaster
 {
     // Pbgra32: RGB channels are premultiplied by alpha, rounded to the nearest byte.
     // Crosses start at 50%; same-color overlaps accumulate in the coverage buffer.
-    internal const uint Pass = 0x800e400e;
+    internal const uint Pass = 0x800a320a;
     internal const uint Fail = 0x806e1e1e;
     internal const uint Mark = 0x800f3c64;
     // Single-pixel dashed connections use 50% opacity, behind the crosses.
-    internal const uint Connection = 0x800e400e;
-    private static readonly uint[][] DensityColors = { Colors(28, 128, 28), Colors(220, 60, 60), Colors(30, 120, 200) };
+    internal const uint Connection = 0x800f3c64;
+    private static readonly uint[][] DensityColors = { Colors(20, 100, 20), Colors(220, 60, 60), Colors(30, 120, 200) };
 
     private static uint[] Colors(int r, int g, int b)
     {

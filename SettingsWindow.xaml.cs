@@ -161,7 +161,8 @@ public partial class SettingsWindow : Window
             ["ScatterShowLowLimit"] = (ChkScatterShowLowLimit.IsChecked == true).ToString(),
             ["ScatterShowHighLimit"] = (ChkScatterShowHighLimit.IsChecked == true).ToString(),
             ["ScatterShowMean"] = (ChkScatterShowMean.IsChecked == true).ToString(),
-            ["ScatterShowThreeSigma"] = (ChkScatterShowThreeSigma.IsChecked == true).ToString()
+            ["ScatterShowThreeSigma"] = (ChkScatterShowThreeSigma.IsChecked == true).ToString(),
+            ["ScatterShowConnections"] = (ChkScatterShowConnections.IsChecked == true).ToString()
         };
         string edited = UpdateAnalysisFields(TxtConfig.Text, fields);
         config = ConfigLoader.Parse(edited, _fileName);
@@ -218,6 +219,7 @@ public partial class SettingsWindow : Window
             ChkScatterShowHighLimit.IsChecked = config.ScatterShowHighLimit;
             ChkScatterShowMean.IsChecked = config.ScatterShowMean;
             ChkScatterShowThreeSigma.IsChecked = config.ScatterShowThreeSigma;
+            ChkScatterShowConnections.IsChecked = config.ScatterShowConnections;
             _analysisDirty = false;
         }
         finally { _syncing = wasSyncing; }

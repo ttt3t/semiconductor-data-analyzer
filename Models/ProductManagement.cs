@@ -10,6 +10,8 @@ public sealed class ProductCatalog
     public List<ManagedProduct> Products { get; set; } = new();
 }
 
+public enum ManagedTestItemMatch { Auto, Number, Name }
+
 public sealed class ManagedProduct
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
@@ -19,6 +21,8 @@ public sealed class ManagedProduct
     public string UuidTestNumbers { get; set; } = "";
     public bool IncludePartialPass { get; set; }
     public bool PreferGoodRetest { get; set; }
+    public ManagedTestItemMatch TestItemMatch { get; set; } = ManagedTestItemMatch.Auto;
+    public bool MergeUseNewLimits { get; set; }
     public RetestMode RetestMode { get; set; } = RetestMode.Last;
     public List<ProductTestStage> Flow { get; set; } = new();
     public List<ManagedDataFile> Files { get; set; } = new();

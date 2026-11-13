@@ -39,7 +39,8 @@ public static class ManagedAnalysisService
         bool multipleLots = selected.Select(f => f.Lot).Distinct(StringComparer.Ordinal).Skip(1).Any();
         foreach (var file in selected) if (!File.Exists(file.FilePath)) throw new FileNotFoundException("找不到原文件，请重新定位：" + file.FileName);
         return selected.Select((file, i) => new CsvImportSource(file.FilePath,
-            i == 0 ? null : new(false, "", true, false, PreserveWaferNames: true, AutoMatch: true), file.StdfMode,
+            i == 0 ? null : new(false, "", product.TestItemMatch != ManagedTestItemMatch.Name, product.MergeUseNewLimits,
+                PreserveWaferNames: true, AutoMatch: product.TestItemMatch == ManagedTestItemMatch.Auto), file.StdfMode,
             ConfigLoader.Serialize(ProductYieldService.FileConfig(product, file)), file.WaferOverride, file.Lot, multipleLots,
             file.ArchiveEntry, file.Worksheet)).ToArray();
     }
