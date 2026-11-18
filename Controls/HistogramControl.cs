@@ -78,6 +78,7 @@ public class HistogramControl : CachedPlotControl
     private string? _lslText, _uslText;
     public string? LslText => _lslText;
     public string? UslText => _uslText;
+    internal Rect PlotBounds { get; private set; } = Rect.Empty;
 
     public IList<HistogramBin>? Bins
     {
@@ -128,6 +129,7 @@ public class HistogramControl : CachedPlotControl
     protected override void DrawPlot(DrawingContext dc)
     {
         _renderCount++;
+        PlotBounds = Rect.Empty;
         double w = ActualWidth, h = ActualHeight;
         dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, Math.Max(0, w), Math.Max(0, h)));
         if (w < 180 || h < 120) return;
@@ -177,6 +179,7 @@ public class HistogramControl : CachedPlotControl
         double top = Math.Max(40 + headerOffset, labels.Count == 0 ? 0 : labels.Max(label => label.Bounds.Bottom) + 5);
         double plotH = h - top - bottom;
         if (plotH < 20) return;
+        PlotBounds = new Rect(left, top, plotW, plotH);
         const double countFontSize = 10;
         var widestCount = ShowBinCounts ? ChartAxis.Text(this, maxCount.ToString(CultureInfo.InvariantCulture), countFontSize) : null;
         double binPitch = plotW / Bins.Count;
@@ -229,7 +232,7 @@ public class HistogramControl : CachedPlotControl
             lastLabelRight = tx + text.Width;
         }
 
-        dc.PushClip(new RectangleGeometry(new Rect(left, top, plotW, plotH)));
+        dc.PushClip(new RectangleGeometry(PlotBounds));
         foreach (var bin in Bins)
         {
             double x = MapX(bin.From), width = MapX(bin.To) - x;
@@ -274,7 +277,7 @@ public class HistogramControl : CachedPlotControl
             }
         }
         dc.Pop();
-        ChartAxis.DrawAxes(dc, AxisPen, new Rect(left, top, plotW, plotH));
+        ChartAxis.DrawAxes(dc, AxisPen, PlotBounds);
 
         foreach (var label in labels)
             dc.DrawLine(label.Pen, new Point(label.X, label.Bounds.Bottom + 1), new Point(label.X, top));

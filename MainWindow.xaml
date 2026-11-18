@@ -736,7 +736,9 @@
                         <controls:HistogramControl x:Name="Histogram" SizeChanged="Chart_SizeChanged"
                                                    ShowBinCounts="{Binding IsChecked, ElementName=ChkHistogramCounts}"
                                                    PreviewMouseWheel="Histogram_MouseWheel" MouseLeftButtonDown="Histogram_MouseLeftButtonDown"
-                                                   ToolTip="Ctrl + 滚轮缩放横轴范围，双击恢复默认范围"/>
+                                                   MouseMove="Histogram_MouseMove" MouseLeftButtonUp="Histogram_MouseLeftButtonUp"
+                                                   LostMouseCapture="Histogram_LostMouseCapture"
+                                                   ToolTip="按住左键左右拖动横轴范围，滚轮缩放，双击恢复默认范围"/>
                     </DockPanel>
                 </Border>
                 <GridSplitter x:Name="PlotDivider" Grid.Row="2" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Center"

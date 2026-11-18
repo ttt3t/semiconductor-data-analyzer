@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -110,6 +111,43 @@ static class Probe
         Call(main, "ChangeHistogramRange", 1d);
         WaitForHistogram(main);
         Check(HasRange(40, -50, 50, 101), "reset restores the original range and frequencies");
+
+        Rect PlotBounds() => (Rect)typeof(HistogramControl).GetProperty("PlotBounds", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(histogram)!;
+        Point PlotCenter(Rect plot) => new(plot.Left + plot.Width / 2, plot.Top + plot.Height / 2);
+        var plot = PlotBounds();
+        var dragStart = PlotCenter(plot);
+        Check((bool)Call(main, "BeginHistogramDrag", dragStart)! && histogram.IsMouseCaptured,
+            "starting a left drag within the chart captures the pointer");
+        Call(main, "MoveHistogramDrag", dragStart.X - plot.Width / 8);
+        Call(main, "MoveHistogramDrag", dragStart.X - plot.Width / 4);
+        WaitForHistogram(main);
+        Check(HasRange(40, -25, 75, 76), "moving left updates both x-axis endpoints and rebins the latest range");
+        Call(main, "EndHistogramDrag");
+
+        var wheel = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, 120)
+            { RoutedEvent = UIElement.PreviewMouseWheelEvent };
+        histogram.RaiseEvent(wheel);
+        WaitForHistogram(main);
+        double zoomRadius = 50d / 1.2;
+        Check(wheel.Handled && HasRange(40, 25 - zoomRadius, 25 + zoomRadius, 67),
+            "plain mouse wheel zooms around the center created by dragging");
+        Call(main, "ChangeHistogramRange", .4d);
+        WaitForHistogram(main);
+        Check(HasRange(40, 5, 45, 41) && ReferenceEquals(scatter, Field(main, "_displayedScatter")),
+            "changing zoom preserves the center and reuses the original scatter");
+
+        plot = PlotBounds();
+        dragStart = PlotCenter(plot);
+        Call(main, "BeginHistogramDrag", dragStart);
+        Call(main, "MoveHistogramDrag", dragStart.X + plot.Width / 2);
+        Call(main, "EndHistogramDrag");
+        WaitForHistogram(main);
+        Check(HasRange(40, -15, 25, 41) && !histogram.IsMouseCaptured,
+            "moving right when zoomed uses the displayed width and releases capture");
+        Call(main, "UpdateHistogramRange", 1d, 0d);
+        WaitForHistogram(main);
+        Check(HasRange(40, -50, 50, 101), "reset clears both the scale and the panned center");
 
         var modes = (ListBox)main.FindName("CmbBinMode");
         modes.SelectedIndex = 1;

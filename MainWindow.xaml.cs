@@ -37,7 +37,9 @@ public partial class MainWindow : Window
     private CsvParseResult _data = new();
     private List<CsvImportSource> _sources = new();
     private int _binMode;
-    private double _histogramRangeScale = 1;
+    private double _histogramRangeScale = 1, _histogramCenterOffset;
+    private double? _histogramDragX;
+    private int _displayedHistogramMode;
     private bool _combineSites = true;
     private bool _combineWafers = true;
     private ScatterOrder _scatterOrder;
@@ -679,6 +681,7 @@ public partial class MainWindow : Window
         BtnCancelOperation.IsEnabled = busy;
         if (busy)
         {
+            EndHistogramDrag();
             CloseValueFilter();
             _detailVersion++;
             _detailTimer.Stop();
@@ -889,7 +892,7 @@ public partial class MainWindow : Window
             _currentItem = summary.Data;
             _currentSite = summary.Site;
             _currentWafer = wafer;
-            _histogramRangeScale = 1;
+            ResetHistogramRange();
             ScheduleDetail();
         }
         else
@@ -903,7 +906,7 @@ public partial class MainWindow : Window
     {
         int mode = CmbBinMode.SelectedIndex;
         if (mode < 0) return;
-        if (_binMode != mode) _histogramRangeScale = 1;
+        if (_binMode != mode) ResetHistogramRange();
         _binMode = mode;
         _config.BinMode = _binMode switch { 1 => "SpecZone", 2 => "MedianCentered", _ => "Fixed" };
         ScheduleDetail();
@@ -911,28 +914,92 @@ public partial class MainWindow : Window
 
     private void Histogram_MouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if ((Keyboard.Modifiers & ModifierKeys.Control) == 0 || e.Delta == 0) return;
+        if (e.Delta == 0) return;
         e.Handled = ChangeHistogramRange(_histogramRangeScale * Math.Pow(1.2, -e.Delta / 120.0));
     }
 
     private void Histogram_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ClickCount == 2 && _histogramRangeScale != 1)
-            e.Handled = ChangeHistogramRange(1);
+        if (e.ClickCount == 2)
+        {
+            EndHistogramDrag();
+            e.Handled = UpdateHistogramRange(1, 0);
+        }
+        else e.Handled = BeginHistogramDrag(e.GetPosition(Histogram));
     }
 
     private bool ChangeHistogramRange(double scale)
+        => UpdateHistogramRange(scale, _histogramCenterOffset);
+
+    private bool CanAdjustHistogramRange =>
+        !_isBusy && !_closing && _currentItem != null && ReferenceEquals(_currentItem, _displayedItem) &&
+        _displayedHistogramMode == _binMode && _displayedWafer == _currentWafer &&
+        _displayedSite == (_combineSites || _currentSite == TestItemSummary.CombinedSite ? null : _currentSite) &&
+        Histogram.Bins is { Count: > 0 };
+
+    private bool UpdateHistogramRange(double scale, double centerOffset)
     {
-        if (_isBusy || _closing || _currentItem == null || !ReferenceEquals(_currentItem, _displayedItem) ||
-            Histogram.Bins is not { Count: > 0 }) return false;
+        if (!CanAdjustHistogramRange || double.IsNaN(scale) || !double.IsFinite(centerOffset)) return false;
         double next = Math.Clamp(scale, 0.0001, 10000);
         if (Math.Abs(next - 1) < 1e-12) next = 1;
-        if (next != _histogramRangeScale)
+        if (Math.Abs(centerOffset) < 1e-12) centerOffset = 0;
+        if (next != _histogramRangeScale || centerOffset != _histogramCenterOffset)
         {
             _histogramRangeScale = next;
-            ScheduleDetail();
+            _histogramCenterOffset = centerOffset;
+            // Let the current rebin finish during continuous dragging, then render the latest position.
+            if (!_detailPending) ScheduleDetail();
         }
         return true;
+    }
+
+    private bool BeginHistogramDrag(Point position)
+    {
+        if (!CanAdjustHistogramRange || !Histogram.PlotBounds.Contains(position) || !Histogram.CaptureMouse()) return false;
+        _histogramDragX = position.X;
+        Histogram.Cursor = Cursors.SizeWE;
+        return true;
+    }
+
+    private void MoveHistogramDrag(double x)
+    {
+        if (_histogramDragX is not double previous || Histogram.PlotBounds.IsEmpty) return;
+        _histogramDragX = x;
+        double offset = _histogramCenterOffset - (x - previous) / Histogram.PlotBounds.Width * _histogramRangeScale;
+        UpdateHistogramRange(_histogramRangeScale, offset);
+    }
+
+    private void Histogram_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_histogramDragX.HasValue) return;
+        if (e.LeftButton != MouseButtonState.Pressed) { EndHistogramDrag(); return; }
+        MoveHistogramDrag(e.GetPosition(Histogram).X);
+        e.Handled = true;
+    }
+
+    private void Histogram_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_histogramDragX.HasValue) return;
+        MoveHistogramDrag(e.GetPosition(Histogram).X);
+        EndHistogramDrag();
+        e.Handled = true;
+    }
+
+    private void Histogram_LostMouseCapture(object sender, MouseEventArgs e) => EndHistogramDrag();
+
+    private void EndHistogramDrag()
+    {
+        if (!_histogramDragX.HasValue) return;
+        _histogramDragX = null;
+        Histogram.ClearValue(CursorProperty);
+        if (Histogram.IsMouseCaptured) Histogram.ReleaseMouseCapture();
+    }
+
+    private void ResetHistogramRange()
+    {
+        EndHistogramDrag();
+        _histogramRangeScale = 1;
+        _histogramCenterOffset = 0;
     }
 
     private void ScheduleDetail()
@@ -986,7 +1053,7 @@ public partial class MainWindow : Window
             _combineSites || _currentSite == TestItemSummary.CombinedSite ? null : _currentSite,
             _binMode, _config.HistogramBinCount(_binMode), _config.IncludeOutOfLimitData,
             _config.ShowLowLimit, _config.ShowHighLimit, _config.ShowMean, _config.ShowThreeSigma,
-            _currentWafer, _scatterOrder, _data.Wafers, _histogramRangeScale);
+            _currentWafer, _scatterOrder, _data.Wafers, _histogramRangeScale, _histogramCenterOffset);
         using var cancellation = new CancellationTokenSource();
         _detailCancellation = cancellation;
         string siteLabel = request.Site == null ? "ALL Sites" : $"Site {request.Site}";
@@ -1019,7 +1086,7 @@ public partial class MainWindow : Window
                 Histogram.Apply(result.Bins, request.Item.DisplayLowLimit, request.Item.DisplayHighLimit,
                     result.Mean, result.Sigma, request.ShowLsl, request.ShowUsl, request.ShowMean,
                     request.ShowThreeSigma, request.Item.ShownUnit,
-                    lslText, uslText, showOverflow: !result.IsHistogramZoomed);
+                    lslText, uslText, showOverflow: !result.IsHistogramRangeAdjusted);
             if (!ReferenceEquals(_displayedScatter, result.Scatter))
                 ScatterPlot.SetSeries(result.Scatter, request.Item.DisplayLowLimit, request.Item.DisplayHighLimit, request.Item.ShownUnit);
             ScatterPlot.ShowConnections = _config.ScatterShowConnections;
@@ -1029,9 +1096,12 @@ public partial class MainWindow : Window
             _displayedItem = request.Item;
             _displayedSite = request.Site;
             _displayedWafer = request.Wafer;
+            _displayedHistogramMode = request.BinMode;
             _displayedBins = result.Bins;
             _displayedScatter = result.Scatter;
             _detailPending = false;
+            if (request.HistogramRangeScale != _histogramRangeScale ||
+                request.HistogramCenterOffset != _histogramCenterOffset) ScheduleDetail();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -1051,7 +1121,7 @@ public partial class MainWindow : Window
     private void ClearDetail()
     {
         _detailPending = false;
-        _histogramRangeScale = 1;
+        ResetHistogramRange();
         _displayedItem = null;
         _displayedScatter = null;
         _displayedBins = null;

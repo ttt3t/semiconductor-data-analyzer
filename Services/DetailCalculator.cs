@@ -5,13 +5,13 @@ namespace SemiconductorCsvAnalyzer.Services;
 public sealed record DetailRequest(TestItemData Item, string? Site, int BinMode, int BinCount,
     bool IncludeOutOfLimit, bool ShowLsl, bool ShowUsl, bool ShowMean, bool ShowThreeSigma,
     string? Wafer = null, ScatterOrder ScatterOrder = ScatterOrder.SerialNumber,
-    IReadOnlyList<string>? WaferOrder = null, double HistogramRangeScale = 1);
+    IReadOnlyList<string>? WaferOrder = null, double HistogramRangeScale = 1, double HistogramCenterOffset = 0);
 
 public sealed record DetailResult(StatisticsResult Statistics, List<HistogramBin> Bins,
     double Mean, double Sigma, ScatterSeries Scatter)
 {
     internal (double From, double To)? RawHistogramRange { get; init; }
-    internal bool IsHistogramZoomed { get; init; }
+    internal bool IsHistogramRangeAdjusted { get; init; }
 }
 
 internal sealed record PreparedDetail(IReadOnlyList<TestValue> Values, StatisticsResult Statistics, ScatterSeries Scatter);
@@ -22,7 +22,7 @@ public static class DetailCalculator
     {
         var prepared = Prepare(request, token);
         var original = CreateHistogram(request, prepared, token);
-        return ZoomHistogram(request, prepared, original, token);
+        return ApplyHistogramRange(request, prepared, original, token);
     }
 
     internal static PreparedDetail Prepare(DetailRequest request, CancellationToken token)
@@ -73,21 +73,23 @@ public static class DetailCalculator
         return new(statistics, bins, mean * factor, sigma * factor, prepared.Scatter) { RawHistogramRange = rawRange };
     }
 
-    internal static DetailResult ZoomHistogram(DetailRequest request, PreparedDetail prepared, DetailResult original,
+    internal static DetailResult ApplyHistogramRange(DetailRequest request, PreparedDetail prepared, DetailResult original,
         CancellationToken token)
     {
-        double scale = request.HistogramRangeScale;
-        if (scale == 1 || !double.IsFinite(scale) || scale <= 0 || original.RawHistogramRange is not { } range)
+        double scale = request.HistogramRangeScale, offset = request.HistogramCenterOffset;
+        if ((scale == 1 && offset == 0) || !double.IsFinite(scale) || scale <= 0 ||
+            !double.IsFinite(offset) || original.RawHistogramRange is not { } range)
             return original;
-        double halfSpan = (range.To - range.From) / 2;
-        double center = range.From + halfSpan;
-        double radius = halfSpan * scale;
+        double span = range.To - range.From;
+        // The center offset is a fraction of the original span, independent of zoom and display units.
+        double center = range.From + span / 2 + span * offset;
+        double radius = span / 2 * scale;
         var item = request.Item;
         var bins = HistogramService.CreateRangeBins(prepared.Values, request.BinCount, center - radius, center + radius,
             item.LowLimit, item.HighLimit, request.IncludeOutOfLimit, UsesSpecZones(request), false, token);
         if (bins.Count == 0) return original;
         ScaleBins(bins, item.DisplayFactor);
-        return original with { Bins = bins, IsHistogramZoomed = true };
+        return original with { Bins = bins, IsHistogramRangeAdjusted = true };
     }
 
     private static bool UsesSpecZones(DetailRequest request) =>
@@ -145,6 +147,6 @@ public sealed class DetailCache
             if (_modes.Count >= 3) _modes.Clear();
             _modes[modeKey] = original;
         }
-        return DetailCalculator.ZoomHistogram(request, _prepared, original, token);
+        return DetailCalculator.ApplyHistogramRange(request, _prepared, original, token);
     }
 }
