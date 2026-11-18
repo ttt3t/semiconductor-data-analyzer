@@ -18,6 +18,8 @@ public sealed class TestItemData
     public string Unit { get; set; } = "";
     // Presentation only. Raw columns, thresholds and UUID identities keep source units.
     public bool IsStdfMeasurement { get; set; }
+    public StdfLimitDisplay? StdfLowLimitDisplay { get; set; }
+    public StdfLimitDisplay? StdfHighLimitDisplay { get; set; }
     public double DisplayFactor { get; set; } = 1;
     public string DisplayUnit { get; set; } = "";
     public string ShownUnit => DisplayUnit.Length > 0 ? DisplayUnit : Unit;

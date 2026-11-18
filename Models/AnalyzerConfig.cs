@@ -66,6 +66,7 @@ public sealed class AnalyzerConfig
 
     // Display
     public int DecimalPlaces { get; set; } = 6;
+    public int StdfLimitSignificantDigits { get; set; } = 6;
     public int MaxTableRows { get; set; } = 10000;
 
     // One-pass clipping for the robust summary columns only.

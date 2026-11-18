@@ -69,6 +69,9 @@ public class HistogramControl : CachedPlotControl
     private int _batch;
     private long _renderCount;
     public string Unit { get; private set; } = "";
+    private string? _lslText, _uslText;
+    public string? LslText => _lslText;
+    public string? UslText => _uslText;
 
     public IList<HistogramBin>? Bins
     {
@@ -94,10 +97,11 @@ public class HistogramControl : CachedPlotControl
         bool showLsl,
         bool showUsl,
         bool showMean,
-        bool showThreeSigma, string unit = "")
+        bool showThreeSigma, string unit = "", string? lslText = null, string? uslText = null)
     {
         _batch++;
         Unit = unit ?? "";
+        _lslText = lslText; _uslText = uslText;
         Bins = bins;
         Lsl = lsl;
         Usl = usl;
@@ -139,16 +143,16 @@ public class HistogramControl : CachedPlotControl
         if (plotW < 30) return;
         double MapX(double value) => left + (value - dataMin) / (dataMax - dataMin) * plotW;
         var references = new List<(double X, FormattedText Text, Pen Pen)>();
-        void AddReference(bool show, double? value, string name, Pen pen)
+        void AddReference(bool show, double? value, string name, Pen pen, string? limitText = null)
         {
             if (!show || !value.HasValue || !double.IsFinite(value.Value) || value < dataMin || value > dataMax) return;
-            var text = ChartAxis.Text(this, name + " " + ChartAxis.Format(value.Value), 11, pen.Brush);
+            var text = ChartAxis.Text(this, name + " " + (limitText ?? ChartAxis.Format(value.Value)), 11, pen.Brush);
             text.MaxTextWidth = plotW;
             text.Trimming = TextTrimming.CharacterEllipsis;
             references.Add((MapX(value.Value), text, pen));
         }
-        AddReference(ShowLsl, Lsl, "LSL", LslPen);
-        AddReference(ShowUsl, Usl, "USL", LslPen);
+        AddReference(ShowLsl, Lsl, "LSL", LslPen, _lslText);
+        AddReference(ShowUsl, Usl, "USL", LslPen, _uslText);
         AddReference(ShowMean, Mean, "μ", MeanPen);
 
         // Keep each label attached to its numeric position; use another lane if labels collide.

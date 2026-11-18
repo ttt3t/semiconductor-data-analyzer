@@ -147,6 +147,8 @@ public partial class SettingsWindow : Window
             throw new InvalidDataException("离群阈值必须是大于 0 的有限数字，例如 6 或 3.5。");
         if (!int.TryParse(TxtBinCount.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int bins) || bins < 1)
             throw new InvalidDataException("分箱数量必须是大于 0 的整数。");
+        if (!int.TryParse(TxtStdfLimitDigits.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int limitDigits) || limitDigits is < 1 or > 9)
+            throw new InvalidDataException("STDF 阈值默认有效位数必须在 1 到 9 之间。");
         string mode = (CmbHistogramMode.SelectedItem as ComboBoxItem)?.Tag as string ?? "Fixed";
         var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -154,6 +156,7 @@ public partial class SettingsWindow : Window
             ["RemoveOutliers"] = (ChkRemoveOutliers.IsChecked == true).ToString(),
             ["OutlierSigma"] = sigma.ToString("R", CultureInfo.InvariantCulture),
             ["BinCount"] = bins.ToString(CultureInfo.InvariantCulture), ["BinMode"] = mode,
+            ["StdfLimitSignificantDigits"] = limitDigits.ToString(CultureInfo.InvariantCulture),
             ["ShowLowLimit"] = (ChkShowLowLimit.IsChecked == true).ToString(),
             ["ShowHighLimit"] = (ChkShowHighLimit.IsChecked == true).ToString(),
             ["ShowMean"] = (ChkShowMean.IsChecked == true).ToString(),
@@ -191,7 +194,8 @@ public partial class SettingsWindow : Window
         }
         string result = string.Join(Environment.NewLine, lines);
         var scatter = fields.Where(p => !found.Contains(p.Key) && p.Key.StartsWith("Scatter", StringComparison.Ordinal)).ToList();
-        var histogram = fields.Where(p => !found.Contains(p.Key) && !p.Key.StartsWith("Scatter", StringComparison.Ordinal) && p.Key is not "RemoveOutliers" and not "OutlierSigma" and not "PreferGoodRetest").ToList();
+        var histogram = fields.Where(p => !found.Contains(p.Key) && !p.Key.StartsWith("Scatter", StringComparison.Ordinal) && p.Key is not "RemoveOutliers" and not "OutlierSigma" and not "PreferGoodRetest" and not "StdfLimitSignificantDigits").ToList();
+        if (!found.Contains("StdfLimitSignificantDigits")) result += Environment.NewLine + "[Display]" + Environment.NewLine + "StdfLimitSignificantDigits=" + fields["StdfLimitSignificantDigits"];
         var robust = fields.Where(p => !found.Contains(p.Key) && p.Key is "RemoveOutliers" or "OutlierSigma").ToList();
         if (!found.Contains("PreferGoodRetest")) result += Environment.NewLine + "[RetestSelection]" + Environment.NewLine + "PreferGoodRetest=" + fields["PreferGoodRetest"];
         if (histogram.Count > 0) result += Environment.NewLine + "[Histogram]" + Environment.NewLine + string.Join(Environment.NewLine, histogram.Select(p => p.Key + "=" + p.Value));
@@ -209,6 +213,7 @@ public partial class SettingsWindow : Window
             ChkRemoveOutliers.IsChecked = config.RemoveOutliers;
             TxtOutlierSigma.Text = config.OutlierSigma.ToString("G", CultureInfo.InvariantCulture);
             TxtBinCount.Text = config.BinCount.ToString(CultureInfo.InvariantCulture);
+            TxtStdfLimitDigits.Text = config.StdfLimitSignificantDigits.ToString(CultureInfo.InvariantCulture);
             CmbHistogramMode.SelectedIndex = config.BinMode.ToUpperInvariant() switch
             { "SPEC" or "SPECZONE" => 1, "MEAN" or "MEANCENTERED" or "MEDIAN" or "MEDIANCENTERED" => 2, _ => 0 };
             ChkShowLowLimit.IsChecked = config.ShowLowLimit;

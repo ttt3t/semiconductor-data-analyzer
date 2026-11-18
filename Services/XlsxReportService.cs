@@ -160,7 +160,9 @@ public static class XlsxReportService
                     progress.At("绘制关注项直方图", item, i);
                     var histogram = new HistogramControl { Title = item.DisplayName };
                     histogram.Apply(detail.Bins, item.DisplayLowLimit, item.DisplayHighLimit, detail.Mean, detail.Sigma,
-                        config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, item.ShownUnit);
+                        config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, item.ShownUnit,
+                        item.StdfLowLimitDisplay == null ? null : combined.LslText,
+                        item.StdfHighLimitDisplay == null ? null : combined.UslText);
                     Plot(favorites, focusRow + 3, 2, histogram, "Histogram_" + i, histogramSize);
                     progress.At("绘制关注项散点图", item, i);
                     var scatter = new ScatterPlotControl { Title = item.DisplayName, UseLimitRange = options.ScatterUseLimitRange,
@@ -277,10 +279,12 @@ public static class XlsxReportService
     {
         var item = summary.Data;
         object?[] values = { focused ? "✓" : "", item.TestNumber, item.DisplayName, summary.Site, summary.Wafer, item.SBin, item.HBin, item.ShownUnit,
-            item.DisplayLowLimit, item.DisplayHighLimit, summary.Count, summary.Fails, summary.Eorr, summary.SiteSigma,
+            summary.LslPresentation.ReportValue, summary.UslPresentation.ReportValue, summary.Count, summary.Fails, summary.Eorr, summary.SiteSigma,
             summary.Count > 0 ? summary.Mean : null, summary.Max, summary.Min, summary.Median, summary.Count > 0 ? summary.Sigma : null,
             summary.RobustMean, summary.RobustSigma, summary.Cpk, summary.Count > 0 ? summary.InSpecPercent / 100 : null };
         for (int i = 0; i < values.Length; i++) Value(sheet.Cell(row, i + 2), values[i]);
+        if (summary.LslPresentation.ExcelFormat is string lslFormat) sheet.Cell(row, 10).Style.NumberFormat.Format = lslFormat;
+        if (summary.UslPresentation.ExcelFormat is string uslFormat) sheet.Cell(row, 11).Style.NumberFormat.Format = uslFormat;
         var range = sheet.Range(row, 2, row, SummaryLastColumn);
         if (row % 2 == 0) range.Style.Fill.BackgroundColor = Stripe;
         range.Style.Alignment.WrapText = false;

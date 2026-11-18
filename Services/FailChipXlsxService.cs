@@ -95,13 +95,18 @@ public static class FailChipXlsxService
         }
         ValidateRows(output);
         ValidateRows(retestGoods);
+        var lowLimits = data.Items.Select(i => LimitDisplay.Present(i, false, config)).ToArray();
+        var highLimits = data.Items.Select(i => LimitDisplay.Present(i, true, config)).ToArray();
+        var limitFormats = lowLimits.Concat(highLimits).Select(p => p.ExcelFormat).OfType<string>().Distinct().ToArray();
+        var limitStyles = limitFormats.Select((format, index) => (format, style: (uint)(14 + index)))
+            .ToDictionary(p => p.format, p => p.style);
         string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             using (var document = SpreadsheetDocument.Create(temp, SpreadsheetDocumentType.Workbook))
             {
                 var workbook = document.AddWorkbookPart(); workbook.Workbook = new Workbook();
-                var styles = workbook.AddNewPart<WorkbookStylesPart>(); styles.Stylesheet = Styles(); styles.Stylesheet.Save();
+                var styles = workbook.AddNewPart<WorkbookStylesPart>(); styles.Stylesheet = Styles(limitFormats); styles.Stylesheet.Save();
                 var sheets = workbook.Workbook.AppendChild(new Sheets());
                 void WriteSheet(string name, IReadOnlyList<Chip> sheetChips, bool includeReference = false)
                 {
@@ -131,11 +136,13 @@ public static class FailChipXlsxService
                     }
                     (string, double?, uint) T(string text, uint style = 0) => (text, null, style);
                     WriteRow(IdentityHeaders.Concat(data.Items.Select(i => i.DisplayName)).Select(s => T(s, 5)));
-                    void Metadata(string label, Func<TestItemData, (string, double?, uint)> value) => WriteRow(
+                    void Metadata(string label, Func<TestItemData, int, (string, double?, uint)> value) => WriteRow(
                         new[] { T(label, 6) }.Concat(Enumerable.Repeat(T("", 6), IdentityHeaders.Length - 1)).Concat(data.Items.Select(value)));
-                    Metadata("#TestNumber", i => T(i.TestNumber, 6)); Metadata("#Unit", i => T(i.ShownUnit, 6));
-                    Metadata("#LSL", i => ("", i.DisplayLowLimit, 6)); Metadata("#USL", i => ("", i.DisplayHighLimit, 6));
-                    Metadata("#SBIN", i => T(i.SBin, 6)); Metadata("#HBIN", i => T(i.HBin, 6));
+                    (string, double?, uint) LimitCell(LimitPresentation p) => ("", p.ReportValue,
+                        p.ExcelFormat is string format ? limitStyles[format] : 6u);
+                    Metadata("#TestNumber", (i, _) => T(i.TestNumber, 6)); Metadata("#Unit", (i, _) => T(i.ShownUnit, 6));
+                    Metadata("#LSL", (_, index) => LimitCell(lowLimits[index])); Metadata("#USL", (_, index) => LimitCell(highLimits[index]));
+                    Metadata("#SBIN", (i, _) => T(i.SBin, 6)); Metadata("#HBIN", (i, _) => T(i.HBin, 6));
                     int chipIndex = 0, failIndex = 0, goodIndex = 0;
                     foreach (var chip in sheetChips)
                     {
@@ -190,7 +197,7 @@ public static class FailChipXlsxService
     private static string ColumnName(int column)
     { string result = ""; while (column > 0) { column--; result = (char)('A' + column % 26) + result; column /= 26; } return result; }
     private static string Clean(string value) => new(value.Take(32767).Where(c => c >= ' ' || c is '\n' or '\r' or '\t').ToArray());
-    private static Stylesheet Styles()
+    private static Stylesheet Styles(IReadOnlyList<string> limitFormats)
     {
         var fonts = new Fonts(new Font(new FontSize { Val = 11 }, new FontName { Val = "Calibri" }),
             new Font(new Bold(), new Color { Rgb = "FFFFFFFF" }, new FontName { Val = "Calibri" }));
@@ -201,7 +208,16 @@ public static class FailChipXlsxService
         var formats = new CellFormats(new CellFormat { FontId = 0, FillId = 0, BorderId = 0 });
         for (uint i = 1; i <= 13; i++) formats.Append(new CellFormat(new Alignment { Vertical = VerticalAlignmentValues.Center, WrapText = i == 5 })
             { FillId = i + 1, FontId = i == 5 ? 1u : 0u, BorderId = 0, ApplyFill = true, ApplyAlignment = true });
-        return new Stylesheet(fonts, fills, new Borders(new Border()), new CellStyleFormats(new CellFormat()), formats,
+        var numbering = new NumberingFormats();
+        for (int i = 0; i < limitFormats.Count; i++)
+        {
+            uint id = (uint)(164 + i);
+            numbering.Append(new NumberingFormat { NumberFormatId = id, FormatCode = limitFormats[i] });
+            var limitStyle = (CellFormat)formats.ChildElements[6].CloneNode(true);
+            limitStyle.NumberFormatId = id; limitStyle.ApplyNumberFormat = true;
+            formats.Append(limitStyle);
+        }
+        return new Stylesheet(numbering, fonts, fills, new Borders(new Border()), new CellStyleFormats(new CellFormat()), formats,
             new CellStyles(new CellStyle { Name = "Normal", FormatId = 0, BuiltinId = 0 }));
     }
 

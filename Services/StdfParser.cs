@@ -84,11 +84,19 @@ public static class StdfParser
         public TestKey Unscoped => new(Kind, Number);
     }
     private readonly record struct FamilyKey(TestKey Test, string Channel, int Occurrence, string Name = "");
-    private readonly record struct Limits(double? Lower, double? Upper, string Unit);
+    private readonly record struct Limits(double? Lower, double? Upper, string Unit)
+    {
+        public StdfLimitDisplay? LowerDisplay { get; init; }
+        public StdfLimitDisplay? UpperDisplay { get; init; }
+        // A presentation change must not split one physical test into different rules.
+        public bool Equals(Limits other) => Lower == other.Lower && Upper == other.Upper && Unit == other.Unit;
+        public override int GetHashCode() => HashCode.Combine(Lower, Upper, Unit);
+    }
     private struct Defaults
     {
         public Defaults() { }
         public double? Lower, Upper;
+        public StdfLimitDisplay? LowerDisplay, UpperDisplay;
         public double? StartInput, IncrementInput;
         public string Unit = "", Description = "", InputUnit = "";
         public ushort[] Pins = Array.Empty<ushort>();
@@ -198,7 +206,8 @@ public static class StdfParser
             {
                 if (!discovering) throw new InvalidDataException("STDF 两次读取的测试阈值不一致。");
                 item = new TestItemData { ColumnIndex = Items.Count, TestNumber = key.Test.Number.ToString(CultureInfo.InvariantCulture), StdfChannel = key.Channel,
-                    Unit = limits.Unit, LowLimit = limits.Lower, HighLimit = limits.Upper, IsStdfMeasurement = true };
+                    Unit = limits.Unit, LowLimit = limits.Lower, HighLimit = limits.Upper, IsStdfMeasurement = true,
+                    StdfLowLimitDisplay = limits.LowerDisplay, StdfHighLimitDisplay = limits.UpperDisplay };
                 family.Variants.Add(limits, item); Items.Add(item);
             }
             hasMultipleVariants = family.Variants.Count > 1;
@@ -609,14 +618,15 @@ public static class StdfParser
             if (low.HasValue && (parm & 0x40) == 0) low = Math.BitIncrement(low.Value);
             if (high.HasValue && (parm & 0x80) == 0) high = Math.BitDecrement(high.Value);
             if (low > high) throw new InvalidDataException("测试上下限及边界包含标志定义了空区间。");
-            return new(low, high, data.Unit);
+            return new(low, high, data.Unit) { LowerDisplay = data.LowerDisplay, UpperDisplay = data.UpperDisplay };
         }
 
         private static Defaults ReadLimits(ref StdfFields f, Defaults initial, bool mpr, int pins)
         {
             byte? optional = f.OptionalU1();
             // RESULT and limits are already in base UNITS. *_SCAL are display-only.
-            f.OptionalU1(); f.OptionalU1(); f.OptionalU1();
+            f.OptionalU1();
+            byte? lowScale = f.OptionalU1(), highScale = f.OptionalU1();
             float? low = f.OptionalR4(), high = f.OptionalR4();
             ushort[] indices = initial.Pins;
             double? start = initial.StartInput, increment = initial.IncrementInput;
@@ -633,8 +643,18 @@ public static class StdfParser
             }
             string unit = Inherit(f.OptionalCn(), initial.Unit);
             string inputUnit = mpr ? Inherit(f.OptionalCn(), initial.InputUnit) : "";
-            f.OptionalSkipCn(); f.OptionalSkipCn(); f.OptionalSkipCn(); f.OptionalR4(); f.OptionalR4();
-            return new Defaults { Lower = Limit(low, optional, 4, 6, initial.Lower), Upper = Limit(high, optional, 5, 7, initial.Upper),
+            f.OptionalSkipCn();
+            string lowFormat = Inherit(f.OptionalCn(), initial.LowerDisplay?.Format ?? "");
+            string highFormat = Inherit(f.OptionalCn(), initial.UpperDisplay?.Format ?? "");
+            f.OptionalR4(); f.OptionalR4();
+            double? lower = Limit(low, optional, 4, 6, initial.Lower), upper = Limit(high, optional, 5, 7, initial.Upper);
+            int lowerScale = optional.HasValue && (optional.Value & 0x10) == 0 && lowScale.HasValue
+                ? unchecked((sbyte)lowScale.Value) : initial.LowerDisplay?.Scale ?? 0;
+            int upperScale = optional.HasValue && (optional.Value & 0x20) == 0 && highScale.HasValue
+                ? unchecked((sbyte)highScale.Value) : initial.UpperDisplay?.Scale ?? 0;
+            return new Defaults { Lower = lower, Upper = upper,
+                LowerDisplay = lower.HasValue ? new(lower.Value, lowFormat, lowerScale) : null,
+                UpperDisplay = upper.HasValue ? new(upper.Value, highFormat, upperScale) : null,
                 Unit = unit, Pins = indices, Description = initial.Description,
                 StartInput = start, IncrementInput = increment, InputUnit = inputUnit };
         }

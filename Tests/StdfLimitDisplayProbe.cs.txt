@@ -1,0 +1,177 @@
+using System.Globalization;
+using System.Text;
+using ClosedXML.Excel;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Spreadsheet;
+using DocumentFormat.OpenXml.Validation;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    static int checks;
+    static readonly AnalyzerConfig Config = new();
+    static void Check(bool ok, string description)
+    { if (!ok) throw new Exception(description); checks++; Console.WriteLine("PASS " + description); }
+    static string Text(TestItemData item, bool upper = false, AnalyzerConfig? config = null) =>
+        LimitDisplay.Present(item, upper, config ?? Config, CultureInfo.InvariantCulture).Text;
+    static TestItemData Item(double value, double factor = 1, string format = "", int scale = 0) => new()
+    {
+        Name = "Current", DisplayName = "Current", TestNumber = "100", Unit = "A", IsStdfMeasurement = true,
+        LowLimit = value, HighLimit = value * 10, DisplayFactor = factor,
+        StdfLowLimitDisplay = new(value, format, scale), StdfHighLimitDisplay = new(value * 10, format, scale)
+    };
+    static string Fixture(string folder, bool mpr = false)
+    {
+        string path = Path.Combine(folder, mpr ? "array.stdf" : "limits.stdf");
+        using var writer = new BinaryWriter(File.Create(path));
+        void C(BinaryWriter w, string value) { byte[] bytes = Encoding.ASCII.GetBytes(value); w.Write((byte)bytes.Length); w.Write(bytes); }
+        void R(byte type, byte subtype, Action<BinaryWriter> body)
+        {
+            using var buffer = new MemoryStream();
+            using (var w = new BinaryWriter(buffer, Encoding.ASCII, true)) body(w);
+            writer.Write((ushort)buffer.Length); writer.Write(type); writer.Write(subtype); writer.Write(buffer.ToArray());
+        }
+        void Test(uint number, string lowFormat, string highFormat, byte parm = 0xc0, bool inherit = false, string unit = "A")
+            => R(15, mpr ? (byte)15 : (byte)10, w =>
+            {
+                w.Write(number); w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write(parm);
+                float result = unit == "V" ? .4f : number == 400 ? .1f : .01f;
+                if (mpr) { w.Write((ushort)2); w.Write((ushort)2); w.Write((byte)0); w.Write(result); w.Write(unit == "V" ? .4f : .04f); }
+                else w.Write(result);
+                C(w, "Current" + number); C(w, "");
+                if (inherit) return;
+                w.Write((byte)0); w.Write((sbyte)3); w.Write((sbyte)3); w.Write((sbyte)3);
+                w.Write(.1f); w.Write(.8f);
+                if (mpr) { w.Write(0f); w.Write(1f); w.Write((ushort)1); w.Write((ushort)2); }
+                C(w, unit); if (mpr) C(w, "V");
+                C(w, "%g"); C(w, lowFormat); C(w, highFormat);
+            });
+        R(0, 10, w => { w.Write((byte)2); w.Write((byte)4); });
+        R(1, 10, w =>
+        {
+            w.Write(0u); w.Write(0u); w.Write((byte)1); w.Write((byte)'P'); w.Write((byte)' '); w.Write((byte)' '); w.Write((ushort)0); w.Write((byte)' ');
+            foreach (string s in new[] { "LOT", "PRODUCT", "NODE", "TESTER", "JOB", "REV" }) C(w, s);
+        });
+        for (int chip = 0; chip < 2; chip++)
+        {
+            R(5, 10, w => { w.Write((byte)1); w.Write((byte)1); });
+            Test(100, chip == 0 ? "" : "%.3f", ""); // Formatting alone must not split a test.
+            Test(200, "%.1f", "%.2f", inherit: chip == 1);
+            Test(300, "%.0f", "%.1e");
+            Test(400, "", "", parm: 0); // Strict boundaries remain one double ULP inside.
+            Test(500, "%.1f", "%.2f", unit: "V");
+            R(5, 20, w =>
+            {
+                w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((ushort)5); w.Write((ushort)5); w.Write((ushort)5);
+                w.Write((short)chip); w.Write((short)0); w.Write(0u); C(w, "S" + chip);
+            });
+        }
+        R(1, 20, w => { w.Write(0u); w.Write((byte)' '); });
+        return path;
+    }
+    static CsvParseResult Data(TestItemData item, string serial)
+    {
+        var record = new CsvRecord { WaferId = "W1", SerialNumber = serial, X = serial == "a" ? 0 : 1, Y = 0, HBin = "5", Site = "1" };
+        record.Measurements.Add(item.Id, ".4");
+        return DatasetService.Build(new() { item }, new() { record });
+    }
+    static void Formatting()
+    {
+        Check(Text(Item((double).8f, 1000)) == "800", "800.000011 is displayed as 800");
+        Check(Text(Item((double).1f, 1000)) == "100", "100.000001 is displayed as 100");
+        Check(Text(Item((double)99.99997f)) == "100", "99.99997 is displayed as 100 with six significant digits");
+        Check(Text(Item(1.234567e-12)).StartsWith("1.23457E-"), "small thresholds retain nonzero scientific notation");
+        Check(Text(Item((double).1234567f, 1000, "%.7g")) == "123.4567", "a file's precision overrides the fallback");
+        Check(Text(Item((double).8f, 1000, "%8.2f", 3)) == "800.00", "printf width and fixed precision are interpreted in the file's scaled units");
+        Check(Text(Item((double).8f, 1, "%.2f", 3)) == "0.80000", "fixed decimals follow a different SI display prefix");
+        Check(Text(Item(12345, 1, "%.1f", -3)) == "12300", "negative scale exponents round only the displayed threshold");
+        Check(Text(Item((double).1234567f, 1000, "%.2e")).StartsWith("1.23e+"), "exponential format is retained");
+        foreach (string format in new[] { "%n", "%*.*f", "%.99f", "%f%f", new string('%', 70) })
+            Check(Text(Item((double).8f, 1000, format)) == "800", "unsupported or excessive formats safely fall back: " + format[..Math.Min(12, format.Length)]);
+        Check(Text(Item((double).1234567f, 1000), config: new() { StdfLimitSignificantDigits = 4 }) == "123.5", "fallback significant digits are configurable");
+        var csv = new TestItemData { LowLimit = 99.99997, HighLimit = 100.00001 };
+        Check(Text(csv) == "99.999970" && LimitDisplay.Present(csv, false, Config).ReportValue == csv.LowLimit,
+            "CSV thresholds retain their existing display and numeric precision");
+        Check(LimitDisplay.Present(Item(.123456), false, Config, CultureInfo.GetCultureInfo("de-DE")).Text == "0,123456",
+            "localized display does not affect invariant report numbers");
+        var strict = Item(.5, format: "%.0f"); strict.LowLimit = Math.BitIncrement(.5);
+        Check(Text(strict) == "0" && strict.LowLimit > .5, "an internal strict-boundary ULP cannot alter displayed rounding");
+        var config = ConfigLoader.Parse("[Display]\nStdfLimitSignificantDigits=8");
+        Check(ConfigLoader.Parse(ConfigLoader.Serialize(config)).StdfLimitSignificantDigits == 8 && ConfigLoader.Parse("").StdfLimitSignificantDigits == 6,
+            "new display settings round-trip and old INI files default to six digits");
+        foreach (int invalid in new[] { 0, 10 })
+        {
+            bool rejected = false; try { ConfigLoader.Parse("StdfLimitSignificantDigits=" + invalid); } catch (InvalidDataException) { rejected = true; }
+            Check(rejected, "invalid configured precision is rejected: " + invalid);
+        }
+    }
+    static void ParserAndExport(string folder, bool mpr)
+    {
+        var data = StdfParser.Parse(Fixture(folder, mpr), Config);
+        var first = data.Items.First(i => i.BaseTestNumber == "100");
+        Check(data.Items.Count == (mpr ? 10 : 5), "format-only changes do not create test variants: " + mpr);
+        Check(first.LowLimit == (double).1f && first.HighLimit == (double).8f && first.DisplayFactor == 1000,
+            "R4 limits and SI conversion stay numerically unchanged: " + mpr);
+        Check(Text(first) == "100" && Text(first, true) == "800", "parser attaches metadata for default formatting: " + mpr);
+        var fixedItem = data.Items.First(i => i.BaseTestNumber == "200");
+        Check(Text(fixedItem) == "100.0" && Text(fixedItem, true) == "800.00" && fixedItem.Values.Count == 2,
+            "omitted fields inherit the original format and scale: " + mpr);
+        var volts = data.Items.First(i => i.BaseTestNumber == "500");
+        Check(Text(volts) == "0.1000" && Text(volts, true) == "0.80000", "parser keeps distinct source and display scale: " + mpr);
+        var strict = data.Items.First(i => i.BaseTestNumber == "400");
+        Check(strict.LowLimit == Math.BitIncrement((double).1f) && strict.HighLimit == Math.BitDecrement((double).8f),
+            "strict lower and upper comparison boundaries are preserved: " + mpr);
+        var summary = SummaryService.Build(new[] { strict }, new[] { "1" }, true, Config).Single();
+        Check(summary.LslText == "0.1" && summary.UslText == "0.8" && summary.Fails == 2,
+            "summary display is clean while strict equality still fails: " + mpr);
+        string csv = Path.Combine(folder, "integrated-" + mpr + ".csv");
+        IntegratedCsvService.Save(csv, data); var restored = IntegratedCsvService.Load(csv);
+        var restoredStrict = restored.Items.First(i => i.BaseTestNumber == "400");
+        Check(restoredStrict.LowLimit == strict.DisplayLowLimit && restoredStrict.HighLimit == strict.DisplayHighLimit,
+            "integrated CSV retains exact comparison limits rather than rounded labels: " + mpr);
+        string xlsx = Path.Combine(folder, "fail-" + mpr + ".xlsx");
+        FailChipXlsxService.Save(xlsx, data, Config, data.Wafers, RetestMode.All);
+        using var doc = SpreadsheetDocument.Open(xlsx, false);
+        Check(!new OpenXmlValidator().Validate(doc).Any(), "failure report remains valid OOXML: " + mpr);
+        var styles = doc.WorkbookPart!.WorkbookStylesPart!.Stylesheet;
+        var cell = doc.WorkbookPart.WorksheetParts.First().Worksheet.Descendants<Cell>().Single(c => c.CellReference == "M4");
+        var cellFormat = (CellFormat)styles.CellFormats!.ChildElements[(int)cell.StyleIndex!.Value];
+        Check(cell.DataType!.Value == CellValues.Number && cell.CellValue!.Text == "100" && cellFormat.NumberFormatId!.Value >= 164,
+            "failure report writes clean numeric limits with matching styles: " + mpr);
+        using var workbook = new XLWorkbook(xlsx);
+        Check(workbook.Worksheet(1).Cell("M4").GetFormattedString() == "100", "saved workbook renders the clean limit: " + mpr);
+    }
+    static void Merge()
+    {
+        var existing = Item(.1); existing.DisplayFactor = 1;
+        var incoming = Item(123.456f, format: "%.1f"); incoming.Unit = "mA";
+        var a = Data(existing, "a"); var b = Data(incoming, "b");
+        var newer = DatasetService.Merge(a, b, new(false, "", true, true));
+        var target = newer.Items.Single();
+        Check(Text(target) == "0.1235" && target.StdfLowLimitDisplay!.UnitFactor == .001,
+            "new limits carry their format through SI unit conversion");
+        Check(existing.StdfLowLimitDisplay!.UnitFactor == 1 && existing.LowLimit == .1,
+            "merging never mutates an existing window's limit metadata");
+        var older = DatasetService.Merge(a, b, new(false, "", true, false));
+        Check(older.Items.Single().StdfLowLimitDisplay == existing.StdfLowLimitDisplay,
+            "keeping old limits also keeps the old formatting");
+        incoming.StdfLowLimitDisplay = incoming.StdfHighLimitDisplay = null; incoming.IsStdfMeasurement = false;
+        var csvLimits = DatasetService.Merge(a, Data(incoming, "b"), new(false, "", true, true)).Items.Single();
+        Check(csvLimits.StdfLowLimitDisplay == null && Text(csvLimits) == "0.123456",
+            "adopting CSV limits restores CSV formatting even with existing STDF samples");
+        var filtered = DatasetService.SelectRetests(newer, RetestMode.Last).Items.Single();
+        Check(filtered.StdfLowLimitDisplay == target.StdfLowLimitDisplay, "derived snapshots retain immutable display metadata");
+    }
+    static int Main(string[] args)
+    {
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
+            string folder = args[0]; Directory.CreateDirectory(folder);
+            Formatting(); ParserAndExport(folder, false); ParserAndExport(folder, true); Merge();
+            Console.WriteLine($"PASS {checks} STDF limit display checks"); return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

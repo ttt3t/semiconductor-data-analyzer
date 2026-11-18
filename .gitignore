@@ -2,6 +2,7 @@
 .vs/
 bin/
 obj/
+work/
 artifacts/
 outputs/
 Diagnostics/

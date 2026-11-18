@@ -17,7 +17,6 @@ public static class SummaryService
         if (itemCount == 0) return new List<TestItemSummary>();
         bool reportProgress = ImportProgress.IsActive;
         int completedItems = 0;
-        string format = $"F{config.DecimalPlaces}";
 
         if (combineSites && combineWafers)
         {
@@ -26,14 +25,14 @@ public static class SummaryService
                 var single = items[0];
                 return new List<TestItemSummary>(1)
                 {
-                    Create(single, TestItemSummary.CombinedSite, null, single.Values, single.Errors.Count, config, format)
+                    Create(single, TestItemSummary.CombinedSite, null, single.Values, single.Errors.Count, config)
                 };
             }
             var combinedResults = new TestItemSummary[itemCount];
             Parallel.For(0, itemCount, new ParallelOptions { CancellationToken = AnalysisOperation.Token }, i =>
             {
                 var item = items[i];
-                combinedResults[i] = Create(item, TestItemSummary.CombinedSite, null, item.Values, item.Errors.Count, config, format);
+                combinedResults[i] = Create(item, TestItemSummary.CombinedSite, null, item.Values, item.Errors.Count, config);
                 if (reportProgress) ImportProgress.Report((double)Interlocked.Increment(ref completedItems) / itemCount);
             });
             return new List<TestItemSummary>(combinedResults);
@@ -76,7 +75,7 @@ public static class SummaryService
                     var key = (wafer, site);
                     expandedResults[offset++] = Create(item, site, wafer, new IndexedTestValues(values,
                         groups.TryGetValue(key, out var indices) ? indices : Array.Empty<int>()),
-                        errors.GetValueOrDefault(key), config, format);
+                        errors.GetValueOrDefault(key), config);
                 }
             if (reportProgress) ImportProgress.Report((double)Interlocked.Increment(ref completedItems) / itemCount);
         }
@@ -90,17 +89,20 @@ public static class SummaryService
     private static string SiteKey(string site) => string.IsNullOrWhiteSpace(site) ? "(空)" : site;
 
     private static TestItemSummary Create(TestItemData item, string site, string? wafer, IReadOnlyList<TestValue> values, int errors,
-        AnalyzerConfig config, string format)
+        AnalyzerConfig config)
     {
         var (stats, robust, median) = StatisticsService.CalculateSummaryMetrics(
             values, item.LowLimit, item.HighLimit, config.RemoveOutliers, config.OutlierSigma);
         long.TryParse(item.BaseTestNumber, out long testNumber);
         double factor = item.DisplayFactor;
+        var lsl = LimitDisplay.Present(item, false, config);
+        var usl = LimitDisplay.Present(item, true, config);
         return new TestItemSummary
         {
             Data = item, Site = site, Wafer = wafer ?? TestItemSummary.CombinedWafer,
             IsWaferCombined = wafer == null, TestNumberValue = testNumber,
-            LslText = item.DisplayLowLimit?.ToString(format) ?? "-", UslText = item.DisplayHighLimit?.ToString(format) ?? "-",
+            LslText = lsl.Text, UslText = usl.Text,
+            LslPresentation = lsl, UslPresentation = usl,
             Count = stats.Count,
             Fails = stats.Count - stats.InSpec,
             Max = stats.Count > 0 ? stats.Max * factor : null, Min = stats.Count > 0 ? stats.Min * factor : null,

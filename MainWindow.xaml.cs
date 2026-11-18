@@ -260,7 +260,7 @@ public partial class MainWindow : Window
     private void UpdateWindowTitle()
     {
         string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
-        Title = $"CSV Analyzer · V2.0.15 | 当前数据：{_currentDataName} | 配置：{configName}";
+        Title = $"CSV Analyzer · V2.0.16 | 当前数据：{_currentDataName} | 配置：{configName}";
     }
 
     private void UpdateConfigInfo()
@@ -953,10 +953,13 @@ public partial class MainWindow : Window
                 ? $"Count={stats.Count}  InSpec%={stats.InSpecPercent:F1}%"
                 : $"Unit：{request.Item.ShownUnit}    Count={stats.Count}  InSpec%={stats.InSpecPercent:F1}%";
             Histogram.Title = ScatterPlot.Title = request.Item.DisplayName;
-            if (!ReferenceEquals(_displayedBins, result.Bins))
+            string? lslText = request.Item.StdfLowLimitDisplay == null ? null : LimitDisplay.Present(request.Item, false, _config).Text;
+            string? uslText = request.Item.StdfHighLimitDisplay == null ? null : LimitDisplay.Present(request.Item, true, _config).Text;
+            if (!ReferenceEquals(_displayedBins, result.Bins) || Histogram.LslText != lslText || Histogram.UslText != uslText)
                 Histogram.Apply(result.Bins, request.Item.DisplayLowLimit, request.Item.DisplayHighLimit,
                     result.Mean, result.Sigma, request.ShowLsl, request.ShowUsl, request.ShowMean,
-                    request.ShowThreeSigma, request.Item.ShownUnit);
+                    request.ShowThreeSigma, request.Item.ShownUnit,
+                    lslText, uslText);
             if (!ReferenceEquals(_displayedScatter, result.Scatter))
                 ScatterPlot.SetSeries(result.Scatter, request.Item.DisplayLowLimit, request.Item.DisplayHighLimit, request.Item.ShownUnit);
             ScatterPlot.ShowConnections = _config.ScatterShowConnections;

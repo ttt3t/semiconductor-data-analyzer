@@ -133,6 +133,7 @@ public static class ConfigLoader
             case "INCLUDEOUTOFLIMITDATA": c.IncludeOutOfLimitData = ParseBool(value); break;
 
             case "DECIMALPLACES": c.DecimalPlaces = ParseNonNegativeInt(key, value); break;
+            case "STDFLIMITSIGNIFICANTDIGITS": c.StdfLimitSignificantDigits = ParsePositiveInt(key, value); break;
             case "MAXTABLEROWS": c.MaxTableRows = ParsePositiveInt(key, value); break;
             case "REMOVEOUTLIERS": c.RemoveOutliers = ParseBool(value); break;
             case "OUTLIERSIGMA":
@@ -178,6 +179,8 @@ public static class ConfigLoader
             throw new InvalidDataException("TestItemStartColumn 必须 ≥ 1");
         if (c.DecimalPlaces > 15)
             throw new InvalidDataException("DecimalPlaces 必须在 0 到 15 之间");
+        if (c.StdfLimitSignificantDigits is < 1 or > 9)
+            throw new InvalidDataException("StdfLimitSignificantDigits 必须在 1 到 9 之间");
         if (!new[] { "Fixed", "Spec", "SpecZone", "Mean", "MeanCentered", "Median", "MedianCentered" }
             .Contains(c.BinMode, StringComparer.OrdinalIgnoreCase))
             throw new InvalidDataException("BinMode 必须为 Fixed、SpecZone 或 MedianCentered");
@@ -297,6 +300,8 @@ public static class ConfigLoader
 
             [Display]
             DecimalPlaces={c.DecimalPlaces}
+            ; STDF limits: use the file format first; otherwise use 1-9 significant digits.
+            StdfLimitSignificantDigits={c.StdfLimitSignificantDigits}
             MaxTableRows={c.MaxTableRows}
             """);
         if (includeRobust)

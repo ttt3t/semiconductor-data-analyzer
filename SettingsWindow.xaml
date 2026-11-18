@@ -122,6 +122,15 @@
                         </WrapPanel>
                         <TextBlock Text="独立控制散点图参考线和连接线，并应用于复制图片和 XLSX 报告。均值和 σ 使用当前晶圆、Site 及复测范围内的全部有效测量值。"
                                    TextWrapping="Wrap" Foreground="{StaticResource TextSecondary}"/>
+                        <Border Height="1" Background="{StaticResource BorderSoft}" Margin="0,22"/>
+                        <TextBlock Text="STDF 阈值显示" Style="{StaticResource SectionTitle}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                            <TextBlock Text="默认有效位数" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                            <TextBox x:Name="TxtStdfLimitDigits" Width="70" TextChanged="AnalysisTextChanged"/>
+                            <TextBlock Text="（1–9，默认 6）" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                        </StackPanel>
+                        <TextBlock Text="优先采用 STDF 文件指定的上下限格式；未提供可用格式时使用默认有效位数。仅调整显示及报表精度，原始阈值、合格判定和整合 CSV 保持原精度。"
+                                   TextWrapping="Wrap" Foreground="{StaticResource TextSecondary}"/>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

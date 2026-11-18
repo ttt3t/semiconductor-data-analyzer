@@ -21,6 +21,8 @@ public sealed class TestItemSummary : INotifyPropertyChanged
     public bool IsWaferCombined { get; set; } = true;
     public string LslText { get; set; } = "-";
     public string UslText { get; set; } = "-";
+    public LimitPresentation LslPresentation { get; set; }
+    public LimitPresentation UslPresentation { get; set; }
 
     public long TestNumberValue { get; set; }
     public int Count { get; set; }

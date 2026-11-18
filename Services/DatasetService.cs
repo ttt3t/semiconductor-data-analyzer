@@ -419,7 +419,12 @@ public static partial class DatasetService
                 }
                 else if (source.Unit.Trim() != sourceUnit && sourceUnit.Length > 0)
                     unitWarnings.AddOnce(key + ":alias:" + sourceUnit, $"测项“{source.Name}”：单位写法统一为 {sourceUnit}。");
-                if (options.UseNewLimits) { target.LowLimit = source.LowLimit * factor; target.HighLimit = source.HighLimit * factor; }
+                if (options.UseNewLimits)
+                {
+                    target.LowLimit = source.LowLimit * factor; target.HighLimit = source.HighLimit * factor;
+                    target.StdfLowLimitDisplay = source.StdfLowLimitDisplay?.ConvertUnits(factor);
+                    target.StdfHighLimitDisplay = source.StdfHighLimitDisplay?.ConvertUnits(factor);
+                }
             }
             else
             {
@@ -644,6 +649,7 @@ public static partial class DatasetService
         StdfChannel = item.StdfChannel,
         UnitMergeNumber = item.UnitMergeNumber, UnitMergeSlot = item.UnitMergeSlot, UnitMergeDisplayName = item.UnitMergeDisplayName,
         IsStdfMeasurement = item.IsStdfMeasurement, DisplayFactor = item.DisplayFactor, DisplayUnit = item.DisplayUnit,
+        StdfLowLimitDisplay = item.StdfLowLimitDisplay, StdfHighLimitDisplay = item.StdfHighLimitDisplay,
         LowLimit = item.LowLimit, HighLimit = item.HighLimit
     };
 }
