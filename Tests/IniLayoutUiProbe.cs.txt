@@ -91,12 +91,21 @@ static class Probe
         grid.ScrollIntoView(grid.Items[row], grid.Columns[column]);
         grid.UpdateLayout();
         var cell = grid.Columns[column].GetCellContent(grid.Items[row]) ?? throw new Exception("Grid cell is not realized.");
-        var args = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { Source = cell };
+        var args = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+        { RoutedEvent = UIElement.PreviewMouseLeftButtonDownEvent, Source = cell };
         Call(editor, "Grid_DragStart", grid, args);
     }
 
     static void EndDrag(IniLayoutWindow editor, DataGrid grid) =>
-        Call(editor, "Grid_DragEnd", grid, new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left));
+        Call(editor, "Grid_DragEnd", grid, new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+        { RoutedEvent = UIElement.PreviewMouseLeftButtonUpEvent });
+
+    static void Synced(IniLayoutWindow editor)
+    {
+        var status = View<TextBlock>(editor, "SaveStatus");
+        Until(() => !editor.IsVisible || status.Text.StartsWith("同步失败：", StringComparison.Ordinal));
+        if (editor.IsVisible) throw new Exception(status.Text);
+    }
 
     [STAThread]
     static int Main(string[] args)
@@ -154,7 +163,7 @@ static class Probe
             EndDrag(editor, grid);
             Check(site.Text == "9", "clicking a preview column assigns its original 1-based index");
             Click(editor, "SyncButton");
-            Until(() => !editor.IsVisible);
+            Synced(editor);
             string standalone = File.ReadAllText(AppSettings.LastConfigCopyPath);
             Check(standalone.Contains("; keep the source comment") && ConfigLoader.Parse(standalone).SiteColumn == 9 &&
                 Field<CsvParseResult>(main, "_data").Records.Single().Site == "7", "analysis sync saves the edited INI and reparses the current input");
@@ -177,7 +186,7 @@ static class Probe
             Until(() => View<Button>(editor, "SyncButton").IsEnabled);
             Input(editor, "IdentityFields", "测试站点 (Site)").Text = "9";
             Click(editor, "SyncButton");
-            Until(() => !editor.IsVisible);
+            Synced(editor);
             var after = Field<List<CsvImportSource>>(main, "_sources");
             Check(ConfigLoader.Parse(after[0].ConfigText).SiteColumn == 9 && after[1] == sources[1] &&
                 Field<CsvParseResult>(main, "_data").Records.Select(record => record.Site).SequenceEqual(new[] { "7", "8" }) &&
