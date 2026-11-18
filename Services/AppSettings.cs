@@ -64,7 +64,15 @@ public static class AppSettings
 
     public static void SaveConfig(AnalyzerConfig config)
     {
-        ConfigLoader.Save(LastConfigCopyPath, config);
+        string text = ConfigLoader.Serialize(config);
+        if (config.IniText is { } original && text == ConfigLoader.Serialize(ConfigLoader.Parse(original)))
+            text = original;
+        SaveConfigText(text);
+    }
+
+    private static void SaveConfigText(string text)
+    {
+        ConfigLoader.SaveText(LastConfigCopyPath, text);
         AtomicFile.WriteAllText(
             SettingsPath,
             "[Settings]" + Environment.NewLine + "LastConfigPath=" + LastConfigCopyPath + Environment.NewLine,

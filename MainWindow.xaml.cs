@@ -226,30 +226,58 @@ public partial class MainWindow : Window
     {
         if (_isBusy) return;
         var source = _data;
+        var originalConfig = _config;
         IndependentWindow.Show(new SettingsWindow(_config,
             config => { EnsureWindowSource(source); return ApplySettings(config); },
             path => { EnsureWindowSource(source); return OpenCsvAsync(path); },
             _recentFiles, _uiPreferences, source, CancelOperation, _currentCsvPath,
             () => { if (!_closing) { _windowPreferences = _uiPreferences.Value; ApplyUiPreferences(); } },
-            _windowPreferences));
+            _windowPreferences,
+            (config, layoutSource) =>
+            {
+                EnsureWindowSource(source);
+                if (!ReferenceEquals(_config, originalConfig))
+                    throw new InvalidOperationException("当前分析配置已更新，请重新打开设置。");
+                return ApplySettingsCore(config, layoutSource, fromLayout: true);
+            }, _sources.ToArray()));
     }
 
-    private async Task ApplySettings(AnalyzerConfig config)
+    private Task ApplySettings(AnalyzerConfig config) => ApplySettingsCore(config);
+
+    private async Task ApplySettingsCore(AnalyzerConfig config, int? layoutSource = null, bool fromLayout = false)
     {
-        bool reload = !string.IsNullOrEmpty(_currentCsvPath) && ConfigLoader.CsvDefinitionChanged(_config, config);
+        List<CsvImportSource>? editedSources = null;
+        bool sessionOnly = fromLayout && _managedConfigLoaded;
+        bool definitionChanged;
+        if (layoutSource is int index)
+        {
+            var selected = _sources[index];
+            definitionChanged = ConfigLoader.CsvDefinitionChanged(ConfigLoader.Parse(selected.ConfigText), config);
+            editedSources = _sources.ToList();
+            editedSources[index] = selected with { ConfigText = config.IniText ?? ConfigLoader.Serialize(config) };
+            config = _config;
+        }
+        else definitionChanged = ConfigLoader.CsvDefinitionChanged(_config, config);
+        bool reload = !string.IsNullOrEmpty(_currentCsvPath) && definitionChanged;
         async Task ApplyAsync()
         {
-            var data = reload ? await ReadImportAsync(() => _sources.Count > 0
-                ? DatasetService.LoadSources(_sources, config) : DataFileService.Parse(_currentCsvPath, config)) : _data;
+            var sources = editedSources ?? _sources;
+            var data = reload ? await ReadImportAsync(() => sources.Count > 0
+                ? DatasetService.LoadSources(sources, config) : DataFileService.Parse(_currentCsvPath, config)) : _data;
             var prepared = await PrepareAnalysisAsync(data, config);
             AnalysisOperation.CheckCancellation();
             _operationCommitting = true; BtnCancelOperation.IsEnabled = false;
-            await Task.Run(() => AppSettings.SaveConfig(config));
+            if (!sessionOnly)
+            {
+                await Task.Run(() => AppSettings.SaveConfig(config));
+                _lastConfigPath = AppSettings.LastConfigCopyPath;
+            }
+            if (editedSources != null) _sources = editedSources;
             _config = config;
-            _lastConfigPath = AppSettings.LastConfigCopyPath;
             UpdateConfigInfo();
             CommitAnalysis(data, prepared);
-            TxtStatus.Text = "设置已保存，统计已重算" + (reload ? "，数据文件已重新解析" : "");
+            TxtStatus.Text = (sessionOnly ? "已同步当前分析的解析配置，统计已重算" : "设置已保存，统计已重算")
+                + (reload ? "，数据文件已重新解析" : "");
             if (reload) ShowSerialNumberNotice(_data);
             else ShowRetestIdentityNotice(_data);
         }
@@ -260,7 +288,7 @@ public partial class MainWindow : Window
     private void UpdateWindowTitle()
     {
         string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
-        Title = $"CSV Analyzer · V2.0.16 | 当前数据：{_currentDataName} | 配置：{configName}";
+        Title = $"CSV Analyzer · V2.0.17 | 当前数据：{_currentDataName} | 配置：{configName}";
     }
 
     private void UpdateConfigInfo()

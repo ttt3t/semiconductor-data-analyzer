@@ -84,6 +84,121 @@ public static class SpreadsheetImportService
     private static string RichText(XElement element) => XmlConvert.DecodeName(string.Concat(element.Descendants()
         .Where(e => e.Name.LocalName == "t" && !e.Ancestors().Any(a => a.Name.LocalName == "rPh")).Select(e => e.Value)));
 
+    private static ImportWorksheet SelectWorksheet(ImportWorksheet[] sheets, string? worksheet) =>
+        worksheet == null ? sheets.FirstOrDefault(s => !s.Hidden) ?? sheets[0] :
+            sheets.FirstOrDefault(s => s.Name == worksheet) ?? throw new InvalidDataException($"Excel 工作表已不存在：{worksheet}");
+
+    private static int RowNumber(XmlReader reader, int previousRow)
+    {
+        int row = int.TryParse(reader.GetAttribute("r"), out int number) ? number : previousRow + 1;
+        if (row <= previousRow || row > 1_048_576) throw new InvalidDataException("Excel 行号无效或顺序异常。");
+        return row;
+    }
+
+    private readonly record struct WorksheetCell(int Column, string? Type, XElement? Inline, string Raw, bool UncachedFormula)
+    {
+        public string Text(Func<int, string> shared) => Type switch
+        {
+            "s" => shared(SharedIndex(Raw)),
+            "inlineStr" => Inline == null ? "" : RichText(Inline),
+            "str" => XmlConvert.DecodeName(Raw),
+            _ => Raw
+        };
+    }
+
+    private static int SharedIndex(string raw) =>
+        int.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out int index) ? index :
+            throw new InvalidDataException("Excel 共享文本索引无效。");
+
+    private static IEnumerable<WorksheetCell> ReadCells(XmlReader row, int maxColumns, CancellationToken token)
+    {
+        using var reader = row.ReadSubtree();
+        var cells = XElement.Load(reader, LoadOptions.PreserveWhitespace).Elements().Where(e => e.Name.LocalName == "c");
+        int sourceColumn = 0;
+        foreach (var cell in cells)
+        {
+            token.ThrowIfCancellationRequested();
+            string reference = (string?)cell.Attribute("r") ?? "";
+            int target = 0;
+            foreach (char c in reference.TakeWhile(char.IsLetter)) target = checked(target * 26 + char.ToUpperInvariant(c) - 'A' + 1);
+            if (target == 0) target = sourceColumn + 1;
+            if (target <= sourceColumn || target > 16_384) throw new InvalidDataException("Excel 列号无效或顺序异常。");
+            if (target > maxColumns) yield break;
+            sourceColumn = target;
+            var value = cell.Elements().FirstOrDefault(e => e.Name.LocalName == "v");
+            var inline = cell.Elements().FirstOrDefault(e => e.Name.LocalName == "is");
+            bool uncached = value == null && cell.Elements().Any(e => e.Name.LocalName == "f");
+            if (value == null && inline == null && !uncached) continue;
+            yield return new(target, (string?)cell.Attribute("t"), inline, value?.Value ?? "", uncached);
+        }
+    }
+
+    private static Stream OpenSheet(ZipArchive zip, ImportWorksheet sheet) =>
+        (zip.GetEntry(sheet.Part) ?? throw new InvalidDataException("Excel 工作表内容缺失。")).Open();
+
+    internal static LayoutPreview Preview(string path, string? worksheet, int maxRows, int maxColumns, CancellationToken token)
+    {
+        using var input = SourceFileReader.Open(path); var stamp = new SourceFileStamp(input);
+        using var zip = new ZipArchive(input, ZipArchiveMode.Read, leaveOpen: true);
+        var (sheets, stringsPart) = Definition(zip, token);
+        var selected = SelectWorksheet(sheets, worksheet);
+        var cells = new List<(int Row, WorksheetCell Cell)>();
+        int previousRow = 0, rowCount = 0, formulas = 0;
+        using (var sheet = OpenSheet(zip, selected))
+        using (var reader = Reader(sheet))
+            while (reader.Read())
+            {
+                token.ThrowIfCancellationRequested();
+                if (reader.NodeType != XmlNodeType.Element || reader.LocalName != "row") continue;
+                int row = RowNumber(reader, previousRow);
+                rowCount = Math.Min(row, maxRows);
+                if (row > maxRows) break;
+                foreach (var cell in ReadCells(reader, maxColumns, token))
+                {
+                    cells.Add((row - 1, cell));
+                    if (cell.UncachedFormula) formulas++;
+                }
+                previousRow = row;
+                if (row == maxRows) break;
+            }
+
+        var required = cells.Where(entry => entry.Cell.Type == "s").Select(entry => SharedIndex(entry.Cell.Raw)).ToHashSet();
+        var shared = new Dictionary<int, string>();
+        if (required.Count > 0 && stringsPart is { } part && zip.GetEntry(part) is { } stringsEntry)
+        {
+            using var stream = stringsEntry.Open();
+            using var reader = Reader(stream);
+            int index = 0;
+            while (required.Count > 0 && reader.Read())
+            {
+                token.ThrowIfCancellationRequested();
+                if (reader.NodeType != XmlNodeType.Element || reader.LocalName != "si") continue;
+                if (required.Remove(index))
+                {
+                    using var subtree = reader.ReadSubtree();
+                    shared.Add(index, LayoutPreview.DisplayValue(RichText(XElement.Load(subtree, LoadOptions.PreserveWhitespace))));
+                }
+                index++;
+            }
+        }
+        if (required.Count > 0) throw new InvalidDataException("Excel 共享文本索引无效。");
+
+        var rows = Enumerable.Repeat(Array.Empty<string>(), rowCount).ToArray();
+        Func<int, string> resolveShared = index => shared[index];
+        foreach (var (row, cell) in cells)
+        {
+            int width = rows[row].Length;
+            if (width < cell.Column)
+            {
+                Array.Resize(ref rows[row], cell.Column);
+                Array.Fill(rows[row], "", width, cell.Column - width);
+            }
+            rows[row][cell.Column - 1] = LayoutPreview.DisplayValue(cell.Text(resolveShared));
+        }
+        stamp.Validate(input);
+        return new(rows, sheets, selected.Name, formulas);
+    }
+
     internal sealed class Converted : IDisposable
     {
         public ImportTemporaryFile File { get; }
@@ -98,8 +213,7 @@ public static class SpreadsheetImportService
         using var input = SourceFileReader.Open(path); var stamp = new SourceFileStamp(input);
         using var zip = new ZipArchive(input, ZipArchiveMode.Read, leaveOpen: true);
         var definition = Definition(zip, token);
-        var selected = worksheet == null ? definition.Sheets.FirstOrDefault(s => !s.Hidden) ?? definition.Sheets[0]
-            : definition.Sheets.FirstOrDefault(s => s.Name == worksheet) ?? throw new InvalidDataException($"Excel 工作表已不存在：{worksheet}");
+        var selected = SelectWorksheet(definition.Sheets, worksheet);
         string name = System.IO.Path.GetFileNameWithoutExtension(path) + (definition.Sheets.Length > 1 ? " [" + selected.Name + "]" : "") + ".csv";
         var output = ImportTemporaryFile.Create(name);
         try
@@ -126,9 +240,9 @@ public static class SpreadsheetImportService
             var textCache = new Dictionary<int, string>();
             var textOrder = new Queue<int>();
             int cachedCharacters = 0;
-            string Shared(string raw)
+            string Shared(int index)
             {
-                if (!int.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out int index) || (uint)index >= offsets.Count)
+                if ((uint)index >= offsets.Count)
                     throw new InvalidDataException("Excel 共享文本索引无效。");
                 if (textCache.TryGetValue(index, out string? cached)) return cached;
                 strings.Position = offsets[index]; string text = stringReader.ReadString();
@@ -143,8 +257,9 @@ public static class SpreadsheetImportService
                 return text;
             }
             int formulas = 0, previousRow = 0, estimatedRows = 0;
+            Func<int, string> resolveShared = Shared;
             using (ImportProgress.Stage(.2, 1, "读取 Excel 工作表 " + selected.Name))
-            using (var sheet = (zip.GetEntry(selected.Part) ?? throw new InvalidDataException("Excel 工作表内容缺失。")).Open())
+            using (var sheet = OpenSheet(zip, selected))
             using (var reader = Reader(sheet))
             using (var writer = new StreamWriter(output.Path, false, new UTF8Encoding(false), 65536))
             {
@@ -157,35 +272,15 @@ public static class SpreadsheetImportService
                         int.TryParse(new string(last.SkipWhile(c => !char.IsDigit(c)).ToArray()), out estimatedRows);
                     }
                     if (reader.NodeType != XmlNodeType.Element || reader.LocalName != "row") continue;
-                    int row = int.TryParse(reader.GetAttribute("r"), out int n) ? n : previousRow + 1;
-                    if (row <= previousRow || row > 1_048_576) throw new InvalidDataException("Excel 行号无效或顺序异常。");
+                    int row = RowNumber(reader, previousRow);
                     while (++previousRow < row) { if ((previousRow & 255) == 0) token.ThrowIfCancellationRequested(); writer.WriteLine(); }
-                    using var subtree = reader.ReadSubtree();
-                    var cells = XElement.Load(subtree, LoadOptions.PreserveWhitespace).Elements().Where(e => e.Name.LocalName == "c");
-                    int column = 0, sourceColumn = 0;
-                    foreach (var cell in cells)
+                    int column = 0;
+                    foreach (var cell in ReadCells(reader, 16_384, token))
                     {
-                        token.ThrowIfCancellationRequested();
-                        string reference = (string?)cell.Attribute("r") ?? "";
-                        int target = 0;
-                        foreach (char c in reference.TakeWhile(char.IsLetter)) target = checked(target * 26 + char.ToUpperInvariant(c) - 'A' + 1);
-                        if (target == 0) target = sourceColumn + 1;
-                        if (target <= sourceColumn || target > 16_384) throw new InvalidDataException("Excel 列号无效或顺序异常。");
-                        sourceColumn = target;
-                        var value = cell.Elements().FirstOrDefault(e => e.Name.LocalName == "v");
-                        var inline = cell.Elements().FirstOrDefault(e => e.Name.LocalName == "is");
-                        bool formula = cell.Elements().Any(e => e.Name.LocalName == "f");
-                        if (formula && value == null) formulas++;
-                        if (value == null && inline == null && !formula) continue; // Formatting-only cells do not widen the table.
+                        if (cell.UncachedFormula) formulas++;
                         if (column > 0) writer.Write(',');
-                        while (++column < target) writer.Write(',');
-                        string raw = (string?)cell.Attribute("t") switch
-                        {
-                            "s" => Shared(value?.Value ?? ""),
-                            "inlineStr" => inline == null ? "" : RichText(inline),
-                            "str" => XmlConvert.DecodeName(value?.Value ?? ""),
-                            _ => value?.Value ?? ""
-                        };
+                        while (++column < cell.Column) writer.Write(',');
+                        string raw = cell.Text(resolveShared);
                         writer.Write('"'); writer.Write(raw.Replace("\"", "\"\"")); writer.Write('"');
                     }
                     writer.WriteLine();

@@ -64,7 +64,10 @@
             </TabItem>
             <TabItem Header="默认解析配置（INI）">
                 <DockPanel Margin="15">
-                    <Button Content="从现有 INI 加载" Click="LoadConfig_Click" DockPanel.Dock="Top" HorizontalAlignment="Left" Style="{StaticResource WorkspaceButton}" Margin="0,0,0,10"/>
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+                        <Button Content="从现有 INI 加载" Click="LoadConfig_Click" Style="{StaticResource WorkspaceButton}"/>
+                        <Button x:Name="BtnEditIniLayout" Content="可视化设置…" Click="EditIniLayout_Click" Style="{StaticResource WorkspaceButton}" Margin="8,0,0,0"/>
+                    </StackPanel>
                     
                     <TextBox x:Name="TxtConfig" AcceptsReturn="True" AcceptsTab="True" FontFamily="Consolas" FontSize="12" Padding="10"
                              HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"/>

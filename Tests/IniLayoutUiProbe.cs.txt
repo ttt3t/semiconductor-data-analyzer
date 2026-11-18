@@ -1,0 +1,208 @@
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
+using ClosedXML.Excel;
+using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Models;
+using SemiconductorCsvAnalyzer.Services;
+
+static class Probe
+{
+    const string Ini = """
+        ; keep the source comment
+        [Layout]
+        TestItemRow=1
+        LowLimitRow=0
+        HighLimitRow=0
+        UnitRow=0
+        DataStartRow=2
+        TestItemStartColumn=8
+        TestItemColumns=8
+        [IdentityColumns]
+        SerialNumberColumn=1
+        XColumn=2
+        YColumn=3
+        SiteColumn=4
+        SBinColumn=5
+        HBinColumn=6
+        WaferColumn=7
+        """;
+
+    const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
+    static T Field<T>(object owner, string name) => (T)owner.GetType().GetField(name, Private)!.GetValue(owner)!;
+    static object? Call(object owner, string name, params object[] args) =>
+        owner.GetType().GetMethod(name, Private)!.Invoke(owner, args);
+    static T View<T>(FrameworkElement owner, string name) => (T)owner.FindName(name);
+    static void Click(FrameworkElement owner, string name) => View<Button>(owner, name).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+    static void Check(bool ok, string label) { if (!ok) throw new Exception(label); Console.WriteLine("PASS " + label); }
+    static void Pump()
+    {
+        var frame = new DispatcherFrame();
+        Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => frame.Continue = false));
+        Dispatcher.PushFrame(frame);
+    }
+    static void Until(Func<bool> predicate)
+    {
+        var watch = Stopwatch.StartNew();
+        while (!predicate())
+        {
+            Pump(); Thread.Sleep(3);
+            if (watch.Elapsed > TimeSpan.FromSeconds(25)) throw new TimeoutException("UI step did not complete.");
+        }
+        Pump();
+    }
+    static void Wait(Task task) { Until(() => task.IsCompleted); task.GetAwaiter().GetResult(); }
+    static IEnumerable<T> Descendants<T>(DependencyObject parent) where T : DependencyObject
+    {
+        if (parent is T match) yield return match;
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+            foreach (var child in Descendants<T>(VisualTreeHelper.GetChild(parent, i))) yield return child;
+    }
+    static TextBox Input(IniLayoutWindow editor, string panel, string label)
+    {
+        var fields = View<StackPanel>(editor, panel);
+        return fields.Children.Cast<DockPanel>().SelectMany(row => row.Children.OfType<TextBox>())
+            .Single(box => AutomationProperties.GetName(box) == label);
+    }
+    static IniLayoutWindow Editor()
+    {
+        Until(() => Application.Current.Windows.OfType<IniLayoutWindow>().Any());
+        var editor = Application.Current.Windows.OfType<IniLayoutWindow>().Single();
+        Until(() => View<Button>(editor, "SyncButton").IsEnabled);
+        return editor;
+    }
+    static IniLayoutWindow OpenLayout(MainWindow main)
+    {
+        Call(main, "BtnSettings_Click", main, new RoutedEventArgs());
+        var settings = Application.Current.Windows.OfType<SettingsWindow>().Single();
+        View<TabControl>(settings, "SettingsTabs").SelectedItem = View<TabItem>(settings, "IniTab");
+        Click(settings, "BtnEditIniLayout");
+        return Editor();
+    }
+
+    static void MouseDown(IniLayoutWindow editor, DataGrid grid, int row, int column)
+    {
+        grid.ScrollIntoView(grid.Items[row], grid.Columns[column]);
+        grid.UpdateLayout();
+        var cell = grid.Columns[column].GetCellContent(grid.Items[row]) ?? throw new Exception("Grid cell is not realized.");
+        var args = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { Source = cell };
+        Call(editor, "Grid_DragStart", grid, args);
+    }
+
+    static void EndDrag(IniLayoutWindow editor, DataGrid grid) =>
+        Call(editor, "Grid_DragEnd", grid, new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left));
+
+    [STAThread]
+    static int Main(string[] args)
+    {
+        try
+        {
+            string folder = Path.GetFullPath(args[0]);
+            Directory.CreateDirectory(folder);
+            var app = new App();
+            app.InitializeComponent();
+            app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
+            typeof(AppSettings).GetField("_userDirectory", BindingFlags.Static | BindingFlags.NonPublic)!
+                .SetValue(null, Path.Combine(folder, "user"));
+            string csv = Path.Combine(folder, "first.csv"), xlsx = Path.Combine(folder, "second.xlsx");
+            File.WriteAllText(csv, "SN,X,Y,Site,SBIN,HBIN,Wafer,Voltage,AltSite\nfirst,1,0,1,1,1,W1,1.5,7\n");
+            using (var workbook = new XLWorkbook())
+            {
+                foreach (var (name, site) in new[] { ("Imported", "8"), ("Other", "9") })
+                {
+                    var sheet = workbook.Worksheets.Add(name);
+                    var header = new[] { "SN", "X", "Y", "Site", "SBIN", "HBIN", "Wafer", "Voltage", "AltSite" };
+                    var values = new[] { "second", "2", "0", "2", "1", "1", "W2", "2.5", site };
+                    for (int col = 0; col < header.Length; col++)
+                    {
+                        sheet.Cell(1, col + 1).Value = header[col];
+                        sheet.Cell(2, col + 1).Value = values[col];
+                    }
+                }
+                workbook.SaveAs(xlsx);
+            }
+
+            var main = new MainWindow(new LayoutSettings(Path.Combine(folder, "layout.json")),
+                new RecentFilesService(Path.Combine(folder, "recent.json")), new UiPreferencesService(Path.Combine(folder, "ui.json")));
+            main.Show();
+            Wait((Task)Call(main, "ApplySettings", ConfigLoader.Parse(Ini))!);
+            Wait((Task)Call(main, "OpenSelectedFilesAsync", (object)new[] { csv })!);
+            var old = Field<CsvParseResult>(main, "_data");
+            var editor = OpenLayout(main);
+            var grid = View<DataGrid>(editor, "SampleGrid");
+            Check(grid.Items.Count == 2 && grid.Columns.Count == 10, "INI settings open an independent populated CSV preview");
+            MouseDown(editor, grid, 0, 0);
+            Call(editor, "SetDragPosition", 2);
+            EndDrag(editor, grid);
+            var names = Input(editor, "LayoutFields", "测项名称行");
+            Check(names.Text == "1,2", "dragging across two preview rows sets both name rows");
+            Click(editor, "SyncButton");
+            Check(ReferenceEquals(old, Field<CsvParseResult>(main, "_data")) &&
+                View<TextBlock>(editor, "SaveStatus").Text.Contains("DataStartRow"), "invalid drag remains a draft with the original data intact");
+            names.Text = "1";
+            var site = Input(editor, "IdentityFields", "测试站点 (Site)");
+            var picker = ((DockPanel)site.Parent).Children.OfType<RadioButton>().Single();
+            picker.IsChecked = true;
+            MouseDown(editor, grid, 1, 9);
+            EndDrag(editor, grid);
+            Check(site.Text == "9", "clicking a preview column assigns its original 1-based index");
+            Click(editor, "SyncButton");
+            Until(() => !editor.IsVisible);
+            string standalone = File.ReadAllText(AppSettings.LastConfigCopyPath);
+            Check(standalone.Contains("; keep the source comment") && ConfigLoader.Parse(standalone).SiteColumn == 9 &&
+                Field<CsvParseResult>(main, "_data").Records.Single().Site == "7", "analysis sync saves the edited INI and reparses the current input");
+
+            var sources = new CsvImportSource[] { new(csv, ConfigText: Ini),
+                new(xlsx, new(false, "", false, false), ConfigText: Ini.Replace("SiteColumn=4", "SiteColumn=9"), Worksheet: "Imported") };
+            Wait(main.OpenManagedFilesAsync(sources, ConfigLoader.Parse(Ini), RetestMode.Last));
+            editor = OpenLayout(main);
+            var targets = View<ComboBox>(editor, "TargetList");
+            targets.SelectedIndex = 1;
+            Until(() => View<Button>(editor, "SyncButton").IsEnabled);
+            var sheets = View<ComboBox>(editor, "SheetList");
+            Check(sheets.Items.Count == 2 && ((ImportWorksheet)sheets.SelectedItem).Name == "Imported", "managed Excel preview opens the registered worksheet");
+            sheets.SelectedIndex = 1;
+            Until(() => View<Button>(editor, "SyncButton").IsEnabled);
+            grid = View<DataGrid>(editor, "SampleGrid");
+            var previewCells = (string[])grid.Items[1].GetType().GetProperty("Cells")!.GetValue(grid.Items[1])!;
+            Check(previewCells[8] == "9", "switching the worksheet updates the visible Excel values");
+            targets.SelectedIndex = 0;
+            Until(() => View<Button>(editor, "SyncButton").IsEnabled);
+            Input(editor, "IdentityFields", "测试站点 (Site)").Text = "9";
+            Click(editor, "SyncButton");
+            Until(() => !editor.IsVisible);
+            var after = Field<List<CsvImportSource>>(main, "_sources");
+            Check(ConfigLoader.Parse(after[0].ConfigText).SiteColumn == 9 && after[1] == sources[1] &&
+                Field<CsvParseResult>(main, "_data").Records.Select(record => record.Site).SequenceEqual(new[] { "7", "8" }) &&
+                File.ReadAllText(AppSettings.LastConfigCopyPath) == standalone, "managed analysis reparses the selected source and retains the other source and standalone INI");
+
+            var product = new ManagedProduct { ConfigText = Ini };
+            var registration = new ManagedImportWindow(product, Array.Empty<string>(), selectedSources: sources);
+            registration.Show(); Pump();
+            var manageGrid = View<DataGrid>(registration, "DgFiles");
+            manageGrid.SelectedIndex = 1;
+            Dispatcher.CurrentDispatcher.BeginInvoke(new Action(() =>
+            {
+                var modal = Editor();
+                Input(modal, "IdentityFields", "测试站点 (Site)").Text = "9";
+                Click(modal, "SyncButton");
+            }));
+            Click(registration, "BtnEditIniLayout");
+            Check(registration.Files[0].ConfigText.Length == 0 &&
+                ConfigLoader.Parse(registration.Files[1].ConfigText).SiteColumn == 9 && registration.Files[1].Worksheet == "Imported",
+                "registration sync prepares a layout override only for the selected record");
+            registration.Close();
+            main.Close();
+            app.Shutdown();
+            return 0;
+        }
+        catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+}

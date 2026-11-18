@@ -44,6 +44,7 @@ public static class ConfigLoader
         }
 
         Validate(config);
+        config.IniText = text;
         return config;
     }
 
@@ -327,9 +328,10 @@ public static class ConfigLoader
         return text;
     }
 
-    public static void Save(string path, AnalyzerConfig config)
+    public static void Save(string path, AnalyzerConfig config) => SaveText(path, Serialize(config));
+
+    internal static void SaveText(string path, string text)
     {
-        string text = Serialize(config);
         Parse(text); // Validate exactly what will be read back before replacing a file.
         AtomicFile.WriteAllText(path, text, new UTF8Encoding(false));
     }

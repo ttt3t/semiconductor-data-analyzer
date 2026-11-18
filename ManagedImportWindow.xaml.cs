@@ -11,7 +11,6 @@ public partial class ManagedImportWindow : Window
 {
     public List<ManagedDataFile> Files { get; }
     public ManagedFilenameRule FilenameRule { get; private set; }
-    private string _configText = "";
     private string _commonLot = "";
     private readonly ManagedProduct _product;
     private readonly bool _editingExisting;
@@ -40,10 +39,11 @@ public partial class ManagedImportWindow : Window
         if (existing != null)
         {
             StageList.SelectedItem = StageList.Items.OfType<ProductTestStage>().FirstOrDefault(s => s.Id == existing.StageId);
-            _configText = existing.ConfigText; TxtOrigin.Text = existing.SpecifiedOrigin;
+            TxtOrigin.Text = existing.SpecifiedOrigin;
             Mode93K.IsChecked = existing.StdfMode == StdfImportMode.Advantest93K;
-            if (existing.ConfigText.Length > 0) TxtConfigName.Text = "使用该登记保存的 INI 配置";
         }
+        DgFiles.SelectedIndex = 0;
+        RefreshConfigName();
         ExtractWafer.IsChecked = FilenameRule.ExtractWafer; WaferStart.Text = FilenameRule.WaferStart.ToString(); WaferLength.Text = FilenameRule.WaferLength.ToString();
         ExtractTime.IsChecked = FilenameRule.ExtractTime; TimeStart.Text = FilenameRule.TimeStart.ToString(); TimeLength.Text = FilenameRule.TimeLength.ToString(); TimeFormat.Text = FilenameRule.TimeFormat;
         TxtAllTime.Text = _importTime.ToString("yyyy-MM-dd HH:mm:ss");
@@ -192,9 +192,45 @@ public partial class ManagedImportWindow : Window
     {
         var file = new OpenFileDialog { Filter = "INI 配置|*.ini|所有文件|*.*" };
         if (file.ShowDialog() != true) return;
-        try { _configText = ConfigLoader.Serialize(ConfigLoader.Load(file.FileName)); TxtConfigName.Text = Path.GetFileName(file.FileName); }
+        try
+        {
+            string text = ConfigLoader.Load(file.FileName).IniText!;
+            foreach (var source in Files) source.ConfigText = text;
+            RefreshConfigName();
+        }
         catch (Exception ex) { TxtError.Text = ex.Message; }
     }
+
+    private void FileSelection_Changed(object sender, SelectionChangedEventArgs e) => RefreshConfigName();
+
+    private void RefreshConfigName()
+    {
+        if (BtnEditIniLayout == null) return;
+        var file = DgFiles?.SelectedItem as ManagedDataFile;
+        TxtConfigName.Text = file?.ConfigText.Length > 0 ? "所选文件使用单独的 INI" : "所选文件使用产品默认配置";
+        BtnEditIniLayout.IsEnabled = SpecifiedMode.IsChecked != true && file != null &&
+            IniLayoutPreview.Supports(new(file.FilePath, ArchiveEntry: file.ArchiveEntry, Worksheet: file.Worksheet));
+    }
+
+    private void EditIniLayout_Click(object sender, RoutedEventArgs e)
+    {
+        if (DgFiles.SelectedItem is not ManagedDataFile file) return;
+        try
+        {
+            var source = new CsvImportSource(file.FilePath, ArchiveEntry: file.ArchiveEntry, Worksheet: file.Worksheet);
+            string original = file.ConfigText.Length == 0 ? _product.ConfigText : file.ConfigText;
+            var editor = new IniLayoutWindow(original, "数据管理 · " + file.FileName, (text, _) =>
+            {
+                if (text != original) file.ConfigText = text;
+                RefreshConfigName();
+                TxtError.Text = "";
+                return Task.CompletedTask;
+            }, source) { Owner = this };
+            editor.ShowDialog();
+        }
+        catch (Exception ex) { TxtError.Text = ex.Message; }
+    }
+
     private void SpecifiedMode_Changed(object sender, RoutedEventArgs e)
     {
         bool specified = SpecifiedMode.IsChecked == true;
@@ -203,6 +239,7 @@ public partial class ManagedImportWindow : Window
             .Select(kind => new ProductTestStage { Id = "COMBINED:" + kind, Kind = kind, Name = "综合良率" }) : Array.Empty<ProductTestStage>()).ToList();
         StageList.SelectedItem = StageList.Items.OfType<ProductTestStage>().FirstOrDefault(s => s.Id == keep) ?? StageList.Items.OfType<ProductTestStage>().FirstOrDefault();
         TotalColumn.Visibility = GoodColumn.Visibility = YieldColumn.Visibility = SpecifiedHelp.Visibility = specified ? Visibility.Visible : Visibility.Collapsed;
+        RefreshConfigName();
     }
     private void Save_Click(object sender, RoutedEventArgs e)
     {
@@ -223,7 +260,7 @@ public partial class ManagedImportWindow : Window
                 if (file.Lot.Trim().Length == 0) file.Lot = TxtLot.Text.Trim();
                 if (file.Lot.Trim().Length == 0) throw new InvalidDataException("请为每个文件指定批次。");
                 file.Lot = file.Lot.Trim(); file.WaferOverride = file.WaferOverride.Trim();
-                file.StageId = stage.Id; file.ConfigText = _configText;
+                file.StageId = stage.Id;
                 file.StdfMode = Mode93K.IsChecked == true ? StdfImportMode.Advantest93K : StdfImportMode.Standard;
                 file.UseSpecifiedYield = SpecifiedMode.IsChecked == true; file.SpecifiedKind = stage.Kind;
                 file.SpecifiedOrigin = TxtOrigin.Text.Trim(); file.SpecifiedIncludePartial = _product.IncludePartialPass;

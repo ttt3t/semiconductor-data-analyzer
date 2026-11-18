@@ -230,7 +230,8 @@
             </TabItem>
             <TabItem x:Name="IniTab" Header="INI 配置">
                 <DockPanel TextElement.Foreground="{StaticResource TextPrimary}" TextElement.FontWeight="Normal" Margin="18">
-                    
+                    <Button x:Name="BtnEditIniLayout" Content="可视化设置…" Click="EditIniLayout_Click" DockPanel.Dock="Top"
+                            HorizontalAlignment="Left" Margin="0,0,0,10" Style="{StaticResource WorkspaceButton}"/>
                     <TextBox x:Name="TxtConfig" FontFamily="Consolas" FontSize="13" AcceptsReturn="True"
                              AcceptsTab="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                              TextWrapping="NoWrap" Padding="12" SpellCheck.IsEnabled="False"/>

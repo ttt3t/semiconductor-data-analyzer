@@ -27,7 +27,7 @@ static class Probe
             Row(2, 8, "1", Cell("H2", first.ToString(System.Globalization.CultureInfo.InvariantCulture), formula: "<f>SUM(1,0.25)</f>")) +
             Row(3, 9, "5", uncached ? "<c r=\"H3\"><f>SUM(2,0.5)</f></c>" : Cell("H3", "2.5")) + "</sheetData></worksheet>";
     }
-    static string Workbook(string directory, string name, bool uncached = false, bool sparse = false)
+    static string Workbook(string directory, string name, bool uncached = false, bool sparse = false, string? dataSheet = null)
     {
         string path = Path.Combine(directory, name);
         using var file = File.Create(path); using var zip = new ZipArchive(file, ZipArchiveMode.Create);
@@ -38,7 +38,7 @@ static class Probe
         Entry(zip, "xl/sharedStrings.xml", "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
             string.Concat(texts.Select(t => "<si><t>" + t + "</t></si>")) + "<si><r><t>电压 </t></r><r><t>&quot;A&quot;</t></r><rPh sb=\"0\" eb=\"1\"><t>IGNORE</t></rPh></si></sst>");
         Entry(zip, "xl/worksheets/sheet1.xml", Sheet(9.25, false));
-        Entry(zip, "xl/worksheets/sheet2.xml", sparse ? "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData><row r=\"2\"><c r=\"C2\" t=\"inlineStr\"><is><t>quote,&quot;value&quot;_x000A_line</t></is></c><c r=\"F2\"><v>42</v></c></row><row r=\"4\"><c r=\"B4\"><v>-3</v></c></row></sheetData></worksheet>" : Sheet(1.25, uncached));
+        Entry(zip, "xl/worksheets/sheet2.xml", dataSheet ?? (sparse ? "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData><row r=\"2\"><c r=\"C2\" t=\"inlineStr\"><is><t>quote,&quot;value&quot;_x000A_line</t></is></c><c r=\"F2\"><v>42</v></c></row><row r=\"4\"><c r=\"B4\"><v>-3</v></c></row></sheetData></worksheet>" : Sheet(1.25, uncached)));
         if (name.EndsWith(".xlsm")) Entry(zip, "xl/vbaProject.bin", "not executed");
         return path;
     }
@@ -88,6 +88,7 @@ static class Probe
                 var rows = CsvText.ReadRecords(reader, true).Select(r => CsvParser.ParseLine(r, ',', true)).ToArray();
                 Check(rows.Length == 4 && rows[1].Length == 6 && rows[1][0] == "" && rows[1][1] == "" && rows[1][2] == "quote,\"value\"\nline" && rows[1][5] == "42" && rows[3][1] == "-3", "sparse rows, leading/interior column gaps and multiline quoted text keep exact positions");
             }
+            CheckLayoutEditor(directory, config, xlsx, missing, sparse);
             string zipPath = Path.Combine(directory, "batch.zip");
             const string csvText = "SN,X,Y,Site,SBIN,HBIN,Wafer,A\n000003,1,2,1,1,1,W2,3.5\n";
             using (var zipFile = File.Create(zipPath))
@@ -126,5 +127,52 @@ static class Probe
             Console.WriteLine($"{checks} focused import checks passed"); return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+    }
+
+    static void CheckLayoutEditor(string directory, AnalyzerConfig config, string xlsx, string missing, string sparse)
+    {
+        var excel = IniLayoutPreview.Read(new(xlsx), config, default);
+        var selected = IniLayoutPreview.Read(new(xlsx, Worksheet: "Hidden"), config, default);
+        Check(excel.Sheets.Length == 2 && excel.Worksheet == "Data" && excel.Rows[0][7] == "电压 \"A\"" &&
+            excel.Rows[1][0] == "000001" && excel.Rows[1][7] == "1.25" && selected.Rows[1][7] == "9.25",
+            "layout preview preserves native Excel text and shows the selected sheet's cached values");
+        var uncached = IniLayoutPreview.Read(new(missing), config, default);
+        var gaps = IniLayoutPreview.Read(new(sparse), config, default);
+        Check(uncached.UncachedFormulas == 1 && uncached.Rows[2][7] == "" && gaps.Rows.Length == 4 &&
+            gaps.Rows[0].Length == 0 && gaps.Rows[1][0] == "" && gaps.Rows[1][2] == "quote,\"value\"\nline",
+            "Excel layout preview keeps sparse row and column coordinates and counts uncached formulas");
+        string wide = Workbook(directory, "wide.xlsx", dataSheet:
+            "<worksheet><sheetData><row r=\"1\">" + Cell("A1", "1") + Cell("AX1", "50") +
+            Cell("AY1", "99999", "s") + "</row><row r=\"51\">" + Cell("A51", "99999", "s") + "</row></sheetData></worksheet>");
+        var bounded = IniLayoutPreview.Read(new(wide), config, default);
+        Check(bounded.Rows.Length == 50 && bounded.Rows[0].Length == 50 && bounded.Rows[0][49] == "50" &&
+            bounded.Rows[49].Length == 0, "bounded Excel preview stops before data outside the first 50 rows and columns");
+
+        string sample = Path.Combine(directory, "preview.csv");
+        string wideCsv = string.Join(";", Enumerable.Range(1, 52));
+        File.WriteAllText(sample, "\"设备\n编号\";" + wideCsv + "\n" +
+            string.Concat(Enumerable.Repeat(wideCsv + "\n", 49)) + "\"unfinished", CsvText.EncodingFor(config.EncodingName));
+        var csv = IniLayoutPreview.Read(new(sample), config, default);
+        Check(csv.Rows.Length == 50 && csv.Rows.All(row => row.Length == 50) && csv.Rows[0][0] == "设备\n编号" &&
+            csv.Rows[0][49] == "49" && csv.Rows[49][49] == "50", "CSV preview counts quoted multiline fields as one record and bounds both axes");
+
+        string original = "# keep this comment\r\nSiteColumn=3\r\n[Layout]\r\nTestItemRow=1\r\nDataStartRow=5\r\n" +
+            "[IdentityColumns]\r\n  sitecolumn = 4  \r\n[SBinDescriptions]\r\nSiteColumn=keep this description\r\n";
+        var fields = IniLayoutEditor.Fields.ToDictionary(field => field.Key);
+        var edits = new Dictionary<LayoutField, int[]> { [fields["TestItemRows"]] = new[] { 2, 3 },
+            [fields["SiteColumn"]] = new[] { 7 }, [fields["TestItemColumns"]] = new[] { 8, 12 } };
+        string edited = IniLayoutEditor.Apply(original, ConfigLoader.Parse(original), edits, false);
+        var parsed = ConfigLoader.Parse(edited);
+        Check(edited.StartsWith("# keep this comment\r\nSiteColumn=3\r\n") &&
+            edited.Contains("\r\n  sitecolumn = 7  \r\n") && edited.EndsWith("SiteColumn=keep this description\r\n") &&
+            parsed.SiteColumn == 7 && parsed.TestItemRow == 2 && parsed.TestItemRows.SequenceEqual(new[] { 2, 3 }) &&
+            parsed.TestItemColumns.SequenceEqual(new[] { 8, 12 }) && !parsed.SkipRepeatedHeaders,
+            "layout update preserves comments, legacy precedence and other sections while round-tripping new coordinates");
+        edits[fields["TestItemRows"]] = new[] { 3 };
+        parsed = ConfigLoader.Parse(IniLayoutEditor.Apply(edited, parsed, edits, false));
+        Check(parsed.TestItemRow == 3 && parsed.TestItemRows.Count == 0, "single name row clears the multi-row override");
+        edits[fields["TestItemRows"]] = new[] { 51 };
+        Throws<InvalidDataException>(() => IniLayoutEditor.Apply(original, ConfigLoader.Parse(original), edits, true),
+            "invalid definition order is rejected before layout synchronization");
     }
 }

@@ -68,9 +68,28 @@ public partial class ProductEditorWindow : Window
     {
         var file = new OpenFileDialog { Filter = "INI 配置|*.ini|所有文件|*.*" };
         if (file.ShowDialog() != true) return;
-        try { var config = ConfigLoader.Load(file.FileName); TxtConfig.Text = ConfigLoader.Serialize(config); }
+        try { TxtConfig.Text = ConfigLoader.Load(file.FileName).IniText!; }
         catch (Exception ex) { TxtError.Text = ex.Message; }
     }
+
+    private void EditIniLayout_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var sample = Product.Files.Where(file => file.ConfigText.Length == 0 && File.Exists(file.FilePath))
+                .Select(file => new CsvImportSource(file.FilePath, ArchiveEntry: file.ArchiveEntry, Worksheet: file.Worksheet))
+                .FirstOrDefault(IniLayoutPreview.Supports);
+            var editor = new IniLayoutWindow(TxtConfig.Text, "数据管理 · 产品默认解析配置", (text, _) =>
+            {
+                TxtConfig.Text = text;
+                TxtError.Text = "";
+                return Task.CompletedTask;
+            }, sample) { Owner = this };
+            editor.ShowDialog();
+        }
+        catch (Exception ex) { TxtError.Text = ex.Message; }
+    }
+
     private void Save_Click(object sender, RoutedEventArgs e)
     {
         try

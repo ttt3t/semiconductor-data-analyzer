@@ -74,6 +74,7 @@ public sealed class AnalyzerConfig
     public double OutlierSigma { get; set; } = 6;
 
     public string ConfigFileName { get; set; } = "";
+    internal string? IniText { get; set; }
     public Dictionary<string, List<string>> SBinCategories { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> SBinDescriptions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }

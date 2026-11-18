@@ -313,18 +313,19 @@ public static class CsvParser
         return row[col];
     }
 
-    internal static string[] ParseLine(string line, char delimiter, bool hasQuoted)
+    internal static string[] ParseLine(string line, char delimiter, bool hasQuoted, int maxColumns = int.MaxValue)
     {
-        if (!hasQuoted)
+        if (!hasQuoted && maxColumns == int.MaxValue)
             return line.Split(delimiter);
 
         var result = new List<string>();
         var sb = new StringBuilder();
-        ParseLineInto(line, delimiter, true, result, sb);
+        ParseLineInto(line, delimiter, hasQuoted, result, sb, maxColumns);
         return result.ToArray();
     }
 
-    private static void ParseLineInto(string line, char delimiter, bool hasQuoted, List<string> result, StringBuilder sb)
+    private static void ParseLineInto(string line, char delimiter, bool hasQuoted, List<string> result, StringBuilder sb,
+        int maxColumns = int.MaxValue)
     {
         result.Clear();
         if (!hasQuoted)
@@ -336,6 +337,7 @@ public static class CsvParser
                 {
                     int len = i - start;
                     result.Add(len == 0 ? "" : line.Substring(start, len));
+                    if (result.Count == maxColumns) return;
                     start = i + 1;
                 }
             }
@@ -365,6 +367,7 @@ public static class CsvParser
             else if (c == delimiter && !inQuotes)
             {
                 result.Add(sb.Length == 0 ? "" : sb.ToString());
+                if (result.Count == maxColumns) return;
                 sb.Clear();
             }
             else

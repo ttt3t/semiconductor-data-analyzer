@@ -25,6 +25,9 @@ public partial class SettingsWindow : Window
     private bool _analysisDirty;
     private bool _identityDirty;
     private readonly CsvParseResult? _data;
+    private readonly Func<AnalyzerConfig, int?, Task>? _applyLayout;
+    private readonly IReadOnlyList<CsvImportSource> _layoutSources;
+    private IniLayoutWindow? _layoutEditor;
     private TabItem? _lastTab;
 
     public SettingsWindow(AnalyzerConfig config, Action<AnalyzerConfig> apply)
@@ -33,7 +36,8 @@ public partial class SettingsWindow : Window
     public SettingsWindow(AnalyzerConfig config, Func<AnalyzerConfig, Task> apply,
         Func<string, Task>? openCsv = null, RecentFilesService? recentFiles = null,
         UiPreferencesService? uiPreferences = null, CsvParseResult? data = null, Action? cancelApply = null, string csvPath = "",
-        Action? applyPreferences = null, UiPreferences? preferences = null)
+        Action? applyPreferences = null, UiPreferences? preferences = null,
+        Func<AnalyzerConfig, int?, Task>? applyLayout = null, IReadOnlyList<CsvImportSource>? layoutSources = null)
     {
         InitializeComponent();
         _apply = apply;
@@ -43,6 +47,8 @@ public partial class SettingsWindow : Window
         _uiPreferences = uiPreferences ?? UiPreferencesService.Current;
         _applyPreferences = applyPreferences;
         _data = data;
+        _applyLayout = applyLayout;
+        _layoutSources = layoutSources ?? Array.Empty<CsvImportSource>();
         if (csvPath.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)) TxtCsvSamplePath.Text = csvPath;
         _fileName = "config.ini";
         ShowConfig(config);
@@ -51,6 +57,7 @@ public partial class SettingsWindow : Window
         _syncing = false;
         Closing += (_, e) =>
         {
+            if (_layoutEditor != null) { e.Cancel = true; _layoutEditor.Activate(); return; }
             if (_csvDetectionCancellation != null)
             { e.Cancel = true; _closeAfterDetection = true; _csvDetectionCancellation.Cancel(); }
             if (_applying) { e.Cancel = true; _closeAfterApply = true; _cancelApply?.Invoke(); TxtStatus.Text = "正在停止处理…"; }
@@ -117,7 +124,18 @@ public partial class SettingsWindow : Window
     private void ShowConfig(AnalyzerConfig config)
     {
         _fileName = string.IsNullOrEmpty(config.ConfigFileName) ? "config.ini" : Path.ChangeExtension(config.ConfigFileName, ".ini");
-        TxtConfig.Text = ConfigLoader.Serialize(config);
+        string text = ConfigLoader.Serialize(config);
+        if (config.IniText is { } original)
+        {
+            var originalConfig = ConfigLoader.Parse(original, _fileName);
+            if (originalConfig.BinMode != config.BinMode)
+            {
+                original = UpdateAnalysisFields(original, new(StringComparer.OrdinalIgnoreCase) { ["BinMode"] = config.BinMode });
+                originalConfig.BinMode = config.BinMode;
+            }
+            if (text == ConfigLoader.Serialize(originalConfig)) text = original;
+        }
+        TxtConfig.Text = text;
         ShowAnalysisControls(config);
         ShowSBinDescriptions(config);
         ShowIdentityControls(config);
@@ -195,9 +213,11 @@ public partial class SettingsWindow : Window
         string result = string.Join(Environment.NewLine, lines);
         var scatter = fields.Where(p => !found.Contains(p.Key) && p.Key.StartsWith("Scatter", StringComparison.Ordinal)).ToList();
         var histogram = fields.Where(p => !found.Contains(p.Key) && !p.Key.StartsWith("Scatter", StringComparison.Ordinal) && p.Key is not "RemoveOutliers" and not "OutlierSigma" and not "PreferGoodRetest" and not "StdfLimitSignificantDigits").ToList();
-        if (!found.Contains("StdfLimitSignificantDigits")) result += Environment.NewLine + "[Display]" + Environment.NewLine + "StdfLimitSignificantDigits=" + fields["StdfLimitSignificantDigits"];
+        if (!found.Contains("StdfLimitSignificantDigits") && fields.TryGetValue("StdfLimitSignificantDigits", out var limitDigits))
+            result += Environment.NewLine + "[Display]" + Environment.NewLine + "StdfLimitSignificantDigits=" + limitDigits;
         var robust = fields.Where(p => !found.Contains(p.Key) && p.Key is "RemoveOutliers" or "OutlierSigma").ToList();
-        if (!found.Contains("PreferGoodRetest")) result += Environment.NewLine + "[RetestSelection]" + Environment.NewLine + "PreferGoodRetest=" + fields["PreferGoodRetest"];
+        if (!found.Contains("PreferGoodRetest") && fields.TryGetValue("PreferGoodRetest", out var preferGood))
+            result += Environment.NewLine + "[RetestSelection]" + Environment.NewLine + "PreferGoodRetest=" + preferGood;
         if (histogram.Count > 0) result += Environment.NewLine + "[Histogram]" + Environment.NewLine + string.Join(Environment.NewLine, histogram.Select(p => p.Key + "=" + p.Value));
         if (scatter.Count > 0) result += Environment.NewLine + "[Scatter]" + Environment.NewLine + string.Join(Environment.NewLine, scatter.Select(p => p.Key + "=" + p.Value));
         if (robust.Count > 0) result += Environment.NewLine + "[Robust]" + Environment.NewLine + string.Join(Environment.NewLine, robust.Select(p => p.Key + "=" + p.Value));
@@ -356,7 +376,7 @@ public partial class SettingsWindow : Window
                 DefaultExt = ".ini", AddExtension = true, FileName = "config.ini"
             };
             if (dialog.ShowDialog(this) != true) return;
-            ConfigLoader.Save(dialog.FileName, config);
+            ConfigLoader.SaveText(dialog.FileName, config.IniText ?? TxtConfig.Text);
             _recentFiles.RememberConfig(dialog.FileName); RefreshRecentFiles();
             TxtStatus.Text = "配置已导出：" + dialog.FileName;
         }
