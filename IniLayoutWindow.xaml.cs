@@ -241,7 +241,7 @@ public partial class IniLayoutWindow : Window
         {
             string letters = column <= 26 ? ((char)('A' + column - 1)).ToString() :
                 string.Concat('A', (char)('A' + column - 27));
-            var header = new TextBlock { Text = letters, Padding = new(7, 2, 7, 2) };
+            var header = new TextBlock { Text = letters + column.ToString(CultureInfo.InvariantCulture), Padding = new(7, 2, 7, 2) };
             _headers.Add(header);
             SampleGrid.Columns.Add(new DataGridTextColumn { Header = header, Binding = new Binding($"Cells[{column - 1}]"),
                 Width = 105, MinWidth = 46 });
