@@ -57,6 +57,10 @@ public class HistogramControl : CachedPlotControl
         DependencyProperty.Register(nameof(ShowBinCounts), typeof(bool), typeof(HistogramControl),
             new FrameworkPropertyMetadata(false, InvalidateIfIdle));
 
+    public static readonly DependencyProperty AutoLogFrequencyProperty =
+        DependencyProperty.Register(nameof(AutoLogFrequency), typeof(bool), typeof(HistogramControl),
+            new FrameworkPropertyMetadata(true, InvalidateIfIdle));
+
     private static readonly Brush InSpecBrush = Freeze(new SolidColorBrush(Color.FromRgb(70, 130, 180)));
     private static readonly Brush OutSpecBrush = Freeze(new SolidColorBrush(Color.FromRgb(220, 90, 90)));
     private static readonly Pen AxisPen = Freeze(new Pen(Brushes.Black, 1.2));
@@ -95,6 +99,7 @@ public class HistogramControl : CachedPlotControl
     public bool ShowMean { get => (bool)GetValue(ShowMeanProperty); set => SetValue(ShowMeanProperty, value); }
     public bool ShowThreeSigma { get => (bool)GetValue(ShowThreeSigmaProperty); set => SetValue(ShowThreeSigmaProperty, value); }
     public bool ShowBinCounts { get => (bool)GetValue(ShowBinCountsProperty); set => SetValue(ShowBinCountsProperty, value); }
+    public bool AutoLogFrequency { get => (bool)GetValue(AutoLogFrequencyProperty); set => SetValue(AutoLogFrequencyProperty, value); }
 
     public void Apply(
         IList<HistogramBin>? bins,
@@ -133,9 +138,20 @@ public class HistogramControl : CachedPlotControl
         double w = ActualWidth, h = ActualHeight;
         dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, Math.Max(0, w), Math.Max(0, h)));
         if (w < 180 || h < 120) return;
+        var bins = Bins;
+        int maxCount = 1, minPositiveCount = int.MaxValue;
+        if (bins != null)
+        {
+            foreach (var bin in bins)
+            {
+                maxCount = Math.Max(maxCount, bin.Count);
+                if (bin.Count > 0) minPositiveCount = Math.Min(minPositiveCount, bin.Count);
+            }
+        }
+        bool useLogFrequency = AutoLogFrequency && maxCount > 100L * minPositiveCount;
         // At narrow widths the heading gets its own row; otherwise all top captions share a row.
         double headerOffset = !string.IsNullOrWhiteSpace(Title) && w < 440 ? ChartAxis.HeadingFontSize(RenderSize) + 7 : 0;
-        ChartAxis.DrawTitle(dc, this, "频数（个）", new Rect(6, 3 + headerOffset, 90, 20));
+        ChartAxis.DrawTitle(dc, this, useLogFrequency ? "频数（对数）" : "频数（个）", new Rect(6, 3 + headerOffset, 90, 20));
         double legendLeft = DrawLegend(dc, w, headerOffset);
         ChartAxis.DrawHeading(dc, this, Title, headerOffset > 0 ? ChartAxis.PlotLeft : 108,
             headerOffset > 0 ? w - ChartAxis.PlotRight : legendLeft - 10);
@@ -143,12 +159,11 @@ public class HistogramControl : CachedPlotControl
         var title = ChartAxis.Text(this, xTitle);
         ChartAxis.DrawTitle(dc, this, xTitle, new Rect(Math.Max(4, (ChartAxis.PlotLeft + w - ChartAxis.PlotRight - title.Width) / 2),
             h - ChartAxis.PlotBottom + ChartAxis.AxisTitleGap, Math.Min(w - 8, title.Width + 2), 17));
-        if (Bins == null || Bins.Count == 0) return;
+        if (bins == null || bins.Count == 0) return;
 
-        double dataMin = Bins.Min(b => b.From), dataMax = Bins.Max(b => b.To);
+        double dataMin = bins.Min(b => b.From), dataMax = bins.Max(b => b.To);
         double xSpan = dataMax - dataMin;
         if (!double.IsFinite(xSpan) || xSpan <= 0) return;
-        int maxCount = Math.Max(1, Bins.Max(b => b.Count));
         const double left = ChartAxis.PlotLeft, right = ChartAxis.PlotRight, bottom = ChartAxis.PlotBottom;
         double plotW = w - left - right;
         if (plotW < 30) return;
@@ -182,23 +197,30 @@ public class HistogramControl : CachedPlotControl
         PlotBounds = new Rect(left, top, plotW, plotH);
         const double countFontSize = 10;
         var widestCount = ShowBinCounts ? ChartAxis.Text(this, maxCount.ToString(CultureInfo.InvariantCulture), countFontSize) : null;
-        double binPitch = plotW / Bins.Count;
+        double binPitch = plotW / bins.Count;
         bool rotateCounts = widestCount != null && binPitch < widestCount.Width + 4;
         double countLabelHeight = widestCount == null ? 0 : rotateCounts ? widestCount.Width : widestCount.Height;
         int countLanes = rotateCounts ? (int)Math.Clamp(Math.Ceiling(widestCount!.Height / binPitch), 1, 4) : 1;
         double laneStep = countLanes > 1 ? Math.Min(countLabelHeight + 2,
             Math.Max(0, plotH / 2 - countLabelHeight - 3) / (countLanes - 1)) : 0;
         double countHeadroom = widestCount == null ? 0 : Math.Min(plotH / 2, countLabelHeight + 3 + (countLanes - 1) * laneStep);
-        double MapY(double value) => top + plotH - value / maxCount * (plotH - countHeadroom);
+        // log10(1 + count) keeps zero at the baseline and labels in sample counts.
+        double FrequencyPosition(double count) => useLogFrequency ? Math.Log10(1 + count) : count;
+        double maxFrequencyPosition = FrequencyPosition(maxCount);
+        double MapY(double count) => top + plotH - FrequencyPosition(count) / maxFrequencyPosition * (plotH - countHeadroom);
 
-        var yTicks = ChartAxis.Ticks(0, maxCount, Math.Max(1, (int)(plotH / 32)), integers: true);
+        var yTicks = useLogFrequency ? LogFrequencyTicks(maxCount) :
+            ChartAxis.Ticks(0, maxCount, Math.Max(1, (int)(plotH / 32)), integers: true);
+        double lastFrequencyLabelY = double.PositiveInfinity;
         foreach (double tick in yTicks)
         {
             double y = MapY(tick);
             dc.DrawLine(GridPen, new Point(left, y), new Point(left + plotW, y));
             dc.DrawLine(AxisPen, new Point(left - 4, y), new Point(left, y));
             var text = ChartAxis.Text(this, ChartAxis.Format(tick));
+            if (useLogFrequency && lastFrequencyLabelY - y < text.Height + 2) continue;
             dc.DrawText(text, new Point(left - 7 - text.Width, y - text.Height / 2));
+            lastFrequencyLabelY = y;
         }
         // Both endpoint captions share the numeric tick row; reserve their space before placing ticks.
         var xTicks = ChartAxis.Ticks(dataMin, dataMax, Math.Max(1, (int)(plotW / 85)));
@@ -233,7 +255,7 @@ public class HistogramControl : CachedPlotControl
         }
 
         dc.PushClip(new RectangleGeometry(PlotBounds));
-        foreach (var bin in Bins)
+        foreach (var bin in bins)
         {
             double x = MapX(bin.From), width = MapX(bin.To) - x;
             double barTop = MapY(Math.Max(0, bin.Count));
@@ -256,9 +278,9 @@ public class HistogramControl : CachedPlotControl
         if (widestCount != null)
         {
             var countTexts = new Dictionary<int, FormattedText> { [maxCount] = widestCount };
-            for (int index = 0; index < Bins.Count; index++)
+            for (int index = 0; index < bins.Count; index++)
             {
-                var bin = Bins[index];
+                var bin = bins[index];
                 if (bin.Count <= 0) continue;
                 if (!countTexts.TryGetValue(bin.Count, out var text))
                     countTexts[bin.Count] = text = ChartAxis.Text(this, bin.Count.ToString(CultureInfo.InvariantCulture), countFontSize);
@@ -286,6 +308,12 @@ public class HistogramControl : CachedPlotControl
             dc.DrawRectangle(Brushes.White, null, Rect.Inflate(label.Bounds, 2, 1));
             dc.DrawText(label.Text, label.Bounds.TopLeft);
         }
+    }
+
+    private static IEnumerable<double> LogFrequencyTicks(int maxCount)
+    {
+        yield return 0;
+        for (long count = 1; count <= maxCount; count *= 10) yield return count;
     }
 
     private double DrawLegend(DrawingContext dc, double width, double headerOffset)

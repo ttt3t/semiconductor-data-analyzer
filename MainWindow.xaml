@@ -731,10 +731,14 @@
                         </ListBox>
                             <CheckBox x:Name="ChkHistogramCounts" Content="显示数量" VerticalAlignment="Center" Margin="9,0,3,0"
                                       ToolTip="在柱顶显示该分箱的样本数" AutomationProperties.Name="显示每柱样本数"/>
+                            <CheckBox x:Name="ChkHistogramAutoLogFrequency" Content="自动对数纵轴" IsChecked="True"
+                                      VerticalAlignment="Center" Margin="9,0,3,0"
+                                      ToolTip="最大非零分箱频数超过最小非零频数的 100 倍时，使用对数纵轴"/>
                         </WrapPanel>
                         </DockPanel>
                         <controls:HistogramControl x:Name="Histogram" SizeChanged="Chart_SizeChanged"
                                                    ShowBinCounts="{Binding IsChecked, ElementName=ChkHistogramCounts}"
+                                                   AutoLogFrequency="{Binding IsChecked, ElementName=ChkHistogramAutoLogFrequency}"
                                                    PreviewMouseWheel="Histogram_MouseWheel" MouseLeftButtonDown="Histogram_MouseLeftButtonDown"
                                                    MouseMove="Histogram_MouseMove" MouseLeftButtonUp="Histogram_MouseLeftButtonUp"
                                                    LostMouseCapture="Histogram_LostMouseCapture"

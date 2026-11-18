@@ -164,6 +164,40 @@ static class Probe
         Check(histogram.ShowBinCounts && !Same(unlabelled, ChartImage.Capture(histogram, size)),
             "the header checkbox turns on visible frequency labels in the live histogram");
 
+        var autoLog = (CheckBox)main.FindName("ChkHistogramAutoLogFrequency");
+        Check(autoLog.IsChecked == true && histogram.AutoLogFrequency, "automatic log frequency is enabled by default");
+        counts.IsChecked = false;
+        BitmapSource DrawFrequencies(params int[] frequencies)
+        {
+            histogram.Apply(frequencies.Select((count, index) => new HistogramBin
+                { From = index, To = index + 1, Count = count }).ToList(),
+                null, null, null, null, false, false, false, false);
+            Pump();
+            return ChartImage.Capture(histogram, size);
+        }
+        var atBoundary = DrawFrequencies(0, 1, 100);
+        var singleNonzero = DrawFrequencies(0, 0, 1000);
+        var log = DrawFrequencies(0, 1, 101);
+        autoLog.IsChecked = false;
+        var linear = DrawFrequencies(0, 1, 101);
+        plot = PlotBounds();
+        bool ContainsSmallBar(BitmapSource image)
+        {
+            int x = (int)((plot.Left + plot.Width / 2) * image.DpiX / 96);
+            int y = (int)((plot.Bottom - plot.Height * .08) * image.DpiY / 96);
+            var pixels = Pixels(image);
+            int offset = (y * image.PixelWidth + x) * 4;
+            return pixels[offset] == 180 && pixels[offset + 1] == 130 && pixels[offset + 2] == 70;
+        }
+        Check(ContainsSmallBar(log) && !ContainsSmallBar(linear),
+            "a ratio over 100:1 raises the small bar on a log scale and unchecking restores linear height");
+        Check(Same(atBoundary, DrawFrequencies(0, 1, 100)) && Same(singleNonzero, DrawFrequencies(0, 0, 1000)),
+            "exactly 100:1 and lone positive bins with zeros keep a linear scale");
+        autoLog.IsChecked = true;
+        DrawFrequencies(0, 1, 101);
+        Check(Same(atBoundary, DrawFrequencies(0, 1, 100)),
+            "changing the displayed bins below the threshold returns to linear while automatic scaling stays enabled");
+
         var data = (CsvParseResult)Field(main, "_data")!;
         string report = Path.Combine(folder, "histogram-mode.xlsx");
         Wait(XlsxReportService.SaveAsync(report, data, config,

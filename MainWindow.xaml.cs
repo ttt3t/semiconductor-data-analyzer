@@ -503,6 +503,7 @@ public partial class MainWindow : Window
         var dataName = _currentDataName + (_sampleRanges.Count > 0 ? "（已应用数据筛选）" : "");
         var histogramSize = ReportChartSize(Histogram, _histogramImageSize);
         bool histogramShowBinCounts = Histogram.ShowBinCounts;
+        bool histogramAutoLogFrequency = Histogram.AutoLogFrequency;
         var scatterSize = ReportChartSize(ScatterPlot, _scatterImageSize);
         using var lease = new DatasetLease(data.Records);
         var options = new ExportDataWindow(data.Wafers, config.OutlierSigma, report: true,
@@ -517,7 +518,7 @@ public partial class MainWindow : Window
             options.HistogramMode, options.CombineSites, focused, options.ShowBinNumbers, options.ShowSiteBorders,
             options.CombineWafers, options.ScatterOrder,
             histogramSize, scatterSize,
-            options.ScatterUseLimitRange, histogramShowBinCounts);
+            options.ScatterUseLimitRange, histogramShowBinCounts, histogramAutoLogFrequency);
         var exporting = IndependentOperationWindow.RunAsync("导出 XLSX 报告", async () =>
         {
             await XlsxReportService.SaveAsync(file.FileName, data, config, report, dataName);
