@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using SemiconductorCsvAnalyzer.Services;
 
@@ -131,6 +133,40 @@ public class HistogramControl : CachedPlotControl
 
     protected override bool HasPlotContent => Bins is { Count: > 0 };
 
+    protected override void OnToolTipOpening(ToolTipEventArgs e)
+    {
+        UpdateFrequencyToolTip(Mouse.GetPosition(this));
+        base.OnToolTipOpening(e);
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        if (ToolTip is ToolTip { IsOpen: true } && !IsMouseCaptured)
+            UpdateFrequencyToolTip(e.GetPosition(this));
+        base.OnMouseMove(e);
+    }
+
+    private void UpdateFrequencyToolTip(Point position)
+    {
+        if (ToolTip is not ToolTip tip) return;
+        string hint = "按住左键左右拖动横轴范围，滚轮缩放，双击恢复默认范围";
+        if (Bins is { Count: > 0 } bins && PlotBounds.Contains(position))
+        {
+            double from = bins[0].From, to = bins[^1].To;
+            double value = from + (to - from) * ((position.X - PlotBounds.Left) / PlotBounds.Width);
+            int first = 0, last = bins.Count - 1;
+            while (first < last)
+            {
+                int middle = first + (last - first) / 2;
+                if (value < bins[middle].To) last = middle;
+                else first = middle + 1;
+            }
+            var bin = bins[first];
+            hint = $"总数 {bin.Count}  ·  规格内 {bin.InSpecCount}  ·  规格外 {bin.OutOfSpecCount}";
+        }
+        if (!Equals(tip.Content, hint)) tip.Content = hint;
+    }
+
     protected override void DrawPlot(DrawingContext dc)
     {
         _renderCount++;
@@ -140,12 +176,14 @@ public class HistogramControl : CachedPlotControl
         if (w < 180 || h < 120) return;
         var bins = Bins;
         int maxCount = 1, minPositiveCount = int.MaxValue;
+        bool integerBoundaries = true;
         if (bins != null)
         {
             foreach (var bin in bins)
             {
                 maxCount = Math.Max(maxCount, bin.Count);
                 if (bin.Count > 0) minPositiveCount = Math.Min(minPositiveCount, bin.Count);
+                integerBoundaries = integerBoundaries && double.IsInteger(bin.From) && double.IsInteger(bin.To);
             }
         }
         bool useLogFrequency = AutoLogFrequency && maxCount > 100L * minPositiveCount;
@@ -223,7 +261,7 @@ public class HistogramControl : CachedPlotControl
             lastFrequencyLabelY = y;
         }
         // Both endpoint captions share the numeric tick row; reserve their space before placing ticks.
-        var xTicks = ChartAxis.Ticks(dataMin, dataMax, Math.Max(1, (int)(plotW / 85)));
+        var xTicks = ChartAxis.Ticks(dataMin, dataMax, Math.Max(1, (int)(plotW / 85)), integers: integerBoundaries);
         double xStep = xTicks.Count > 1 ? xTicks[1] - xTicks[0] : xSpan;
         double captionWidth = Math.Max(1, (plotW - 16) / 2);
         var lowerCaption = ChartAxis.Text(this, _showOverflow ? "＜" + ChartAxis.Format(dataMin) : ChartAxis.Format(dataMin, xStep));
@@ -257,10 +295,17 @@ public class HistogramControl : CachedPlotControl
         dc.PushClip(new RectangleGeometry(PlotBounds));
         foreach (var bin in bins)
         {
+            if (bin.Count == 0) continue;
             double x = MapX(bin.From), width = MapX(bin.To) - x;
-            double barTop = MapY(Math.Max(0, bin.Count));
-            dc.DrawRectangle(bin.IsOutOfSpec ? OutSpecBrush : InSpecBrush, null,
-                new Rect(x + Math.Min(0.5, width / 4), barTop, Math.Max(0.1, width - 1), top + plotH - barTop));
+            double startX = x + Math.Min(0.5, width / 4), barWidth = Math.Max(0.1, width - 1);
+            double inSpecTop = MapY(bin.InSpecCount);
+            if (bin.InSpecCount > 0)
+                dc.DrawRectangle(InSpecBrush, null, new Rect(startX, inSpecTop, barWidth, top + plotH - inSpecTop));
+            if (bin.OutOfSpecCount > 0)
+            {
+                double barTop = MapY(bin.Count);
+                dc.DrawRectangle(OutSpecBrush, null, new Rect(startX, barTop, barWidth, inSpecTop - barTop));
+            }
         }
         void ReferenceLine(double? value, Pen pen)
         {
@@ -308,6 +353,7 @@ public class HistogramControl : CachedPlotControl
             dc.DrawRectangle(Brushes.White, null, Rect.Inflate(label.Bounds, 2, 1));
             dc.DrawText(label.Text, label.Bounds.TopLeft);
         }
+        if (ToolTip is ToolTip { IsOpen: true }) UpdateFrequencyToolTip(Mouse.GetPosition(this));
     }
 
     private static IEnumerable<double> LogFrequencyTicks(int maxCount)

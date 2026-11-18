@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -77,19 +78,27 @@ static class Probe
 
         var samples = Enumerable.Range(-50, 101).Select(value => new TestValue { Value = value }).ToArray();
         var spec = HistogramService.CreateSpecZoneBins(samples, -20, 20, false, config.SpecZoneBinCount);
-        Check(spec.Count == 17 && spec.Sum(bin => bin.Count) == 41 && spec.Where(bin => bin.IsOutOfSpec).Sum(bin => bin.Count) == 0 &&
+        Check(spec.Count == 17 && spec.Sum(bin => bin.Count) == 41 && spec.Sum(bin => bin.OutOfSpecCount) == 0 &&
             spec.Any(bin => bin.From == -20) && spec.Any(bin => bin.To == 20),
             "spec-zone bins keep both threshold boundaries and include observations equal to either limit");
         var flat = HistogramService.CreateFixedBins(new[] { new TestValue { Value = 9 } }, 40, null, null, true);
         Check(flat.Count == 40 && flat.Sum(bin => bin.Count) == 1 && flat[0].From < 9 && flat[^1].To > 9,
             "constant-valued data still renders the configured number of bins");
+        var mixedSamples = new[] { 8.5, 9.0, 9.5, 10.0, 10.5 }.Select(value => new TestValue { Value = value }).ToArray();
+        var mixed = HistogramService.CreateFixedBins(mixedSamples, 1, 9, 10, true).Single();
+        var excludingOutliers = HistogramService.CreateFixedBins(mixedSamples, 1, 9, 10, false).Single();
+        var strict = HistogramService.CreateFixedBins(mixedSamples, 1, Math.BitIncrement(9), Math.BitDecrement(10), true).Single();
+        Check(mixed.Count == 5 && mixed.InSpecCount == 3 && mixed.OutOfSpecCount == 2 &&
+            excludingOutliers.Count == 3 && excludingOutliers.OutOfSpecCount == 0 && strict.InSpecCount == 1 && strict.OutOfSpecCount == 4,
+            "a bin crossing both limits classifies individual values with inclusive and strict comparison boundaries");
 
         config.LowLimitRow = 2; config.HighLimitRow = 3; config.UnitRow = 0; config.DataStartRow = 4;
         config.TestItemStartColumn = 8; config.SerialNumberColumn = 1;
         config.SBinColumn = 5; config.HBinColumn = 6; config.WaferColumn = 7;
         string csv = Path.Combine(folder, "histogram-range.csv");
         File.WriteAllLines(csv, new[] { "SN,X,Y,Site,SBIN,HBIN,Wafer,Measurement", "LSL,,,,,,,-20", "USL,,,,,,,20" }
-            .Concat(Enumerable.Range(-50, 101).Select((value, index) => $"SN{index},{index},0,1,1,1,W1,{value}")));
+            .Concat(Enumerable.Range(-50, 101).Select((value, index) =>
+                $"SN{index},{index},0,1,1,1,W1,{(value == 0 ? "0.25" : value.ToString(CultureInfo.InvariantCulture))}")));
         Wait((Task)Call(main, "ApplySettings", config)!);
         Wait((Task)Call(main, "OpenSelectedFilesAsync", (object)new[] { csv })!);
         ((DataGrid)main.FindName("DgTestItems")).SelectedIndex = 0;
@@ -198,6 +207,23 @@ static class Probe
         Check(Same(atBoundary, DrawFrequencies(0, 1, 100)),
             "changing the displayed bins below the threshold returns to linear while automatic scaling stays enabled");
 
+        histogram.Apply(new List<HistogramBin> { mixed }, null, null, null, null, false, false, false, false);
+        Pump();
+        var stackedPixels = Pixels(ChartImage.Capture(histogram, size));
+        plot = PlotBounds();
+        bool HasBarColor(double y, byte red, byte green, byte blue)
+        {
+            int x = (int)((plot.Left + plot.Width / 2) * size.DpiX / 96);
+            int row = (int)((plot.Top + y * plot.Height) * size.DpiY / 96);
+            int pixel = (row * size.PixelWidth + x) * 4;
+            return stackedPixels[pixel] == blue && stackedPixels[pixel + 1] == green && stackedPixels[pixel + 2] == red;
+        }
+        Call(histogram, "UpdateFrequencyToolTip", PlotCenter(plot));
+        string hint = ((ToolTip)histogram.ToolTip).Content.ToString()!;
+        Check(HasBarColor(.25, 220, 90, 90) && HasBarColor(.75, 70, 130, 180) &&
+            hint.Contains("总数 5") && hint.Contains("规格内 3") && hint.Contains("规格外 2"),
+            "mixed bins render stacked red and blue segments and expose exact counts in their tooltip");
+
         var data = (CsvParseResult)Field(main, "_data")!;
         string report = Path.Combine(folder, "histogram-mode.xlsx");
         Wait(XlsxReportService.SaveAsync(report, data, config,
@@ -207,6 +233,36 @@ static class Probe
         var sheet = book.Worksheet("关注测项");
         Check(sheet.Pictures.Count() == 2 && sheet.CellsUsed().Any(cell => cell.GetString().Contains("规格区间（17 箱）")),
             "XLSX report generates its histogram using the selected mode and bin count");
+
+        string integerCsv = Path.Combine(folder, "integer-histogram.csv");
+        File.WriteAllLines(integerCsv, new[] { "SN,X,Y,Site,SBIN,HBIN,Wafer,Measurement", "LSL,,,,,,,1.5", "USL,,,,,,,3" }
+            .Concat(Enumerable.Range(1, 4).Select(value => $"SN{value},{value},0,1,1,1,W1,{value}")));
+        Wait((Task)Call(main, "OpenSelectedFilesAsync", (object)new[] { integerCsv })!);
+        ((DataGrid)main.FindName("DgTestItems")).SelectedIndex = 0;
+        bool HasIntegerBins(int count) => histogram.Bins is { } bins && bins.Count == count &&
+            bins.All(bin => double.IsInteger(bin.From) && double.IsInteger(bin.To) && bin.To > bin.From);
+        for (int mode = 0; mode < 3; mode++)
+        {
+            modes.SelectedIndex = mode;
+            WaitForHistogram(main);
+            Check(HasIntegerBins(config.HistogramBinCount(mode)) && histogram.Bins!.Sum(bin => bin.Count) == 4 &&
+                histogram.Bins!.Sum(bin => bin.OutOfSpecCount) == 2,
+                "integer-valued data retains integer bin edges, exact frequencies and configured bin count in mode " + mode);
+        }
+        modes.SelectedIndex = 0;
+        WaitForHistogram(main);
+        Call(main, "UpdateHistogramRange", .001d, .02d);
+        WaitForHistogram(main);
+        Check(HasIntegerBins(40) && histogram.Bins!.All(bin => bin.To - bin.From == 1),
+            "deep zoom and panning keep 40 equal integer bins with a minimum width of one");
+
+        var scaledItem = new TestItemData { DisplayFactor = 1000, LowLimit = .0015, HighLimit = .0035 };
+        foreach (double value in new[] { .001, .002, .003, .004 })
+            scaledItem.Values.Add(new TestValue { Value = value });
+        var scaled = DetailCalculator.Calculate(new(scaledItem, null, 0, 2, true, true, true, true, true), default);
+        Check(scaled.Bins.Count == 2 && scaled.Bins.All(bin => double.IsInteger(bin.From) && double.IsInteger(bin.To)) &&
+            scaled.Bins.Sum(bin => bin.OutOfSpecCount) == 2,
+            "display-unit conversion yields exact integer boundaries while the source limits classify each sample");
     }
 
     [STAThread] static int Main(string[] args)

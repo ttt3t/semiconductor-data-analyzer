@@ -8,7 +8,8 @@ public sealed class HistogramBin
     public double From { get; set; }
     public double To { get; set; }
     public int Count { get; set; }
-    public bool IsOutOfSpec { get; set; }
+    public int OutOfSpecCount { get; set; }
+    public int InSpecCount => Count - OutOfSpecCount;
 }
 
 public static class HistogramService
@@ -27,7 +28,7 @@ public static class HistogramService
 
     public static List<HistogramBin> CreateFixedBins(
         IReadOnlyList<TestValue> values, int binCount, double? lsl, double? usl, bool includeOutOfLimit,
-        CancellationToken token = default)
+        CancellationToken token = default, double? integerBinFactor = null)
     {
         if (values.Count == 0 || binCount < 1) return new();
         double min = double.PositiveInfinity, max = double.NegativeInfinity;
@@ -48,23 +49,23 @@ public static class HistogramService
             if (allowedMax >= allowedMin) (min, max) = (allowedMin, allowedMax);
         }
         (min, max) = PadConstant(min, max);
-        return CreateRangeBins(values, binCount, min, max, lsl, usl, includeOutOfLimit, false, true, token);
+        return CreateRangeBins(values, binCount, min, max, lsl, usl, includeOutOfLimit, false, true, token, integerBinFactor);
     }
 
     public static List<HistogramBin> CreateSpecZoneBins(
         IReadOnlyList<TestValue> values, double lsl, double usl, bool includeOutOfLimit,
-        int binCount = AnalyzerConfig.DefaultSpecZoneBinCount, CancellationToken token = default)
+        int binCount = AnalyzerConfig.DefaultSpecZoneBinCount, CancellationToken token = default, double? integerBinFactor = null)
     {
         if (values.Count == 0 || usl <= lsl) return new();
         // Preserve the original spec range: each tail covers 40/70 of the distance between the limits.
         double tail = (usl - lsl) * (4.0 / 7.0);
-        return CreateRangeBins(values, binCount, lsl - tail, usl + tail, lsl, usl, includeOutOfLimit, true, true, token);
+        return CreateRangeBins(values, binCount, lsl - tail, usl + tail, lsl, usl, includeOutOfLimit, true, true, token, integerBinFactor);
     }
 
     public static List<HistogramBin> CreateMeanCenteredBins(
         IReadOnlyList<TestValue> values, double? lsl, double? usl, bool includeOutOfLimit,
         out double center, out double scale, int binCount = AnalyzerConfig.DefaultMedianBinCount,
-        CancellationToken token = default)
+        CancellationToken token = default, double? integerBinFactor = null)
     {
         center = scale = 0;
         if (values.Count == 0 || binCount < 1) return new();
@@ -90,23 +91,29 @@ public static class HistogramService
 
         // The default view spans ±8 robust standard deviations around the median.
         var (from, to) = PadConstant(center - 8 * scale, center + 8 * scale);
-        return CreateRangeBins(values, binCount, from, to, lsl, usl, includeOutOfLimit, false, true, token);
+        return CreateRangeBins(values, binCount, from, to, lsl, usl, includeOutOfLimit, false, true, token, integerBinFactor);
     }
 
     internal static List<HistogramBin> CreateRangeBins(
         IReadOnlyList<TestValue> values, int binCount, double from, double to, double? lsl, double? usl,
-        bool includeOutOfLimit, bool splitAtLimits, bool includeOverflow, CancellationToken token)
+        bool includeOutOfLimit, bool splitAtLimits, bool includeOverflow, CancellationToken token, double? integerBinFactor = null)
     {
+        if (values.Count == 0 || binCount < 1) return new();
+        bool integerBins = integerBinFactor.HasValue;
+        double factor = integerBinFactor ?? 1;
+        if (integerBins)
+            (from, to) = IntegerRange(from * factor, to * factor, binCount, includeOverflow);
+        double? plotLsl = lsl * factor, plotUsl = usl * factor;
         double span = to - from;
-        if (values.Count == 0 || binCount < 1 || !double.IsFinite(span) || !(span / binCount > 0)) return new();
+        if (!double.IsFinite(span) || !(span / binCount > 0)) return new();
 
         Span<double> edges = stackalloc double[4];
         int edgeCount = 0;
         edges[edgeCount++] = from;
-        if (splitAtLimits && lsl is double low && usl is double high && high > low)
+        if (splitAtLimits && plotLsl is double low && plotUsl is double high && high > low)
         {
-            if (low > from && low < to) edges[edgeCount++] = low;
-            if (high > from && high < to) edges[edgeCount++] = high;
+            if (low > from && low < to && (!integerBins || double.IsInteger(low))) edges[edgeCount++] = low;
+            if (high > from && high < to && (!integerBins || double.IsInteger(high))) edges[edgeCount++] = high;
         }
         if (edgeCount > binCount) edgeCount = 1;
         edges[edgeCount++] = to;
@@ -115,9 +122,17 @@ public static class HistogramService
         var bins = new List<HistogramBin>(binCount);
         for (int index = 1; index < edgeCount; index++)
         {
-            int end = index == edgeCount - 1 ? binCount :
-                Math.Clamp((int)Math.Round((edges[index] - from) / span * binCount, MidpointRounding.AwayFromZero),
-                    bins.Count + 1, binCount - (edgeCount - 1 - index));
+            int end = binCount;
+            if (index < edgeCount - 1)
+            {
+                int min = bins.Count + 1, max = binCount - (edgeCount - 1 - index);
+                if (integerBins)
+                {
+                    min = Math.Max(min, binCount - (int)Math.Min(binCount, to - edges[index]));
+                    max = Math.Min(max, bins.Count + (int)Math.Min(binCount - bins.Count, edges[index] - edges[index - 1]));
+                }
+                end = Math.Clamp((int)Math.Round((edges[index] - from) / span * binCount, MidpointRounding.AwayFromZero), min, max);
+            }
             BinSection section = new(edges[index - 1], edges[index], bins.Count, end - bins.Count);
             if (!(section.Width > 0)) return new();
             sections[index - 1] = section;
@@ -127,12 +142,8 @@ public static class HistogramService
                 if ((bin & 4095) == 0) token.ThrowIfCancellationRequested();
                 double upper = bin == section.Count - 1 ? section.To :
                     Math.Min(section.To, section.From + (bin + 1) * section.Width);
-                bins.Add(new HistogramBin
-                {
-                    From = lower,
-                    To = upper,
-                    IsOutOfSpec = (lsl.HasValue && upper <= lsl.Value) || (usl.HasValue && lower >= usl.Value)
-                });
+                if (integerBins) upper = Math.Round(upper);
+                bins.Add(new HistogramBin { From = lower, To = upper });
                 lower = upper;
             }
         }
@@ -143,16 +154,62 @@ public static class HistogramService
         {
             if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
             double value = read(i);
-            if (!double.IsFinite(value) ||
-                (!includeOutOfLimit && (value < lsl || value > usl)) ||
-                (!includeOverflow && (value < from || value > to))) continue;
+            if (!double.IsFinite(value)) continue;
+            bool outOfSpec = value < lsl || value > usl;
+            double plottedValue = value * factor;
+            if ((!includeOutOfLimit && outOfSpec) ||
+                (!includeOverflow && (plottedValue < from || plottedValue > to))) continue;
             int section = 0;
             while (section + 1 < sectionCount &&
-                (value > sections[section].To || value == sections[section].To && value != usl))
+                (plottedValue > sections[section].To || plottedValue == sections[section].To && plottedValue != plotUsl))
                 section++;
-            bins[sections[section].Index(value)].Count++;
+            var segment = sections[section];
+            int binIndex = segment.Index(plottedValue);
+            if (integerBins)
+            {
+                // Rounded boundaries in a specification section can differ from the uniform estimate.
+                if (binIndex > segment.Offset && plottedValue < bins[binIndex].From) binIndex--;
+                else if (binIndex + 1 < segment.Offset + segment.Count && plottedValue >= bins[binIndex].To) binIndex++;
+            }
+            var bin = bins[binIndex];
+            bin.Count++;
+            if (outOfSpec) bin.OutOfSpecCount++;
         }
+        if (factor != 1)
+            foreach (var bin in bins) { bin.From /= factor; bin.To /= factor; }
         return bins;
+    }
+
+    internal static bool HasIntegerValues(IReadOnlyList<TestValue> values, double displayFactor, CancellationToken token)
+    {
+        var read = ValueReader(values);
+        bool any = false;
+        for (int i = 0; i < values.Count; i++)
+        {
+            if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
+            double value = read(i);
+            if (!double.IsFinite(value)) continue;
+            if (!double.IsInteger(value * displayFactor)) return false;
+            any = true;
+        }
+        return any;
+    }
+
+    private static (double From, double To) IntegerRange(double from, double to, int binCount, bool coverOriginal)
+    {
+        double span = to - from;
+        if (!double.IsFinite(span) || span < 0) return (from, to);
+        double center = from + span / 2;
+        double magnitude = Math.Max(Math.Abs(from), Math.Abs(to));
+        double minWidth = Math.Max(1, Math.BitIncrement(magnitude) - magnitude);
+        if (!double.IsFinite(minWidth)) return (from, to);
+        double width = Math.Max(minWidth, coverOriginal
+            ? Math.Ceiling((Math.Ceiling(to) - Math.Floor(from)) / binCount)
+            : Math.Round(span / binCount, MidpointRounding.AwayFromZero));
+        double integerSpan = width * binCount;
+        double start = Math.Round(center - integerSpan / 2);
+        if (coverOriginal) start = Math.Clamp(start, Math.Ceiling(to) - integerSpan, Math.Floor(from));
+        return (start, start + integerSpan);
     }
 
     private static (double From, double To) PadConstant(double from, double to)

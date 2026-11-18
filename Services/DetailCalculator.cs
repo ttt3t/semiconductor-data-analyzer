@@ -14,7 +14,8 @@ public sealed record DetailResult(StatisticsResult Statistics, List<HistogramBin
     internal bool IsHistogramRangeAdjusted { get; init; }
 }
 
-internal sealed record PreparedDetail(IReadOnlyList<TestValue> Values, StatisticsResult Statistics, ScatterSeries Scatter);
+internal sealed record PreparedDetail(IReadOnlyList<TestValue> Values, StatisticsResult Statistics, ScatterSeries Scatter,
+    double? IntegerBinFactor);
 
 public static class DetailCalculator
 {
@@ -45,8 +46,11 @@ public static class DetailCalculator
         token.ThrowIfCancellationRequested();
         var statistics = StatisticsService.Calculate(values, item.LowLimit, item.HighLimit);
         token.ThrowIfCancellationRequested();
+        double factor = item.DisplayFactor;
+        double? integerBinFactor = factor > 0 && double.IsFinite(factor) && HistogramService.HasIntegerValues(values, factor, token)
+            ? factor : null;
         var scatter = ScatterSeries.BuildSorted(values, item.LowLimit, item.HighLimit, request.ScatterOrder, token, request.WaferOrder, trackChips: true);
-        return new(values, statistics, scatter.Scale(item.DisplayFactor));
+        return new(values, statistics, scatter.Scale(factor), integerBinFactor);
     }
 
     internal static DetailResult CreateHistogram(DetailRequest request, PreparedDetail prepared, CancellationToken token)
@@ -59,17 +63,17 @@ public static class DetailCalculator
         List<HistogramBin> bins;
         if (request.BinMode == 2)
             bins = HistogramService.CreateMeanCenteredBins(values, item.LowLimit, item.HighLimit,
-                request.IncludeOutOfLimit, out mean, out sigma, request.BinCount, token);
+                request.IncludeOutOfLimit, out mean, out sigma, request.BinCount, token, prepared.IntegerBinFactor);
         else if (UsesSpecZones(request))
             bins = HistogramService.CreateSpecZoneBins(values, item.LowLimit!.Value, item.HighLimit!.Value,
-                request.IncludeOutOfLimit, request.BinCount, token);
+                request.IncludeOutOfLimit, request.BinCount, token, prepared.IntegerBinFactor);
         else
             bins = HistogramService.CreateFixedBins(values, request.BinCount, item.LowLimit,
-                item.HighLimit, request.IncludeOutOfLimit, token);
+                item.HighLimit, request.IncludeOutOfLimit, token, prepared.IntegerBinFactor);
         token.ThrowIfCancellationRequested();
         double factor = item.DisplayFactor;
         var rawRange = bins.Count == 0 ? ((double, double)?)null : (bins[0].From, bins[^1].To);
-        ScaleBins(bins, factor);
+        ScaleBins(bins, factor, prepared.IntegerBinFactor.HasValue);
         return new(statistics, bins, mean * factor, sigma * factor, prepared.Scatter) { RawHistogramRange = rawRange };
     }
 
@@ -86,9 +90,9 @@ public static class DetailCalculator
         double radius = span / 2 * scale;
         var item = request.Item;
         var bins = HistogramService.CreateRangeBins(prepared.Values, request.BinCount, center - radius, center + radius,
-            item.LowLimit, item.HighLimit, request.IncludeOutOfLimit, UsesSpecZones(request), false, token);
+            item.LowLimit, item.HighLimit, request.IncludeOutOfLimit, UsesSpecZones(request), false, token, prepared.IntegerBinFactor);
         if (bins.Count == 0) return original;
-        ScaleBins(bins, item.DisplayFactor);
+        ScaleBins(bins, item.DisplayFactor, prepared.IntegerBinFactor.HasValue);
         return original with { Bins = bins, IsHistogramRangeAdjusted = true };
     }
 
@@ -96,10 +100,15 @@ public static class DetailCalculator
         request.BinMode == 1 && request.Item.LowLimit is double lsl && double.IsFinite(lsl) &&
         request.Item.HighLimit is double usl && double.IsFinite(usl) && usl > lsl;
 
-    private static void ScaleBins(List<HistogramBin> bins, double factor)
+    private static void ScaleBins(List<HistogramBin> bins, double factor, bool integerBins)
     {
         if (factor == 1) return;
-        foreach (var bin in bins) { bin.From *= factor; bin.To *= factor; }
+        foreach (var bin in bins)
+        {
+            bin.From *= factor;
+            bin.To *= factor;
+            if (integerBins) { bin.From = Math.Round(bin.From); bin.To = Math.Round(bin.To); }
+        }
     }
 }
 
