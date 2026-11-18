@@ -37,6 +37,7 @@ public partial class MainWindow : Window
     private CsvParseResult _data = new();
     private List<CsvImportSource> _sources = new();
     private int _binMode;
+    private double _histogramRangeScale = 1;
     private bool _combineSites = true;
     private bool _combineWafers = true;
     private ScatterOrder _scatterOrder;
@@ -288,7 +289,7 @@ public partial class MainWindow : Window
     private void UpdateWindowTitle()
     {
         string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
-        Title = $"CSV Analyzer · V2.0.17 | 当前数据：{_currentDataName} | 配置：{configName}";
+        Title = $"CSV Analyzer · V2.0.18 | 当前数据：{_currentDataName} | 配置：{configName}";
     }
 
     private void UpdateConfigInfo()
@@ -499,6 +500,7 @@ public partial class MainWindow : Window
         var config = ConfigLoader.Parse(ConfigLoader.Serialize(_config));
         var dataName = _currentDataName + (_sampleRanges.Count > 0 ? "（已应用数据筛选）" : "");
         var histogramSize = ReportChartSize(Histogram, _histogramImageSize);
+        bool histogramShowBinCounts = Histogram.ShowBinCounts;
         var scatterSize = ReportChartSize(ScatterPlot, _scatterImageSize);
         using var lease = new DatasetLease(data.Records);
         var options = new ExportDataWindow(data.Wafers, config.OutlierSigma, report: true,
@@ -513,7 +515,7 @@ public partial class MainWindow : Window
             options.HistogramMode, options.CombineSites, focused, options.ShowBinNumbers, options.ShowSiteBorders,
             options.CombineWafers, options.ScatterOrder,
             histogramSize, scatterSize,
-            options.ScatterUseLimitRange);
+            options.ScatterUseLimitRange, histogramShowBinCounts);
         var exporting = IndependentOperationWindow.RunAsync("导出 XLSX 报告", async () =>
         {
             await XlsxReportService.SaveAsync(file.FileName, data, config, report, dataName);
@@ -887,6 +889,7 @@ public partial class MainWindow : Window
             _currentItem = summary.Data;
             _currentSite = summary.Site;
             _currentWafer = wafer;
+            _histogramRangeScale = 1;
             ScheduleDetail();
         }
         else
@@ -898,9 +901,38 @@ public partial class MainWindow : Window
 
     private void CmbBinMode_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        _binMode = CmbBinMode.SelectedIndex;
+        int mode = CmbBinMode.SelectedIndex;
+        if (mode < 0) return;
+        if (_binMode != mode) _histogramRangeScale = 1;
+        _binMode = mode;
         _config.BinMode = _binMode switch { 1 => "SpecZone", 2 => "MedianCentered", _ => "Fixed" };
         ScheduleDetail();
+    }
+
+    private void Histogram_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if ((Keyboard.Modifiers & ModifierKeys.Control) == 0 || e.Delta == 0) return;
+        e.Handled = ChangeHistogramRange(_histogramRangeScale * Math.Pow(1.2, -e.Delta / 120.0));
+    }
+
+    private void Histogram_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2 && _histogramRangeScale != 1)
+            e.Handled = ChangeHistogramRange(1);
+    }
+
+    private bool ChangeHistogramRange(double scale)
+    {
+        if (_isBusy || _closing || _currentItem == null || !ReferenceEquals(_currentItem, _displayedItem) ||
+            Histogram.Bins is not { Count: > 0 }) return false;
+        double next = Math.Clamp(scale, 0.0001, 10000);
+        if (Math.Abs(next - 1) < 1e-12) next = 1;
+        if (next != _histogramRangeScale)
+        {
+            _histogramRangeScale = next;
+            ScheduleDetail();
+        }
+        return true;
     }
 
     private void ScheduleDetail()
@@ -952,9 +984,9 @@ public partial class MainWindow : Window
         long version = _detailVersion;
         var request = new DetailRequest(_currentItem,
             _combineSites || _currentSite == TestItemSummary.CombinedSite ? null : _currentSite,
-            _binMode, _config.BinCount, _config.IncludeOutOfLimitData,
+            _binMode, _config.HistogramBinCount(_binMode), _config.IncludeOutOfLimitData,
             _config.ShowLowLimit, _config.ShowHighLimit, _config.ShowMean, _config.ShowThreeSigma,
-            _currentWafer, _scatterOrder, _data.Wafers);
+            _currentWafer, _scatterOrder, _data.Wafers, _histogramRangeScale);
         using var cancellation = new CancellationTokenSource();
         _detailCancellation = cancellation;
         string siteLabel = request.Site == null ? "ALL Sites" : $"Site {request.Site}";
@@ -987,7 +1019,7 @@ public partial class MainWindow : Window
                 Histogram.Apply(result.Bins, request.Item.DisplayLowLimit, request.Item.DisplayHighLimit,
                     result.Mean, result.Sigma, request.ShowLsl, request.ShowUsl, request.ShowMean,
                     request.ShowThreeSigma, request.Item.ShownUnit,
-                    lslText, uslText);
+                    lslText, uslText, showOverflow: !result.IsHistogramZoomed);
             if (!ReferenceEquals(_displayedScatter, result.Scatter))
                 ScatterPlot.SetSeries(result.Scatter, request.Item.DisplayLowLimit, request.Item.DisplayHighLimit, request.Item.ShownUnit);
             ScatterPlot.ShowConnections = _config.ScatterShowConnections;
@@ -1019,6 +1051,7 @@ public partial class MainWindow : Window
     private void ClearDetail()
     {
         _detailPending = false;
+        _histogramRangeScale = 1;
         _displayedItem = null;
         _displayedScatter = null;
         _displayedBins = null;

@@ -48,6 +48,95 @@ static class Probe
     static void Copy(MainWindow main, string method) => Call(main, method, main, new RoutedEventArgs());
     static string Status(MainWindow main) => ((TextBlock)main.FindName("TxtStatus")).Text;
 
+    static void WaitForHistogram(MainWindow main)
+    {
+        var timer = Stopwatch.StartNew();
+        while ((bool)Field(main, "_detailPending")!)
+        {
+            Pump();
+            Thread.Sleep(2);
+            if (timer.Elapsed > TimeSpan.FromSeconds(15)) throw new TimeoutException("Histogram detail request");
+        }
+        Pump();
+    }
+
+    static void CheckHistogram(MainWindow main, HistogramControl histogram, string folder)
+    {
+        var legacy = ConfigLoader.Parse("[Histogram]\nBinCount=47");
+        Check(Enumerable.Range(0, 3).Select(legacy.HistogramBinCount).SequenceEqual(new[] { 47, 150, 80 }),
+            "legacy INI preserves fixed bins and both original mode defaults");
+        var settings = new SettingsWindow(legacy, _ => { });
+        ((TextBox)settings.FindName("TxtBinCount")).Text = "40";
+        ((TextBox)settings.FindName("TxtSpecZoneBinCount")).Text = "17";
+        ((TextBox)settings.FindName("TxtMedianBinCount")).Text = "13";
+        var config = ConfigLoader.Parse(ConfigLoader.Serialize((AnalyzerConfig)Call(settings, "ReadConfig")!));
+        settings.Close();
+        Check(Enumerable.Range(0, 3).Select(config.HistogramBinCount).SequenceEqual(new[] { 40, 17, 13 }),
+            "each mode can be edited independently in settings and survives INI round-trip");
+
+        var samples = Enumerable.Range(-50, 101).Select(value => new TestValue { Value = value }).ToArray();
+        var spec = HistogramService.CreateSpecZoneBins(samples, -20, 20, false, config.SpecZoneBinCount);
+        Check(spec.Count == 17 && spec.Sum(bin => bin.Count) == 41 && spec.Where(bin => bin.IsOutOfSpec).Sum(bin => bin.Count) == 0 &&
+            spec.Any(bin => bin.From == -20) && spec.Any(bin => bin.To == 20),
+            "spec-zone bins keep both threshold boundaries and include observations equal to either limit");
+        var flat = HistogramService.CreateFixedBins(new[] { new TestValue { Value = 9 } }, 40, null, null, true);
+        Check(flat.Count == 40 && flat.Sum(bin => bin.Count) == 1 && flat[0].From < 9 && flat[^1].To > 9,
+            "constant-valued data still renders the configured number of bins");
+
+        config.LowLimitRow = 2; config.HighLimitRow = 3; config.UnitRow = 0; config.DataStartRow = 4;
+        config.TestItemStartColumn = 8; config.SerialNumberColumn = 1;
+        config.SBinColumn = 5; config.HBinColumn = 6; config.WaferColumn = 7;
+        string csv = Path.Combine(folder, "histogram-range.csv");
+        File.WriteAllLines(csv, new[] { "SN,X,Y,Site,SBIN,HBIN,Wafer,Measurement", "LSL,,,,,,,-20", "USL,,,,,,,20" }
+            .Concat(Enumerable.Range(-50, 101).Select((value, index) => $"SN{index},{index},0,1,1,1,W1,{value}")));
+        Wait((Task)Call(main, "ApplySettings", config)!);
+        Wait((Task)Call(main, "OpenSelectedFilesAsync", (object)new[] { csv })!);
+        ((DataGrid)main.FindName("DgTestItems")).SelectedIndex = 0;
+        Call(main, "SetPlotView", "Histogram");
+        WaitForHistogram(main);
+        bool HasRange(int count, double from, double to, int samples) => histogram.Bins is { } bins &&
+            bins.Count == count && Math.Abs(bins[0].From - from) < 1e-9 && Math.Abs(bins[^1].To - to) < 1e-9 &&
+            bins.Sum(bin => bin.Count) == samples;
+        Check(HasRange(40, -50, 50, 101), "main histogram starts at the observed range with the configured number of bins");
+        var scatter = Field(main, "_displayedScatter");
+        Call(main, "ChangeHistogramRange", 2d);
+        WaitForHistogram(main);
+        Check(HasRange(40, -100, 100, 101), "zoom out rebins the larger range into the same 40 bins");
+        Call(main, "ChangeHistogramRange", .4d);
+        WaitForHistogram(main);
+        Check(HasRange(40, -20, 20, 41) && ReferenceEquals(scatter, Field(main, "_displayedScatter")) &&
+            ((TextBlock)main.FindName("TxtUnit")).Text.Contains("Count=101"),
+            "zoom in counts only visible samples and reuses the original statistics and scatter");
+        Call(main, "ChangeHistogramRange", 1d);
+        WaitForHistogram(main);
+        Check(HasRange(40, -50, 50, 101), "reset restores the original range and frequencies");
+
+        var modes = (ListBox)main.FindName("CmbBinMode");
+        modes.SelectedIndex = 1;
+        WaitForHistogram(main);
+        Check(histogram.Bins?.Count == 17, "switching to spec zone uses its configured bin count");
+        modes.SelectedIndex = 2;
+        WaitForHistogram(main);
+        Check(histogram.Bins?.Count == 13, "switching to median center uses its configured bin count");
+        var counts = (CheckBox)main.FindName("ChkHistogramCounts");
+        main.UpdateLayout(); Pump();
+        var size = ChartImage.SizeOf(histogram);
+        var unlabelled = ChartImage.Capture(histogram, size);
+        counts.IsChecked = true; Pump();
+        Check(histogram.ShowBinCounts && !Same(unlabelled, ChartImage.Capture(histogram, size)),
+            "the header checkbox turns on visible frequency labels in the live histogram");
+
+        var data = (CsvParseResult)Field(main, "_data")!;
+        string report = Path.Combine(folder, "histogram-mode.xlsx");
+        Wait(XlsxReportService.SaveAsync(report, data, config,
+            new(data.Wafers, RetestMode.All, null, 1, true, new[] { data.Items[0].Id },
+                HistogramSize: new(590, 230), ScatterSize: new(590, 230), HistogramShowBinCounts: true), "histogram-test"));
+        using var book = new XLWorkbook(report);
+        var sheet = book.Worksheet("关注测项");
+        Check(sheet.Pictures.Count() == 2 && sheet.CellsUsed().Any(cell => cell.GetString().Contains("规格区间（17 箱）")),
+            "XLSX report generates its histogram using the selected mode and bin count");
+    }
+
     [STAThread] static int Main(string[] args)
     {
         try
@@ -70,6 +159,14 @@ static class Probe
             var main = new MainWindow(new LayoutSettings(Path.Combine(folder, "layout.json")), new RecentFilesService(Path.Combine(folder, "recent.json")), new UiPreferencesService(Path.Combine(folder, "ui.json")));
             main.Show(); Pump();
             var histogram = (HistogramControl)main.FindName("Histogram"); var scatter = (ScatterPlotControl)main.FindName("ScatterPlot");
+            if (args.Length == 2 && args[1] == "--histogram")
+            {
+                CheckHistogram(main, histogram, folder);
+                main.Close(); Pump(); Check(failures.Count == 0, "histogram operations cause no dispatcher exceptions");
+                app.Shutdown();
+                if (checkFailures.Count > 0) throw new Exception(string.Join(Environment.NewLine, checkFailures));
+                Console.WriteLine($"ALL {checks} HISTOGRAM CHECKS PASSED"); return 0;
+            }
             Check(((Button)main.FindName("BtnCopyHistogram")).IsVisible && ((Button)main.FindName("BtnCopyScatter")).IsVisible, "both chart headers expose copy buttons");
             var items = new List<TestItemData> { new() { Id = "a", Name = "A", DisplayName = "A", Unit = "V", LowLimit = 1, HighLimit = 3 }, new() { Id = "b", Name = "B", DisplayName = "B", Unit = "V", LowLimit = 1, HighLimit = 3 } };
             var records = Enumerable.Range(0, 6).Select(i => new CsvRecord { Id = "r" + i, SerialNumber = (6 - i).ToString(), WaferId = i % 2 == 0 ? "W2" : "W1", Site = i % 3 == 0 ? "2" : "1", X = i, Y = 0, HBin = "1", SBin = "1", Measurements = new() { ["a"] = (i + 1).ToString(), ["b"] = (i + 2).ToString() } }).ToList();

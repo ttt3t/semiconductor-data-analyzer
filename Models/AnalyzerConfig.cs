@@ -49,8 +49,18 @@ public sealed class AnalyzerConfig
     public Dictionary<string, List<string>> ProgramCompatibility { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     // Histogram
+    public const int DefaultSpecZoneBinCount = 150;
+    public const int DefaultMedianBinCount = 80;
     public string BinMode { get; set; } = "Fixed";
     public int BinCount { get; set; } = 40;
+    public int SpecZoneBinCount { get; set; } = DefaultSpecZoneBinCount;
+    public int MedianBinCount { get; set; } = DefaultMedianBinCount;
+    public int HistogramBinCount(int mode) => mode switch
+    {
+        1 => SpecZoneBinCount,
+        2 => MedianBinCount,
+        _ => BinCount
+    };
     public bool ShowLowLimit { get; set; } = true;
     public bool ShowHighLimit { get; set; } = true;
     public bool ShowMean { get; set; } = true;

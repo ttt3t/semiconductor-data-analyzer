@@ -5,17 +5,25 @@ namespace SemiconductorCsvAnalyzer.Services;
 public sealed record DetailRequest(TestItemData Item, string? Site, int BinMode, int BinCount,
     bool IncludeOutOfLimit, bool ShowLsl, bool ShowUsl, bool ShowMean, bool ShowThreeSigma,
     string? Wafer = null, ScatterOrder ScatterOrder = ScatterOrder.SerialNumber,
-    IReadOnlyList<string>? WaferOrder = null);
+    IReadOnlyList<string>? WaferOrder = null, double HistogramRangeScale = 1);
 
 public sealed record DetailResult(StatisticsResult Statistics, List<HistogramBin> Bins,
-    double Mean, double Sigma, ScatterSeries Scatter);
+    double Mean, double Sigma, ScatterSeries Scatter)
+{
+    internal (double From, double To)? RawHistogramRange { get; init; }
+    internal bool IsHistogramZoomed { get; init; }
+}
 
 internal sealed record PreparedDetail(IReadOnlyList<TestValue> Values, StatisticsResult Statistics, ScatterSeries Scatter);
 
 public static class DetailCalculator
 {
     public static DetailResult Calculate(DetailRequest request, CancellationToken token)
-        => CreateHistogram(request, Prepare(request, token), token);
+    {
+        var prepared = Prepare(request, token);
+        var original = CreateHistogram(request, prepared, token);
+        return ZoomHistogram(request, prepared, original, token);
+    }
 
     internal static PreparedDetail Prepare(DetailRequest request, CancellationToken token)
     {
@@ -51,17 +59,45 @@ public static class DetailCalculator
         List<HistogramBin> bins;
         if (request.BinMode == 2)
             bins = HistogramService.CreateMeanCenteredBins(values, item.LowLimit, item.HighLimit,
-                request.IncludeOutOfLimit, out mean, out sigma);
-        else if (request.BinMode == 1 && item.LowLimit.HasValue && item.HighLimit > item.LowLimit)
-            bins = HistogramService.CreateSpecZoneBins(values, item.LowLimit.Value, item.HighLimit.Value,
-                request.IncludeOutOfLimit);
+                request.IncludeOutOfLimit, out mean, out sigma, request.BinCount, token);
+        else if (UsesSpecZones(request))
+            bins = HistogramService.CreateSpecZoneBins(values, item.LowLimit!.Value, item.HighLimit!.Value,
+                request.IncludeOutOfLimit, request.BinCount, token);
         else
             bins = HistogramService.CreateFixedBins(values, request.BinCount, item.LowLimit,
-                item.HighLimit, request.IncludeOutOfLimit);
+                item.HighLimit, request.IncludeOutOfLimit, token);
         token.ThrowIfCancellationRequested();
         double factor = item.DisplayFactor;
-        if (factor != 1) foreach (var bin in bins) { bin.From *= factor; bin.To *= factor; }
-        return new(statistics, bins, mean * factor, sigma * factor, prepared.Scatter);
+        var rawRange = bins.Count == 0 ? ((double, double)?)null : (bins[0].From, bins[^1].To);
+        ScaleBins(bins, factor);
+        return new(statistics, bins, mean * factor, sigma * factor, prepared.Scatter) { RawHistogramRange = rawRange };
+    }
+
+    internal static DetailResult ZoomHistogram(DetailRequest request, PreparedDetail prepared, DetailResult original,
+        CancellationToken token)
+    {
+        double scale = request.HistogramRangeScale;
+        if (scale == 1 || !double.IsFinite(scale) || scale <= 0 || original.RawHistogramRange is not { } range)
+            return original;
+        double halfSpan = (range.To - range.From) / 2;
+        double center = range.From + halfSpan;
+        double radius = halfSpan * scale;
+        var item = request.Item;
+        var bins = HistogramService.CreateRangeBins(prepared.Values, request.BinCount, center - radius, center + radius,
+            item.LowLimit, item.HighLimit, request.IncludeOutOfLimit, UsesSpecZones(request), false, token);
+        if (bins.Count == 0) return original;
+        ScaleBins(bins, item.DisplayFactor);
+        return original with { Bins = bins, IsHistogramZoomed = true };
+    }
+
+    private static bool UsesSpecZones(DetailRequest request) =>
+        request.BinMode == 1 && request.Item.LowLimit is double lsl && double.IsFinite(lsl) &&
+        request.Item.HighLimit is double usl && double.IsFinite(usl) && usl > lsl;
+
+    private static void ScaleBins(List<HistogramBin> bins, double factor)
+    {
+        if (factor == 1) return;
+        foreach (var bin in bins) { bin.From *= factor; bin.To *= factor; }
     }
 }
 
@@ -102,11 +138,13 @@ public sealed class DetailCache
             _waferOrder = request.WaferOrder?.ToArray();
         }
         var modeKey = (request.BinMode, request.BinCount, request.IncludeOutOfLimit);
-        if (_modes.TryGetValue(modeKey, out var existing)) return existing;
-        var result = DetailCalculator.CreateHistogram(request, _prepared, token);
-        token.ThrowIfCancellationRequested();
-        if (_modes.Count >= 3) _modes.Clear();
-        _modes[modeKey] = result;
-        return result;
+        if (!_modes.TryGetValue(modeKey, out var original))
+        {
+            original = DetailCalculator.CreateHistogram(request, _prepared, token);
+            token.ThrowIfCancellationRequested();
+            if (_modes.Count >= 3) _modes.Clear();
+            _modes[modeKey] = original;
+        }
+        return DetailCalculator.ZoomHistogram(request, _prepared, original, token);
     }
 }

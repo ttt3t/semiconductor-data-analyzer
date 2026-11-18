@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Windows;
 using System.Windows.Media;
 using SemiconductorCsvAnalyzer.Services;
@@ -52,6 +53,10 @@ public class HistogramControl : CachedPlotControl
         DependencyProperty.Register(nameof(ShowThreeSigma), typeof(bool), typeof(HistogramControl),
             new FrameworkPropertyMetadata(true, InvalidateIfIdle));
 
+    public static readonly DependencyProperty ShowBinCountsProperty =
+        DependencyProperty.Register(nameof(ShowBinCounts), typeof(bool), typeof(HistogramControl),
+            new FrameworkPropertyMetadata(false, InvalidateIfIdle));
+
     private static readonly Brush InSpecBrush = Freeze(new SolidColorBrush(Color.FromRgb(70, 130, 180)));
     private static readonly Brush OutSpecBrush = Freeze(new SolidColorBrush(Color.FromRgb(220, 90, 90)));
     private static readonly Pen AxisPen = Freeze(new Pen(Brushes.Black, 1.2));
@@ -67,6 +72,7 @@ public class HistogramControl : CachedPlotControl
     }
 
     private int _batch;
+    private bool _showOverflow = true;
     private long _renderCount;
     public string Unit { get; private set; } = "";
     private string? _lslText, _uslText;
@@ -87,6 +93,7 @@ public class HistogramControl : CachedPlotControl
     public bool ShowUsl { get => (bool)GetValue(ShowUslProperty); set => SetValue(ShowUslProperty, value); }
     public bool ShowMean { get => (bool)GetValue(ShowMeanProperty); set => SetValue(ShowMeanProperty, value); }
     public bool ShowThreeSigma { get => (bool)GetValue(ShowThreeSigmaProperty); set => SetValue(ShowThreeSigmaProperty, value); }
+    public bool ShowBinCounts { get => (bool)GetValue(ShowBinCountsProperty); set => SetValue(ShowBinCountsProperty, value); }
 
     public void Apply(
         IList<HistogramBin>? bins,
@@ -97,11 +104,12 @@ public class HistogramControl : CachedPlotControl
         bool showLsl,
         bool showUsl,
         bool showMean,
-        bool showThreeSigma, string unit = "", string? lslText = null, string? uslText = null)
+        bool showThreeSigma, string unit = "", string? lslText = null, string? uslText = null, bool showOverflow = true)
     {
         _batch++;
         Unit = unit ?? "";
         _lslText = lslText; _uslText = uslText;
+        _showOverflow = showOverflow;
         Bins = bins;
         Lsl = lsl;
         Usl = usl;
@@ -136,12 +144,13 @@ public class HistogramControl : CachedPlotControl
         if (Bins == null || Bins.Count == 0) return;
 
         double dataMin = Bins.Min(b => b.From), dataMax = Bins.Max(b => b.To);
-        if (!double.IsFinite(dataMin) || !double.IsFinite(dataMax) || dataMax <= dataMin) return;
+        double xSpan = dataMax - dataMin;
+        if (!double.IsFinite(xSpan) || xSpan <= 0) return;
         int maxCount = Math.Max(1, Bins.Max(b => b.Count));
         const double left = ChartAxis.PlotLeft, right = ChartAxis.PlotRight, bottom = ChartAxis.PlotBottom;
         double plotW = w - left - right;
         if (plotW < 30) return;
-        double MapX(double value) => left + (value - dataMin) / (dataMax - dataMin) * plotW;
+        double MapX(double value) => left + (value - dataMin) / xSpan * plotW;
         var references = new List<(double X, FormattedText Text, Pen Pen)>();
         void AddReference(bool show, double? value, string name, Pen pen, string? limitText = null)
         {
@@ -168,7 +177,16 @@ public class HistogramControl : CachedPlotControl
         double top = Math.Max(40 + headerOffset, labels.Count == 0 ? 0 : labels.Max(label => label.Bounds.Bottom) + 5);
         double plotH = h - top - bottom;
         if (plotH < 20) return;
-        double MapY(double value) => top + plotH - value / maxCount * plotH;
+        const double countFontSize = 10;
+        var widestCount = ShowBinCounts ? ChartAxis.Text(this, maxCount.ToString(CultureInfo.InvariantCulture), countFontSize) : null;
+        double binPitch = plotW / Bins.Count;
+        bool rotateCounts = widestCount != null && binPitch < widestCount.Width + 4;
+        double countLabelHeight = widestCount == null ? 0 : rotateCounts ? widestCount.Width : widestCount.Height;
+        int countLanes = rotateCounts ? (int)Math.Clamp(Math.Ceiling(widestCount!.Height / binPitch), 1, 4) : 1;
+        double laneStep = countLanes > 1 ? Math.Min(countLabelHeight + 2,
+            Math.Max(0, plotH / 2 - countLabelHeight - 3) / (countLanes - 1)) : 0;
+        double countHeadroom = widestCount == null ? 0 : Math.Min(plotH / 2, countLabelHeight + 3 + (countLanes - 1) * laneStep);
+        double MapY(double value) => top + plotH - value / maxCount * (plotH - countHeadroom);
 
         var yTicks = ChartAxis.Ticks(0, maxCount, Math.Max(1, (int)(plotH / 32)), integers: true);
         foreach (double tick in yTicks)
@@ -180,9 +198,11 @@ public class HistogramControl : CachedPlotControl
             dc.DrawText(text, new Point(left - 7 - text.Width, y - text.Height / 2));
         }
         // Both endpoint captions share the numeric tick row; reserve their space before placing ticks.
+        var xTicks = ChartAxis.Ticks(dataMin, dataMax, Math.Max(1, (int)(plotW / 85)));
+        double xStep = xTicks.Count > 1 ? xTicks[1] - xTicks[0] : xSpan;
         double captionWidth = Math.Max(1, (plotW - 16) / 2);
-        var lowerCaption = ChartAxis.Text(this, "＜" + ChartAxis.Format(dataMin));
-        var upperCaption = ChartAxis.Text(this, "＞" + ChartAxis.Format(dataMax));
+        var lowerCaption = ChartAxis.Text(this, _showOverflow ? "＜" + ChartAxis.Format(dataMin) : ChartAxis.Format(dataMin, xStep));
+        var upperCaption = ChartAxis.Text(this, _showOverflow ? "＞" + ChartAxis.Format(dataMax) : ChartAxis.Format(dataMax, xStep));
         foreach (var caption in new[] { lowerCaption, upperCaption })
         {
             caption.MaxTextWidth = captionWidth;
@@ -196,8 +216,6 @@ public class HistogramControl : CachedPlotControl
         double tickY = top + plotH + ChartAxis.TickLabelGap;
         dc.DrawText(lowerCaption, new Point(lowerX, tickY));
         dc.DrawText(upperCaption, new Point(upperX, tickY));
-        var xTicks = ChartAxis.Ticks(dataMin, dataMax, Math.Max(1, (int)(plotW / 85)));
-        double xStep = xTicks.Count > 1 ? xTicks[1] - xTicks[0] : dataMax - dataMin;
         double lastLabelRight = lowerX + lowerWidth;
         foreach (double tick in xTicks)
         {
@@ -215,9 +233,9 @@ public class HistogramControl : CachedPlotControl
         foreach (var bin in Bins)
         {
             double x = MapX(bin.From), width = MapX(bin.To) - x;
-            double barH = (double)Math.Max(0, bin.Count) / maxCount * plotH;
+            double barTop = MapY(Math.Max(0, bin.Count));
             dc.DrawRectangle(bin.IsOutOfSpec ? OutSpecBrush : InSpecBrush, null,
-                new Rect(x + Math.Min(0.5, width / 4), top + plotH - barH, Math.Max(0.1, width - 1), barH));
+                new Rect(x + Math.Min(0.5, width / 4), barTop, Math.Max(0.1, width - 1), top + plotH - barTop));
         }
         void ReferenceLine(double? value, Pen pen)
         {
@@ -231,6 +249,29 @@ public class HistogramControl : CachedPlotControl
         {
             ReferenceLine(Mean - 3 * Sigma, SigmaPen);
             ReferenceLine(Mean + 3 * Sigma, SigmaPen);
+        }
+        if (widestCount != null)
+        {
+            var countTexts = new Dictionary<int, FormattedText> { [maxCount] = widestCount };
+            for (int index = 0; index < Bins.Count; index++)
+            {
+                var bin = Bins[index];
+                if (bin.Count <= 0) continue;
+                if (!countTexts.TryGetValue(bin.Count, out var text))
+                    countTexts[bin.Count] = text = ChartAxis.Text(this, bin.Count.ToString(CultureInfo.InvariantCulture), countFontSize);
+                double center = (MapX(bin.From) + MapX(bin.To)) / 2;
+                double width = rotateCounts ? text.Height : text.Width;
+                double x = Math.Clamp(center - width / 2, left, left + plotW - width);
+                double y = MapY(bin.Count) - 3 - (index % countLanes) * laneStep;
+                if (rotateCounts)
+                {
+                    y = Math.Max(top + text.Width, y);
+                    dc.PushTransform(new RotateTransform(-90, x, y));
+                    dc.DrawText(text, new Point(x, y));
+                    dc.Pop();
+                }
+                else dc.DrawText(text, new Point(x, Math.Max(top, y - text.Height)));
+            }
         }
         dc.Pop();
         ChartAxis.DrawAxes(dc, AxisPen, new Rect(left, top, plotW, plotH));

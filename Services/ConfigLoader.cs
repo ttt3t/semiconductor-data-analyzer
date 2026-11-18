@@ -122,6 +122,8 @@ public static class ConfigLoader
 
             case "BINMODE": c.BinMode = value; break;
             case "BINCOUNT": c.BinCount = ParsePositiveInt(key, value); break;
+            case "SPECZONEBINCOUNT": c.SpecZoneBinCount = ParsePositiveInt(key, value); break;
+            case "MEDIANBINCOUNT": c.MedianBinCount = ParsePositiveInt(key, value); break;
             case "SHOWLOWLIMIT": c.ShowLowLimit = ParseBool(value); break;
             case "SHOWHIGHLIMIT": c.ShowHighLimit = ParseBool(value); break;
             case "SHOWMEAN": c.ShowMean = ParseBool(value); break;
@@ -286,6 +288,8 @@ public static class ConfigLoader
             [Histogram]
             BinMode={c.BinMode}
             BinCount={c.BinCount}
+            SpecZoneBinCount={c.SpecZoneBinCount}
+            MedianBinCount={c.MedianBinCount}
             ShowLowLimit={c.ShowLowLimit}
             ShowHighLimit={c.ShowHighLimit}
             ShowMean={c.ShowMean}

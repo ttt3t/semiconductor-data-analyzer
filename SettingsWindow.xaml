@@ -94,17 +94,30 @@
                         
                         <Border Height="1" Background="{StaticResource BorderSoft}" Margin="0,22"/>
                         <TextBlock Text="直方图" Style="{StaticResource SectionTitle}"/>
-                        <Grid Margin="0,0,0,18">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="92"/><ColumnDefinition Width="210"/><ColumnDefinition Width="24"/><ColumnDefinition Width="80"/><ColumnDefinition Width="80"/></Grid.ColumnDefinitions>
+                        <Grid Margin="0,0,0,14">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="92"/><ColumnDefinition Width="210"/></Grid.ColumnDefinitions>
                             <TextBlock Text="默认模式" VerticalAlignment="Center"/>
                             <ComboBox x:Name="CmbHistogramMode" Grid.Column="1" Padding="8,6" SelectionChanged="AnalysisSelectionChanged">
                                 <ComboBoxItem Content="固定等宽" Tag="Fixed"/>
                                 <ComboBoxItem Content="规格区间" Tag="SpecZone"/>
                                 <ComboBoxItem Content="中位数中心" Tag="MedianCentered"/>
                             </ComboBox>
-                            <TextBlock Grid.Column="3" Text="分箱数量" VerticalAlignment="Center"/>
-                            <TextBox x:Name="TxtBinCount" Grid.Column="4" TextChanged="AnalysisTextChanged"/>
                         </Grid>
+                        <TextBlock Text="分箱数量" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                        <WrapPanel Margin="0,0,0,16">
+                            <StackPanel Width="140" Margin="0,0,14,0">
+                                <TextBlock Text="固定等宽" Margin="0,0,0,5"/>
+                                <TextBox x:Name="TxtBinCount" TextChanged="AnalysisTextChanged" AutomationProperties.Name="固定等宽分箱数量"/>
+                            </StackPanel>
+                            <StackPanel Width="140" Margin="0,0,14,0">
+                                <TextBlock Text="规格区间" Margin="0,0,0,5"/>
+                                <TextBox x:Name="TxtSpecZoneBinCount" TextChanged="AnalysisTextChanged" AutomationProperties.Name="规格区间分箱数量"/>
+                            </StackPanel>
+                            <StackPanel Width="140">
+                                <TextBlock Text="中位数中心" Margin="0,0,0,5"/>
+                                <TextBox x:Name="TxtMedianBinCount" TextChanged="AnalysisTextChanged" AutomationProperties.Name="中位数中心分箱数量"/>
+                            </StackPanel>
+                        </WrapPanel>
                         <WrapPanel>
                             <CheckBox x:Name="ChkShowLowLimit" Content="下限 LSL" Margin="0,0,28,14" Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>
                             <CheckBox x:Name="ChkShowHighLimit" Content="上限 USL" Margin="0,0,28,14" Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>

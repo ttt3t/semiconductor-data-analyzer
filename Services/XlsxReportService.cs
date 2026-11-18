@@ -13,7 +13,8 @@ public sealed record XlsxReportOptions(IReadOnlyCollection<string> Wafers, Retes
     double? OutlierSigma, int HistogramMode, bool CombineSites, IReadOnlyCollection<string> FocusedItemIds,
     bool ShowBinNumbers = false, bool ShowSiteBorders = false, bool CombineWafers = true,
     ScatterOrder ScatterOrder = ScatterOrder.SerialNumber,
-    ChartImageSize? HistogramSize = null, ChartImageSize? ScatterSize = null, bool ScatterUseLimitRange = false);
+    ChartImageSize? HistogramSize = null, ChartImageSize? ScatterSize = null, bool ScatterUseLimitRange = false,
+    bool HistogramShowBinCounts = false);
 
 public static class XlsxReportService
 {
@@ -76,7 +77,7 @@ public static class XlsxReportService
             ex.Data["ReportStage"] = progress.Stage;
             ex.Data["ReportItem"] = progress.Item;
             ex.Data["ReportContext"] = $"记录={data.Records.Count}; 测项={data.Items.Count}; 晶圆={options.Wafers.Count}; " +
-                $"关注={options.FocusedItemIds.Count}; 直方图={HistogramName(options.HistogramMode)}({options.HistogramMode}); 分箱={config.BinCount}; 散点={options.ScatterOrder}; " +
+                $"关注={options.FocusedItemIds.Count}; 直方图={HistogramName(options.HistogramMode)}({options.HistogramMode}); 分箱={config.HistogramBinCount(options.HistogramMode)}; 散点={options.ScatterOrder}; " +
                 $"复测={options.RetestMode}; 合并Site={options.CombineSites}; 合并Wafer={options.CombineWafers}; " +
                 $"离群阈值={options.OutlierSigma?.ToString(CultureInfo.InvariantCulture) ?? "关闭"}; " +
                 $"直方图尺寸={options.HistogramSize}; 散点图尺寸={options.ScatterSize}";
@@ -133,6 +134,7 @@ public static class XlsxReportService
                 var hbins = Sheet(workbook, "HBIN Map", "HBIN 分布与统计", sourceName, BinContext(options, config));
                 var favorites = Sheet(workbook, "关注测项", "关注测试项", sourceName,
                     Context(options, config) + "；关注图表合并 Site 和 Wafer；直方图：" + HistogramName(options.HistogramMode) +
+                    $"（{config.HistogramBinCount(options.HistogramMode)} 箱）" +
                     "；散点排序：" + (options.ScatterOrder == ScatterOrder.Site ? "Site → SN" : options.ScatterOrder == ScatterOrder.Wafer ? "晶圆 → SN" : "SN") +
                     (options.ScatterUseLimitRange ? "；Zoom limit" : "；Zoom all"));
                 SummaryColumns(summaries); SummaryColumns(favorites);
@@ -154,11 +156,11 @@ public static class XlsxReportService
                     WriteHeader(favorites, focusRow, 2, SummaryHeaders);
                     WriteSummary(favorites, focusRow + 1, combined, true);
                     progress.At("计算关注项直方图与散点", item, i);
-                    var detail = DetailCalculator.Calculate(new(item, null, options.HistogramMode, config.BinCount,
+                    var detail = DetailCalculator.Calculate(new(item, null, options.HistogramMode, config.HistogramBinCount(options.HistogramMode),
                         config.IncludeOutOfLimitData, config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma,
                         ScatterOrder: options.ScatterOrder, WaferOrder: wafers), AnalysisOperation.Token);
                     progress.At("绘制关注项直方图", item, i);
-                    var histogram = new HistogramControl { Title = item.DisplayName };
+                    var histogram = new HistogramControl { Title = item.DisplayName, ShowBinCounts = options.HistogramShowBinCounts };
                     histogram.Apply(detail.Bins, item.DisplayLowLimit, item.DisplayHighLimit, detail.Mean, detail.Sigma,
                         config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, item.ShownUnit,
                         item.StdfLowLimitDisplay == null ? null : combined.LslText,

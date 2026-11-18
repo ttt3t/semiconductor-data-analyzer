@@ -163,8 +163,9 @@ public partial class SettingsWindow : Window
         // can write it back. Switching from the text editor first reloads all these controls.
         if (!double.TryParse(TxtOutlierSigma.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double sigma) || !double.IsFinite(sigma) || sigma <= 0)
             throw new InvalidDataException("离群阈值必须是大于 0 的有限数字，例如 6 或 3.5。");
-        if (!int.TryParse(TxtBinCount.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int bins) || bins < 1)
-            throw new InvalidDataException("分箱数量必须是大于 0 的整数。");
+        string bins = ReadBinCount(TxtBinCount, "固定等宽");
+        string specZoneBins = ReadBinCount(TxtSpecZoneBinCount, "规格区间");
+        string medianBins = ReadBinCount(TxtMedianBinCount, "中位数中心");
         if (!int.TryParse(TxtStdfLimitDigits.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int limitDigits) || limitDigits is < 1 or > 9)
             throw new InvalidDataException("STDF 阈值默认有效位数必须在 1 到 9 之间。");
         string mode = (CmbHistogramMode.SelectedItem as ComboBoxItem)?.Tag as string ?? "Fixed";
@@ -173,7 +174,7 @@ public partial class SettingsWindow : Window
             ["PreferGoodRetest"] = (ChkPreferGoodRetest.IsChecked == true).ToString(),
             ["RemoveOutliers"] = (ChkRemoveOutliers.IsChecked == true).ToString(),
             ["OutlierSigma"] = sigma.ToString("R", CultureInfo.InvariantCulture),
-            ["BinCount"] = bins.ToString(CultureInfo.InvariantCulture), ["BinMode"] = mode,
+            ["BinCount"] = bins, ["SpecZoneBinCount"] = specZoneBins, ["MedianBinCount"] = medianBins, ["BinMode"] = mode,
             ["StdfLimitSignificantDigits"] = limitDigits.ToString(CultureInfo.InvariantCulture),
             ["ShowLowLimit"] = (ChkShowLowLimit.IsChecked == true).ToString(),
             ["ShowHighLimit"] = (ChkShowHighLimit.IsChecked == true).ToString(),
@@ -190,6 +191,13 @@ public partial class SettingsWindow : Window
         TxtConfig.Text = edited;
         _analysisDirty = false;
         return config;
+    }
+
+    private static string ReadBinCount(TextBox box, string mode)
+    {
+        if (!int.TryParse(box.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out int count) || count < 1)
+            throw new InvalidDataException($"{mode}的分箱数量必须是大于 0 的整数。");
+        return count.ToString(CultureInfo.InvariantCulture);
     }
 
     private static string UpdateAnalysisFields(string text, Dictionary<string, string> fields)
@@ -233,6 +241,8 @@ public partial class SettingsWindow : Window
             ChkRemoveOutliers.IsChecked = config.RemoveOutliers;
             TxtOutlierSigma.Text = config.OutlierSigma.ToString("G", CultureInfo.InvariantCulture);
             TxtBinCount.Text = config.BinCount.ToString(CultureInfo.InvariantCulture);
+            TxtSpecZoneBinCount.Text = config.SpecZoneBinCount.ToString(CultureInfo.InvariantCulture);
+            TxtMedianBinCount.Text = config.MedianBinCount.ToString(CultureInfo.InvariantCulture);
             TxtStdfLimitDigits.Text = config.StdfLimitSignificantDigits.ToString(CultureInfo.InvariantCulture);
             CmbHistogramMode.SelectedIndex = config.BinMode.ToUpperInvariant() switch
             { "SPEC" or "SPECZONE" => 1, "MEAN" or "MEANCENTERED" or "MEDIAN" or "MEDIANCENTERED" => 2, _ => 0 };
