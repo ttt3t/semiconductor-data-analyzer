@@ -115,11 +115,11 @@ static class Probe
             File.WriteAllText(csv, "SN,X,Y,Site,SBIN,HBIN,Wafer,Voltage,AltSite\nfirst,1,0,1,1,1,W1,1.5,7\n");
             using (var workbook = new XLWorkbook())
             {
-                foreach (var (name, site) in new[] { ("Imported", "8"), ("Other", "9") })
+                foreach (var (name, alternateSite) in new[] { ("Imported", "8"), ("Other", "9") })
                 {
                     var sheet = workbook.Worksheets.Add(name);
                     var header = new[] { "SN", "X", "Y", "Site", "SBIN", "HBIN", "Wafer", "Voltage", "AltSite" };
-                    var values = new[] { "second", "2", "0", "2", "1", "1", "W2", "2.5", site };
+                    var values = new[] { "second", "2", "0", "2", "1", "1", "W2", "2.5", alternateSite };
                     for (int col = 0; col < header.Length; col++)
                     {
                         sheet.Cell(1, col + 1).Value = header[col];
