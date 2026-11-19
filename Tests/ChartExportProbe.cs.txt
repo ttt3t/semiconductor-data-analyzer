@@ -268,10 +268,16 @@ static class Probe
             var viewport = View(histogram, "View")!.Value;
             var integerBins = histogram.Bins!;
             int available = (int)(Math.Floor(viewport.To) - Math.Ceiling(viewport.From) + 1);
+            var positions = Enumerable.Range(1, 4).ToArray();
+            var visiblePositions = positions.Where(value => value >= viewport.From && value <= viewport.To).ToArray();
             Check(integerBins.Count == Math.Min(available, config.HistogramBinCount(mode)) &&
                 integerBins.All(bin => double.IsInteger(bin.From) && double.IsInteger(bin.To) && bin.IncludesFrom && bin.IncludesTo) &&
                 integerBins.Zip(integerBins.Skip(1)).All(pair => pair.First.To < pair.Second.From) &&
-                integerBins.Sum(bin => bin.Count) == 4 && CountOutside(integerBins) == 2 &&
+                integerBins.Sum(bin => bin.Count) == visiblePositions.Length &&
+                CountOutside(integerBins) == visiblePositions.Count(value => value < 1.5 || value > 3) &&
+                viewport.Below == positions.Count(value => value < viewport.From) &&
+                viewport.Above == positions.Count(value => value > viewport.To) &&
+                (mode != 1 || viewport.Above == 1) &&
                 CutsAt(integerBins, 1.5) && CutsAt(integerBins, 3),
                 "integer bins keep nonoverlapping closed intervals and exact frequencies in mode " + mode);
         }
