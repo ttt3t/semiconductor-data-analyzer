@@ -13,7 +13,10 @@ public sealed class HistogramBin
     public bool IncludesTo { get; init; }
 }
 
-public readonly record struct HistogramView(double From, double To, int Below, int Above, int RequestedBins);
+public readonly record struct HistogramView(double From, double To, int Below, int Above, int RequestedBins)
+{
+    internal HistogramIntegerLimits? IntegerLimits { get; init; }
+}
 internal sealed record HistogramDistribution(List<HistogramBin> Bins, HistogramView? View);
 internal readonly record struct HistogramIntegerLimits(double FirstAllowed, double FirstAbove);
 
@@ -24,8 +27,9 @@ public static class HistogramService
 
     private readonly record struct Section(double From, double To, bool IsOutOfSpec, bool IncludesFrom, bool IncludesTo)
     {
-        public double Weight(bool integers) => To - From + (integers ? 1 : 0);
-        public int Capacity(bool integers) => integers ? (int)Math.Min(int.MaxValue, Weight(true))
+        public long IntegerPositions => (long)To - (long)From + 1;
+        public double Weight(bool integers) => integers ? IntegerPositions : To - From;
+        public int Capacity(bool integers) => integers ? (int)Math.Min(int.MaxValue, IntegerPositions)
             : From == To ? 1 : int.MaxValue;
     }
 
@@ -149,7 +153,7 @@ public static class HistogramService
 
         if (!integerBins && factor != 1)
             foreach (var bin in bins) { bin.From *= factor; bin.To *= factor; }
-        return new(bins, new HistogramView(plotFrom, plotTo, below, above, requested));
+        return new(bins, new HistogramView(plotFrom, plotTo, below, above, requested) { IntegerLimits = integerLimits });
     }
 
     private static List<Section> ContinuousSections(double from, double to, double? lsl, double? usl)
@@ -255,9 +259,10 @@ public static class HistogramService
             for (int i = 1; i < count; i++)
             {
                 if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
-                double upper = section.From + weight * ((double)i / count);
-                if (integers) upper = section.From + Math.Floor(weight * ((double)i / count));
-                if (upper <= start || (integers ? upper > section.To : upper >= section.To)) continue;
+                // In integer mode even a one-ULP error before flooring can merge two positions.
+                double upper = integers ? (long)section.From + (long)((Int128)section.IntegerPositions * i / count)
+                    : section.From + weight * ((double)i / count);
+                if (!integers && (upper <= start || upper >= section.To)) continue;
                 bins.Add(new HistogramBin
                 {
                     From = start, To = integers ? upper - 1 : upper, IsOutOfSpec = section.IsOutOfSpec,

@@ -167,11 +167,18 @@ public class HistogramControl : CachedPlotControl
         string hint = "按住左键左右拖动横轴范围，滚轮缩放，双击恢复默认范围";
         if (Bins is { Count: > 0 } bins && _horizontalScale is { } scale && PlotBounds.Contains(position))
         {
-            double value = scale.Unmap(position.X);
-            int index = HistogramService.FindBin(bins, value);
-            HistogramBin? bin = bins.Where(b => b.Count > 0 && b.From == b.To && Math.Abs(position.X - scale.Map(b.From)) <= 3)
-                .MinBy(b => Math.Abs(position.X - scale.Map(b.From)));
-            if (bin == null && index >= 0) bin = bins[index];
+            HistogramBin? bin;
+            if (scale.IntegerBins) bin = scale.HitIntegerBin(bins, position.X);
+            else
+            {
+                bin = bins.Where(b => b.Count > 0 && b.From == b.To && Math.Abs(position.X - scale.Map(b.From)) <= 3)
+                    .MinBy(b => Math.Abs(position.X - scale.Map(b.From)));
+                if (bin == null)
+                {
+                    int index = HistogramService.FindBin(bins, scale.Unmap(position.X));
+                    if (index >= 0) bin = bins[index];
+                }
+            }
             if (bin != null)
             {
                 string start = bin.IncludesFrom ? "[" : "(";
@@ -227,7 +234,8 @@ public class HistogramControl : CachedPlotControl
         double dataMin = View?.From ?? bins.Min(b => b.From), dataMax = View?.To ?? bins.Max(b => b.To);
         double xSpan = dataMax - dataMin;
         if (!double.IsFinite(xSpan) || xSpan <= 0) return;
-        var scale = new HistogramHorizontalScale(dataMin, dataMax, left, plotW, bins);
+        var integerLimits = View?.IntegerLimits;
+        var scale = new HistogramHorizontalScale(dataMin, dataMax, left, plotW, bins, integerLimits.HasValue);
         double MapX(double value) => scale.Map(value);
 
         string xTitle = ChartAxis.ValueTitle(Unit);
@@ -239,19 +247,22 @@ public class HistogramControl : CachedPlotControl
             h - bottom + ChartAxis.AxisTitleGap, Math.Min(w - 8, title.Width + 2), 17));
 
         var references = new List<(double X, FormattedText Text, Pen Pen)>();
-        void AddReference(bool show, double? value, string name, Pen pen, string? limitText = null)
+        void AddReference(double? position, double? value, string name, Pen pen, string? limitText = null)
         {
-            if (!show || !value.HasValue || !double.IsFinite(value.Value) || value < dataMin || value > dataMax) return;
-            var text = ChartAxis.Text(this, name + " " + (limitText ?? ChartAxis.Format(value.Value)), 11, pen.Brush);
+            if (position is not double x || value is not double measurement) return;
+            var text = ChartAxis.Text(this, name + " " + (limitText ?? ChartAxis.Format(measurement)), 11, pen.Brush);
             text.MaxTextWidth = plotW;
             text.Trimming = TextTrimming.CharacterEllipsis;
-            references.Add((MapX(value.Value), text, pen));
+            references.Add((x, text, pen));
         }
-        AddReference(ShowLsl, Lsl, "LSL", LslPen, _lslText);
-        AddReference(ShowUsl, Usl, "USL", LslPen, _uslText);
-        AddReference(ShowMean, Mean, "μ", MeanPen);
+        double? lowerPosition = ShowLsl ? scale.ReferencePosition(Lsl, integerLimits?.FirstAllowed) : null;
+        double? upperPosition = ShowUsl ? scale.ReferencePosition(Usl, integerLimits?.FirstAbove) : null;
+        double? meanPosition = ShowMean ? scale.ReferencePosition(Mean) : null;
+        AddReference(lowerPosition, Lsl, "LSL", LslPen, _lslText);
+        AddReference(upperPosition, Usl, "USL", LslPen, _uslText);
+        AddReference(meanPosition, Mean, "μ", MeanPen);
 
-        // Keep each label attached to its numeric position; use another lane if labels collide.
+        // Add lanes when reference labels collide, keeping each attached to its line.
         var labels = new List<(double X, FormattedText Text, Pen Pen, Rect Bounds)>();
         foreach (var reference in references.OrderBy(r => r.X))
         {
@@ -346,7 +357,8 @@ public class HistogramControl : CachedPlotControl
         foreach (var bin in bins)
         {
             if (bin.Count == 0) continue;
-            double x = MapX(bin.From), width = MapX(bin.To) - x;
+            var (x, endX) = scale.MapBin(bin);
+            double width = endX - x;
             if (width <= 0) continue;
             double gap = Math.Min(0.5, width / 4);
             if (!bin.IsOutOfSpec) gap = Math.Min(gap, Math.Max(0, (width - scale.MinimumBarWidth) / 2));
@@ -354,24 +366,24 @@ public class HistogramControl : CachedPlotControl
             dc.DrawRectangle(bin.IsOutOfSpec ? OutSpecBrush : InSpecBrush, null,
                 new Rect(x + gap, barTop, width - 2 * gap, top + plotH - barTop));
         }
-        void ReferenceLine(double? value, Pen pen)
+        void ReferenceLine(double? position, Pen pen)
         {
-            if (value.HasValue && double.IsFinite(value.Value) && value >= dataMin && value <= dataMax)
-                dc.DrawLine(pen, new Point(MapX(value.Value), top), new Point(MapX(value.Value), top + plotH));
+            if (position is double x)
+                dc.DrawLine(pen, new Point(x, top), new Point(x, top + plotH));
         }
-        if (ShowLsl) ReferenceLine(Lsl, LslPen);
-        if (ShowUsl) ReferenceLine(Usl, LslPen);
-        if (ShowMean) ReferenceLine(Mean, MeanPen);
+        ReferenceLine(lowerPosition, LslPen);
+        ReferenceLine(upperPosition, LslPen);
+        ReferenceLine(meanPosition, MeanPen);
         if (ShowThreeSigma && Mean.HasValue && Sigma.HasValue)
         {
-            ReferenceLine(Mean - 3 * Sigma, SigmaPen);
-            ReferenceLine(Mean + 3 * Sigma, SigmaPen);
+            ReferenceLine(scale.ReferencePosition(Mean - 3 * Sigma), SigmaPen);
+            ReferenceLine(scale.ReferencePosition(Mean + 3 * Sigma), SigmaPen);
         }
         foreach (var bin in bins)
         {
             if (bin.Count == 0) continue;
-            double x = MapX(bin.From);
-            if (x != MapX(bin.To)) continue;
+            var (x, endX) = scale.MapBin(bin);
+            if (x != endX) continue;
             dc.DrawLine(bin.IsOutOfSpec ? OutOfSpecPointPen : InSpecPointPen,
                 new Point(x, MapY(bin.Count)), new Point(x, top + plotH));
         }
@@ -385,7 +397,8 @@ public class HistogramControl : CachedPlotControl
                 if (bin.Count <= 0) continue;
                 if (!countTexts.TryGetValue(bin.Count, out var text))
                     countTexts[bin.Count] = text = ChartAxis.Text(this, BarLabel(bin.Count), countFontSize);
-                double center = (MapX(bin.From) + MapX(bin.To)) / 2;
+                var (binLeft, binRight) = scale.MapBin(bin);
+                double center = (binLeft + binRight) / 2;
                 double width = rotateCounts ? text.Height : text.Width;
                 double x = Math.Clamp(center - width / 2, left, left + plotW - width);
                 double y = MapY(bin.Count) - 3 - (index % countLanes) * laneStep;

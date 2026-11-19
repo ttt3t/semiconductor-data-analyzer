@@ -131,6 +131,56 @@ static class Probe
         }
     }
 
+    static void CheckZoomedIntegerHistogram()
+    {
+        var item = new TestItemData { LowLimit = 0, HighLimit = 0 };
+        for (int value = -20; value <= 55; value++) item.Values.Add(new TestValue { Value = value });
+        for (int i = 0; i < 1000; i++) item.Values.Add(new TestValue { Value = 0 });
+        const double left = -17.95, right = 49.416, originalCenter = 17.5, originalSpan = 75;
+        var detail = DetailCalculator.Calculate(new(item, null, 1, 150, true, true, true, false, false,
+            HistogramRangeScale: (right - left) / originalSpan,
+            HistogramCenterOffset: ((left + right) / 2 - originalCenter) / originalSpan), default);
+        var viewport = View(detail, "HistogramView");
+        Check(detail.Bins.Count == 67 && detail.Bins.All(bin => bin.From == bin.To) &&
+            detail.Bins.Sum(bin => bin.Count) == 1067 && viewport is { Below: 3, Above: 6 },
+            "high bin counts allocate every visible integer exactly once after zooming");
+        var chart = new HistogramControl { ToolTip = new ToolTip(), ShowCumulativePercentage = true };
+        chart.Apply(detail.Bins, 0, 0, null, null, true, true, false, false, view: viewport);
+        var size = new ChartImageSize(1000, 420);
+        chart.Measure(new Size(size.Width, size.Height));
+        chart.Arrange(new Rect(0, 0, size.Width, size.Height));
+        chart.UpdateLayout();
+        var image = ChartImage.Capture(chart, size);
+        var pixels = Pixels(image);
+        var plot = (Rect)typeof(HistogramControl).GetProperty("PlotBounds", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(chart)!;
+        var scale = Field(chart, "_horizontalScale")!;
+        double Map(double value) => (double)Call(scale, "Map", value)!;
+        (double Left, double Right) Bounds(double value) =>
+            ((double, double))Call(scale, "MapBin", detail.Bins.Single(bin => bin.From == value))!;
+        var (zeroLeft, zeroRight) = Bounds(0);
+        var (negativeLeft, negativeRight) = Bounds(-1);
+        var (positiveLeft, positiveRight) = Bounds(1);
+        Check(Math.Abs(zeroLeft - negativeRight) < 1e-9 && Math.Abs(zeroRight - positiveLeft) < 1e-9 &&
+            Math.Abs(zeroRight - zeroLeft - (positiveRight - positiveLeft)) < 1e-9 &&
+            Math.Abs(zeroRight - zeroLeft - (negativeRight - negativeLeft)) < 1e-9,
+            "zero and adjacent single-integer bins have equal-width neighboring cells");
+        bool Ink(double value, double y, byte red, byte green, byte blue)
+        {
+            int i = ((int)Math.Round(y) * image.PixelWidth + (int)Math.Floor(Map(value))) * 4;
+            return pixels[i] == blue && pixels[i + 1] == green && pixels[i + 2] == red;
+        }
+        double sampleY = plot.Bottom - 8;
+        Check(Ink(-.28, sampleY, 70, 130, 180) && Ink(.28, sampleY, 70, 130, 180) &&
+            Ink(-.75, sampleY, 220, 90, 90) && Ink(.75, sampleY, 220, 90, 90) &&
+            Ink(-.5, sampleY, 255, 0, 0) && Ink(.5, sampleY, 255, 0, 0),
+            "coincident limits bracket a visible blue zero bar between the two red regions");
+        Call(chart, "UpdateFrequencyToolTip", new Point(Map(.35), plot.Top + plot.Height / 2));
+        string tooltip = ((ToolTip)chart.ToolTip).Content.ToString()!;
+        Check(tooltip.Contains("[0, 0]") && tooltip.Contains("数量 1001") && tooltip.Contains("规格内"),
+            "hovering across a widened cell shows the original integer and count");
+    }
+
     static void CheckHistogram(MainWindow main, HistogramControl histogram, string folder)
     {
         var legacy = ConfigLoader.Parse("[Histogram]\nBinCount=47");
@@ -345,6 +395,7 @@ static class Probe
             ((ToolTip)histogram.ToolTip).Content.ToString()!.Contains("[4.999, 5.001]"),
             "a narrow in-spec bar uses half the average slot width between the two mapped limits");
         CheckHistogramAxes();
+        CheckZoomedIntegerHistogram();
 
         var data = (CsvParseResult)Field(main, "_data")!;
         string report = Path.Combine(folder, "histogram-mode.xlsx");
@@ -396,6 +447,10 @@ static class Probe
         Check(histogram.Bins!.Single() is { From: 2, To: 2, Count: 1, IsOutOfSpec: false } &&
             View(histogram, "View") is { Below: 1, Above: 2 },
             "panning into a single integer position restores its exact one-point frequency");
+        plot = PlotBounds();
+        var (clippedLeft, clippedRight) = ((double, double))Call(Field(histogram, "_horizontalScale")!, "MapBin", histogram.Bins!.Single())!;
+        Check(Math.Abs(clippedLeft - plot.Left) < 1e-9 && Math.Abs(clippedRight - plot.Right) < 1e-9,
+            "a single integer cell fills only the visible portion of a deeply zoomed viewport");
 
         var scaledItem = new TestItemData { DisplayFactor = 1000, LowLimit = .0015, HighLimit = .0035 };
         foreach (double value in new[] { .001, .002, .003, .004 })
