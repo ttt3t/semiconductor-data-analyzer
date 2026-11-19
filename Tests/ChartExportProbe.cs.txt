@@ -464,6 +464,7 @@ static class Probe
             var detail = DetailCalculator.Calculate(new(items[0], null, 0, config.BinCount, config.IncludeOutOfLimitData, config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma), default);
             histogram.Apply(detail.Bins, 1, 3, detail.Mean, detail.Sigma, config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, "", view: View(detail, "HistogramView"));
             scatter.SetSeries(ScatterSeries.BuildSorted(items[0].Values, 1, 3, ScatterOrder.SerialNumber, trackChips: true), 1, 3, "");
+            scatter.ShowConnections = false;
             histogram.Title = scatter.Title = "125_D_SNR_B_Min_1"; Pump();
             Point At(double x, double y) => new((double)Call(scatter, "MapX", x)!, (double)Call(scatter, "MapY", y)!);
             var p = At(3, 4); Set(scatter, "_rightStart", new Point(p.X - 4, p.Y - 4)); Set(scatter, "_rightPosition", new Point(p.X + 4, p.Y + 4)); Call(scatter, "BeginBoxSelection"); Call(scatter, "CompleteRightGesture", new Point(p.X + 4, p.Y + 4)); Pump();
@@ -489,7 +490,10 @@ static class Probe
                         for (int px = Math.Max(0, x - 4); px <= Math.Min(copied.PixelWidth - 1, x + 4); px++)
                         {
                             int offset = (py * copied.PixelWidth + px) * 4;
-                            if (pixels[offset] > pixels[offset + 2] + 40 && pixels[offset] > pixels[offset + 1] + 40) found = true;
+                            // A single mark has 50% opacity and at most 40 levels of blue-green
+                            // separation on white. Allow fractional pixel coverage after zoom.
+                            if (pixels[offset] > pixels[offset + 2] + 25 && pixels[offset] > pixels[offset + 1] + 12)
+                                found = true;
                         }
                     File.WriteAllBytes(Path.Combine(folder, "copied-scatter.png"), bytes);
                     Check(found, "copied blue marked point lands at its actual chart coordinates without parent layout offset or cropping");
