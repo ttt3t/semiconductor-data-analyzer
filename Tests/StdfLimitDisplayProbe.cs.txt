@@ -221,8 +221,9 @@ static class Probe
             "CSV text is shown verbatim and only the finite side filters observations");
         Check(summaries[2].LslText == "NaN" && summaries[2].UslText == "N/A" && summaries[2].Fails == 0 &&
             summaries[3].LslText == "-" && summaries[3].UslText == "Not specified", "CSV distinguishes absent and explicit text limits");
-        var histogram = HistogramService.CreateFixedBins(parsed.Items[0].Values, 1, parsed.Items[0].LowLimit, parsed.Items[0].HighLimit, true).Single();
-        Check(histogram.InSpecCount == 1 && histogram.OutOfSpecCount == 1 && summaries[0].Cpk.HasValue,
+        var histogram = HistogramService.CreateFixedBins(parsed.Items[0].Values, 1, parsed.Items[0].LowLimit, parsed.Items[0].HighLimit, true);
+        Check(histogram is [{ To: 100, Count: 1, IsOutOfSpec: false }, { From: 100, Count: 1, IsOutOfSpec: true }] &&
+            summaries[0].Cpk.HasValue,
             "histogram and capability statistics use the same one-sided numeric rule");
 
         string workbookPath = Path.Combine(folder, "text-limits.xlsx");

@@ -165,7 +165,7 @@ public static class XlsxReportService
                     histogram.Apply(detail.Bins, item.DisplayLowLimit, item.DisplayHighLimit, detail.Mean, detail.Sigma,
                         config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, item.ShownUnit,
                         item.StdfLowLimitDisplay == null ? null : combined.LslText,
-                        item.StdfHighLimitDisplay == null ? null : combined.UslText);
+                        item.StdfHighLimitDisplay == null ? null : combined.UslText, view: detail.HistogramView);
                     Plot(favorites, focusRow + 3, 2, histogram, "Histogram_" + i, histogramSize);
                     progress.At("绘制关注项散点图", item, i);
                     var scatter = new ScatterPlotControl { Title = item.DisplayName, UseLimitRange = options.ScatterUseLimitRange,

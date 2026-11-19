@@ -50,6 +50,14 @@ static class Probe
     static void Copy(MainWindow main, string method) => Call(main, method, main, new RoutedEventArgs());
     static string Status(MainWindow main) => ((TextBlock)main.FindName("TxtStatus")).Text;
 
+    static HistogramView? View(object target, string property) =>
+        (HistogramView?)target.GetType().GetProperty(property, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(target);
+
+    static int CountOutside(IEnumerable<HistogramBin> bins) => bins.Where(bin => bin.IsOutOfSpec).Sum(bin => bin.Count);
+
+    static bool CutsAt(IEnumerable<HistogramBin> bins, double limit) =>
+        bins.All(bin => !(bin.From < limit && bin.To > limit));
+
     static void WaitForHistogram(MainWindow main)
     {
         var timer = Stopwatch.StartNew();
@@ -78,19 +86,30 @@ static class Probe
 
         var samples = Enumerable.Range(-50, 101).Select(value => new TestValue { Value = value }).ToArray();
         var spec = HistogramService.CreateSpecZoneBins(samples, -20, 20, false, config.SpecZoneBinCount);
-        Check(spec.Count == 17 && spec.Sum(bin => bin.Count) == 41 && spec.Sum(bin => bin.OutOfSpecCount) == 0 &&
+        Check(spec.Count == 17 && spec.Sum(bin => bin.Count) == 41 && CountOutside(spec) == 0 &&
             spec.Any(bin => bin.From == -20) && spec.Any(bin => bin.To == 20),
             "spec-zone bins keep both threshold boundaries and include observations equal to either limit");
         var flat = HistogramService.CreateFixedBins(new[] { new TestValue { Value = 9 } }, 40, null, null, true);
         Check(flat.Count == 40 && flat.Sum(bin => bin.Count) == 1 && flat[0].From < 9 && flat[^1].To > 9,
             "constant-valued data still renders the configured number of bins");
         var mixedSamples = new[] { 8.5, 9.0, 9.5, 10.0, 10.5 }.Select(value => new TestValue { Value = value }).ToArray();
-        var mixed = HistogramService.CreateFixedBins(mixedSamples, 1, 9, 10, true).Single();
-        var excludingOutliers = HistogramService.CreateFixedBins(mixedSamples, 1, 9, 10, false).Single();
-        var strict = HistogramService.CreateFixedBins(mixedSamples, 1, Math.BitIncrement(9), Math.BitDecrement(10), true).Single();
-        Check(mixed.Count == 5 && mixed.InSpecCount == 3 && mixed.OutOfSpecCount == 2 &&
-            excludingOutliers.Count == 3 && excludingOutliers.OutOfSpecCount == 0 && strict.InSpecCount == 1 && strict.OutOfSpecCount == 4,
-            "a bin crossing both limits classifies individual values with inclusive and strict comparison boundaries");
+        var mixed = HistogramService.CreateFixedBins(mixedSamples, 1, 9, 10, true);
+        var excludingOutliers = HistogramService.CreateFixedBins(mixedSamples, 1, 9, 10, false);
+        double strictLow = Math.BitIncrement(9), strictHigh = Math.BitDecrement(10);
+        var strict = HistogramService.CreateFixedBins(mixedSamples, 1, strictLow, strictHigh, true);
+        Check(mixed.Select(bin => bin.Count).SequenceEqual(new[] { 1, 3, 1 }) &&
+            mixed.Select(bin => bin.IsOutOfSpec).SequenceEqual(new[] { true, false, true }) &&
+            CutsAt(mixed, 9) && CutsAt(mixed, 10) &&
+            excludingOutliers is [{ Count: 3, IsOutOfSpec: false }] &&
+            strict.Select(bin => bin.Count).SequenceEqual(new[] { 2, 1, 2 }) &&
+            CutsAt(strict, strictLow) && CutsAt(strict, strictHigh),
+            "each threshold cuts the viewport even with only one requested bin, including strict STDF endpoints");
+        var oneSided = HistogramService.CreateFixedBins(mixedSamples, 1, null, 9.5, true);
+        var coincident = HistogramService.CreateFixedBins(mixedSamples, 1, 9.5, 9.5, true);
+        Check(oneSided.Count == 2 && CountOutside(oneSided) == 2 && CutsAt(oneSided, 9.5) &&
+            coincident.Single(bin => !bin.IsOutOfSpec) is { From: 9.5, To: 9.5, Count: 1 } &&
+            CountOutside(coincident) == 4,
+            "a one-sided limit makes a single cut and identical inclusive limits preserve the exact point");
 
         config.LowLimitRow = 2; config.HighLimitRow = 3; config.UnitRow = 0; config.DataStartRow = 4;
         config.TestItemStartColumn = 8; config.SerialNumberColumn = 1;
@@ -114,7 +133,8 @@ static class Probe
         Check(HasRange(40, -100, 100, 101), "zoom out rebins the larger range into the same 40 bins");
         Call(main, "ChangeHistogramRange", .4d);
         WaitForHistogram(main);
-        Check(HasRange(40, -20, 20, 41) && ReferenceEquals(scatter, Field(main, "_displayedScatter")) &&
+        Check(HasRange(40, -20, 20, 41) && View(histogram, "View") is { Below: 30, Above: 30 } &&
+            ReferenceEquals(scatter, Field(main, "_displayedScatter")) &&
             ((TextBlock)main.FindName("TxtUnit")).Text.Contains("Count=101"),
             "zoom in counts only visible samples and reuses the original statistics and scatter");
         Call(main, "ChangeHistogramRange", 1d);
@@ -143,8 +163,9 @@ static class Probe
             "plain mouse wheel zooms around the center created by dragging");
         Call(main, "ChangeHistogramRange", .4d);
         WaitForHistogram(main);
-        Check(HasRange(40, 5, 45, 41) && ReferenceEquals(scatter, Field(main, "_displayedScatter")),
-            "changing zoom preserves the center and reuses the original scatter");
+        Check(HasRange(40, 5, 45, 41) && CutsAt(histogram.Bins!, 20) && CountOutside(histogram.Bins!) == 25 &&
+            ReferenceEquals(scatter, Field(main, "_displayedScatter")),
+            "zoom preserves the panned center and the visible one-sided cut with exact frequencies");
 
         plot = PlotBounds();
         dragStart = PlotCenter(plot);
@@ -207,22 +228,23 @@ static class Probe
         Check(Same(atBoundary, DrawFrequencies(0, 1, 100)),
             "changing the displayed bins below the threshold returns to linear while automatic scaling stays enabled");
 
-        histogram.Apply(new List<HistogramBin> { mixed }, null, null, null, null, false, false, false, false);
+        histogram.Apply(mixed, null, null, null, null, false, false, false, false);
         Pump();
-        var stackedPixels = Pixels(ChartImage.Capture(histogram, size));
+        var barPixels = Pixels(ChartImage.Capture(histogram, size));
         plot = PlotBounds();
-        bool HasBarColor(double y, byte red, byte green, byte blue)
+        bool HasBarColor(double xRatio, double y, byte red, byte green, byte blue)
         {
-            int x = (int)((plot.Left + plot.Width / 2) * size.DpiX / 96);
+            int x = (int)((plot.Left + plot.Width * xRatio) * size.DpiX / 96);
             int row = (int)((plot.Top + y * plot.Height) * size.DpiY / 96);
             int pixel = (row * size.PixelWidth + x) * 4;
-            return stackedPixels[pixel] == blue && stackedPixels[pixel + 1] == green && stackedPixels[pixel + 2] == red;
+            return barPixels[pixel] == blue && barPixels[pixel + 1] == green && barPixels[pixel + 2] == red;
         }
         Call(histogram, "UpdateFrequencyToolTip", PlotCenter(plot));
         string hint = ((ToolTip)histogram.ToolTip).Content.ToString()!;
-        Check(HasBarColor(.25, 220, 90, 90) && HasBarColor(.75, 70, 130, 180) &&
-            hint.Contains("总数 5") && hint.Contains("规格内 3") && hint.Contains("规格外 2"),
-            "mixed bins render stacked red and blue segments and expose exact counts in their tooltip");
+        Check(HasBarColor(.5, .25, 70, 130, 180) && HasBarColor(.5, .75, 70, 130, 180) &&
+            HasBarColor(.125, .8, 220, 90, 90) && hint.Contains("[9, 10]") &&
+            hint.Contains("数量 3") && hint.Contains("规格内"),
+            "threshold-separated bins use a single color and report the exact interval and count");
 
         var data = (CsvParseResult)Field(main, "_data")!;
         string report = Path.Combine(folder, "histogram-mode.xlsx");
@@ -239,30 +261,44 @@ static class Probe
             .Concat(Enumerable.Range(1, 4).Select(value => $"SN{value},{value},0,1,1,1,W1,{value}")));
         Wait((Task)Call(main, "OpenSelectedFilesAsync", (object)new[] { integerCsv })!);
         ((DataGrid)main.FindName("DgTestItems")).SelectedIndex = 0;
-        bool HasIntegerBins(int count) => histogram.Bins is { } bins && bins.Count == count &&
-            bins.All(bin => double.IsInteger(bin.From) && double.IsInteger(bin.To) && bin.To > bin.From);
         for (int mode = 0; mode < 3; mode++)
         {
             modes.SelectedIndex = mode;
             WaitForHistogram(main);
-            Check(HasIntegerBins(config.HistogramBinCount(mode)) && histogram.Bins!.Sum(bin => bin.Count) == 4 &&
-                histogram.Bins!.Sum(bin => bin.OutOfSpecCount) == 2,
-                "integer-valued data retains integer bin edges, exact frequencies and configured bin count in mode " + mode);
+            var viewport = View(histogram, "View")!.Value;
+            var integerBins = histogram.Bins!;
+            int available = (int)(Math.Floor(viewport.To) - Math.Ceiling(viewport.From) + 1);
+            Check(integerBins.Count == Math.Min(available, config.HistogramBinCount(mode)) &&
+                integerBins.All(bin => double.IsInteger(bin.From) && double.IsInteger(bin.To) && bin.IncludesFrom && bin.IncludesTo) &&
+                integerBins.Zip(integerBins.Skip(1)).All(pair => pair.First.To < pair.Second.From) &&
+                integerBins.Sum(bin => bin.Count) == 4 && CountOutside(integerBins) == 2 &&
+                CutsAt(integerBins, 1.5) && CutsAt(integerBins, 3),
+                "integer bins keep nonoverlapping closed intervals and exact frequencies in mode " + mode);
         }
         modes.SelectedIndex = 0;
         WaitForHistogram(main);
-        Call(main, "UpdateHistogramRange", .001d, .02d);
+        Call(main, "UpdateHistogramRange", .001d, 0d);
         WaitForHistogram(main);
-        Check(HasIntegerBins(40) && histogram.Bins!.All(bin => bin.To - bin.From == 1),
-            "deep zoom and panning keep 40 equal integer bins with a minimum width of one");
+        Check(histogram.Bins is { Count: 0 } && View(histogram, "View") is { Below: 2, Above: 2 } && !PlotBounds().IsEmpty,
+            "the integer viewport remains interactive when it contains no integers");
+        Call(main, "UpdateHistogramRange", .001d, -.5d / 3);
+        WaitForHistogram(main);
+        Check(histogram.Bins!.Single() is { From: 2, To: 2, Count: 1, IsOutOfSpec: false } &&
+            View(histogram, "View") is { Below: 1, Above: 2 },
+            "panning into a single integer position restores its exact one-point frequency");
 
         var scaledItem = new TestItemData { DisplayFactor = 1000, LowLimit = .0015, HighLimit = .0035 };
         foreach (double value in new[] { .001, .002, .003, .004 })
             scaledItem.Values.Add(new TestValue { Value = value });
         var scaled = DetailCalculator.Calculate(new(scaledItem, null, 0, 2, true, true, true, true, true), default);
-        Check(scaled.Bins.Count == 2 && scaled.Bins.All(bin => double.IsInteger(bin.From) && double.IsInteger(bin.To)) &&
-            scaled.Bins.Sum(bin => bin.OutOfSpecCount) == 2,
-            "display-unit conversion yields exact integer boundaries while the source limits classify each sample");
+        Check(scaled.Bins.Count == 3 && scaled.Bins.All(bin => double.IsInteger(bin.From) && double.IsInteger(bin.To)) &&
+            scaled.Bins.Sum(bin => bin.Count) == 4 && CountOutside(scaled.Bins) == 2 &&
+            CutsAt(scaled.Bins, 1.5) && CutsAt(scaled.Bins, 3.5),
+            "display-unit conversion preserves integer bins, allocating at least one bin to each threshold region");
+        scaledItem.LowLimit = scaledItem.HighLimit = .003;
+        var point = DetailCalculator.Calculate(new(scaledItem, null, 0, 1, true, true, true, true, true), default);
+        Check(point.Bins.Single(bin => !bin.IsOutOfSpec) is { From: 3, To: 3, Count: 1 } && CountOutside(point.Bins) == 3,
+            "a scaled inclusive endpoint stays in a singleton in-spec integer bin despite conversion rounding");
 
         string textLimitsCsv = Path.Combine(folder, "visible-text-limits.csv");
         File.WriteAllLines(textLimitsCsv, new[] { "SN,X,Y,Site,SBIN,HBIN,Wafer,Measurement",
@@ -316,7 +352,7 @@ static class Probe
             var records = Enumerable.Range(0, 6).Select(i => new CsvRecord { Id = "r" + i, SerialNumber = (6 - i).ToString(), WaferId = i % 2 == 0 ? "W2" : "W1", Site = i % 3 == 0 ? "2" : "1", X = i, Y = 0, HBin = "1", SBin = "1", Measurements = new() { ["a"] = (i + 1).ToString(), ["b"] = (i + 2).ToString() } }).ToList();
             var data = DatasetService.Build(items, records); using var lease = new DatasetLease(records); var config = new AnalyzerConfig();
             var detail = DetailCalculator.Calculate(new(items[0], null, 0, config.BinCount, config.IncludeOutOfLimitData, config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma), default);
-            histogram.Apply(detail.Bins, 1, 3, detail.Mean, detail.Sigma, config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, "");
+            histogram.Apply(detail.Bins, 1, 3, detail.Mean, detail.Sigma, config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, "", view: View(detail, "HistogramView"));
             scatter.SetSeries(ScatterSeries.BuildSorted(items[0].Values, 1, 3, ScatterOrder.SerialNumber, trackChips: true), 1, 3, "");
             histogram.Title = scatter.Title = "125_D_SNR_B_Min_1"; Pump();
             Point At(double x, double y) => new((double)Call(scatter, "MapX", x)!, (double)Call(scatter, "MapY", y)!);
@@ -413,7 +449,7 @@ static class Probe
             {
                 string previewTitle = previewSize.Width < 400 ? "125_D_SNR_B_Min_1_with_a_long_test_name_for_small_plots" : "125_D_SNR_B_Min_1";
                 var previewHistogram = new HistogramControl { Width = previewSize.Width, Height = previewSize.Height, Title = previewTitle };
-                previewHistogram.Apply(detail.Bins, 1, 3, detail.Mean, detail.Sigma, true, true, true, true, "");
+                previewHistogram.Apply(detail.Bins, 1, 3, detail.Mean, detail.Sigma, true, true, true, true, "", view: View(detail, "HistogramView"));
                 var previewScatter = new ScatterPlotControl { Width = previewSize.Width, Height = previewSize.Height, Title = previewTitle };
                 previewScatter.SetSeries(detail.Scatter, 1, 3, "");
                 foreach (var preview in new CachedPlotControl[] { previewHistogram, previewScatter })

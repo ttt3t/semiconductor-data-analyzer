@@ -936,7 +936,7 @@ public partial class MainWindow : Window
         !_isBusy && !_closing && _currentItem != null && ReferenceEquals(_currentItem, _displayedItem) &&
         _displayedHistogramMode == _binMode && _displayedWafer == _currentWafer &&
         _displayedSite == (_combineSites || _currentSite == TestItemSummary.CombinedSite ? null : _currentSite) &&
-        Histogram.Bins is { Count: > 0 };
+        Histogram.View.HasValue;
 
     private bool UpdateHistogramRange(double scale, double centerOffset)
     {
@@ -1087,7 +1087,7 @@ public partial class MainWindow : Window
                 Histogram.Apply(result.Bins, request.Item.DisplayLowLimit, request.Item.DisplayHighLimit,
                     result.Mean, result.Sigma, request.ShowLsl, request.ShowUsl, request.ShowMean,
                     request.ShowThreeSigma, request.Item.ShownUnit,
-                    lslText, uslText, showOverflow: !result.IsHistogramRangeAdjusted);
+                    lslText, uslText, view: result.HistogramView);
             if (!ReferenceEquals(_displayedScatter, result.Scatter))
                 ScatterPlot.SetSeries(result.Scatter, request.Item.DisplayLowLimit, request.Item.DisplayHighLimit, request.Item.ShownUnit);
             ScatterPlot.ShowConnections = _config.ScatterShowConnections;

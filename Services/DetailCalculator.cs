@@ -11,11 +11,11 @@ public sealed record DetailResult(StatisticsResult Statistics, List<HistogramBin
     double Mean, double Sigma, ScatterSeries Scatter)
 {
     internal (double From, double To)? RawHistogramRange { get; init; }
-    internal bool IsHistogramRangeAdjusted { get; init; }
+    internal HistogramView? HistogramView { get; init; }
 }
 
 internal sealed record PreparedDetail(IReadOnlyList<TestValue> Values, StatisticsResult Statistics, ScatterSeries Scatter,
-    double? IntegerBinFactor);
+    HistogramIntegerLimits? IntegerLimits);
 
 public static class DetailCalculator
 {
@@ -47,10 +47,11 @@ public static class DetailCalculator
         var statistics = StatisticsService.Calculate(values, item.LowLimit, item.HighLimit);
         token.ThrowIfCancellationRequested();
         double factor = item.DisplayFactor;
-        double? integerBinFactor = factor > 0 && double.IsFinite(factor) && HistogramService.HasIntegerValues(values, factor, token)
-            ? factor : null;
+        var integerLimits = factor > 0 && double.IsFinite(factor)
+            ? HistogramService.FindIntegerLimits(values, factor, item.LowLimit, item.HighLimit, token)
+            : null;
         var scatter = ScatterSeries.BuildSorted(values, item.LowLimit, item.HighLimit, request.ScatterOrder, token, request.WaferOrder, trackChips: true);
-        return new(values, statistics, scatter.Scale(factor), integerBinFactor);
+        return new(values, statistics, scatter.Scale(factor), integerLimits);
     }
 
     internal static DetailResult CreateHistogram(DetailRequest request, PreparedDetail prepared, CancellationToken token)
@@ -60,21 +61,20 @@ public static class DetailCalculator
         var values = prepared.Values;
         var statistics = prepared.Statistics;
         double mean = statistics.Mean, sigma = statistics.StdDev;
-        List<HistogramBin> bins;
-        if (request.BinMode == 2)
-            bins = HistogramService.CreateMeanCenteredBins(values, item.LowLimit, item.HighLimit,
-                request.IncludeOutOfLimit, out mean, out sigma, request.BinCount, token, prepared.IntegerBinFactor);
-        else if (UsesSpecZones(request))
-            bins = HistogramService.CreateSpecZoneBins(values, item.LowLimit!.Value, item.HighLimit!.Value,
-                request.IncludeOutOfLimit, request.BinCount, token, prepared.IntegerBinFactor);
-        else
-            bins = HistogramService.CreateFixedBins(values, request.BinCount, item.LowLimit,
-                item.HighLimit, request.IncludeOutOfLimit, token, prepared.IntegerBinFactor);
-        token.ThrowIfCancellationRequested();
+        var range = request.BinMode switch
+        {
+            2 => HistogramService.MedianRange(values, token, out mean, out sigma),
+            1 when UsesSpecZones(request) => HistogramService.SpecRange(item.LowLimit!.Value, item.HighLimit!.Value),
+            _ => HistogramService.FixedRange(values, item.LowLimit, item.HighLimit, request.IncludeOutOfLimit, token)
+        };
         double factor = item.DisplayFactor;
-        var rawRange = bins.Count == 0 ? ((double, double)?)null : (bins[0].From, bins[^1].To);
-        ScaleBins(bins, factor, prepared.IntegerBinFactor.HasValue);
-        return new(statistics, bins, mean * factor, sigma * factor, prepared.Scatter) { RawHistogramRange = rawRange };
+        var distribution = HistogramService.CreateRangeBins(values, request.BinCount, range.From, range.To,
+            item.LowLimit, item.HighLimit, request.IncludeOutOfLimit, prepared.IntegerLimits, factor, token);
+        return new(statistics, distribution.Bins, mean * factor, sigma * factor, prepared.Scatter)
+        {
+            RawHistogramRange = distribution.View.HasValue ? range : null,
+            HistogramView = distribution.View
+        };
     }
 
     internal static DetailResult ApplyHistogramRange(DetailRequest request, PreparedDetail prepared, DetailResult original,
@@ -89,27 +89,15 @@ public static class DetailCalculator
         double center = range.From + span / 2 + span * offset;
         double radius = span / 2 * scale;
         var item = request.Item;
-        var bins = HistogramService.CreateRangeBins(prepared.Values, request.BinCount, center - radius, center + radius,
-            item.LowLimit, item.HighLimit, request.IncludeOutOfLimit, UsesSpecZones(request), false, token, prepared.IntegerBinFactor);
-        if (bins.Count == 0) return original;
-        ScaleBins(bins, item.DisplayFactor, prepared.IntegerBinFactor.HasValue);
-        return original with { Bins = bins, IsHistogramRangeAdjusted = true };
+        var distribution = HistogramService.CreateRangeBins(prepared.Values, request.BinCount, center - radius, center + radius,
+            item.LowLimit, item.HighLimit, request.IncludeOutOfLimit, prepared.IntegerLimits, item.DisplayFactor, token);
+        if (!distribution.View.HasValue) return original;
+        return original with { Bins = distribution.Bins, HistogramView = distribution.View };
     }
 
     private static bool UsesSpecZones(DetailRequest request) =>
         request.BinMode == 1 && request.Item.LowLimit is double lsl && double.IsFinite(lsl) &&
         request.Item.HighLimit is double usl && double.IsFinite(usl) && usl > lsl;
-
-    private static void ScaleBins(List<HistogramBin> bins, double factor, bool integerBins)
-    {
-        if (factor == 1) return;
-        foreach (var bin in bins)
-        {
-            bin.From *= factor;
-            bin.To *= factor;
-            if (integerBins) { bin.From = Math.Round(bin.From); bin.To = Math.Round(bin.To); }
-        }
-    }
 }
 
 /// <summary>Accessed by the single detail worker. Retains one item/scope/order and three histogram modes.</summary>

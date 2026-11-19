@@ -65,6 +65,8 @@ public class HistogramControl : CachedPlotControl
 
     private static readonly Brush InSpecBrush = Freeze(new SolidColorBrush(Color.FromRgb(70, 130, 180)));
     private static readonly Brush OutSpecBrush = Freeze(new SolidColorBrush(Color.FromRgb(220, 90, 90)));
+    private static readonly Pen InSpecPointPen = Freeze(new Pen(InSpecBrush, 3));
+    private static readonly Pen OutOfSpecPointPen = Freeze(new Pen(OutSpecBrush, 3));
     private static readonly Pen AxisPen = Freeze(new Pen(Brushes.Black, 1.2));
     private static readonly Pen GridPen = Freeze(new Pen(Freeze(new SolidColorBrush(Color.FromRgb(230, 230, 230))), 1));
     private static readonly Pen LslPen = Freeze(new Pen(Brushes.Red, 2.0));
@@ -78,12 +80,12 @@ public class HistogramControl : CachedPlotControl
     }
 
     private int _batch;
-    private bool _showOverflow = true;
     private long _renderCount;
     public string Unit { get; private set; } = "";
     private string? _lslText, _uslText;
     public string? LslText => _lslText;
     public string? UslText => _uslText;
+    internal HistogramView? View { get; private set; }
     internal Rect PlotBounds { get; private set; } = Rect.Empty;
 
     public IList<HistogramBin>? Bins
@@ -112,12 +114,12 @@ public class HistogramControl : CachedPlotControl
         bool showLsl,
         bool showUsl,
         bool showMean,
-        bool showThreeSigma, string unit = "", string? lslText = null, string? uslText = null, bool showOverflow = true)
+        bool showThreeSigma, string unit = "", string? lslText = null, string? uslText = null, HistogramView? view = null)
     {
         _batch++;
         Unit = unit ?? "";
         _lslText = lslText; _uslText = uslText;
-        _showOverflow = showOverflow;
+        View = view;
         Bins = bins;
         Lsl = lsl;
         Usl = usl;
@@ -131,7 +133,7 @@ public class HistogramControl : CachedPlotControl
         InvalidatePlot();
     }
 
-    protected override bool HasPlotContent => Bins is { Count: > 0 };
+    protected override bool HasPlotContent => View.HasValue || Bins is { Count: > 0 };
 
     protected override void OnToolTipOpening(ToolTipEventArgs e)
     {
@@ -152,17 +154,21 @@ public class HistogramControl : CachedPlotControl
         string hint = "按住左键左右拖动横轴范围，滚轮缩放，双击恢复默认范围";
         if (Bins is { Count: > 0 } bins && PlotBounds.Contains(position))
         {
-            double from = bins[0].From, to = bins[^1].To;
-            double value = from + (to - from) * ((position.X - PlotBounds.Left) / PlotBounds.Width);
-            int first = 0, last = bins.Count - 1;
-            while (first < last)
+            double from = View?.From ?? bins[0].From, to = View?.To ?? bins[^1].To;
+            double unitsPerPixel = (to - from) / PlotBounds.Width;
+            double value = from + (position.X - PlotBounds.Left) * unitsPerPixel;
+            int index = HistogramService.FindBin(bins, value);
+            HistogramBin? bin = bins.Where(b => b.Count > 0 && b.From == b.To && Math.Abs(value - b.From) <= unitsPerPixel * 3)
+                .MinBy(b => Math.Abs(value - b.From));
+            if (bin == null && index >= 0) bin = bins[index];
+            if (bin != null)
             {
-                int middle = first + (last - first) / 2;
-                if (value < bins[middle].To) last = middle;
-                else first = middle + 1;
+                string start = bin.IncludesFrom ? "[" : "(";
+                string end = bin.IncludesTo ? "]" : ")";
+                string interval = start + bin.From.ToString("G", CultureInfo.InvariantCulture) + ", " +
+                    bin.To.ToString("G", CultureInfo.InvariantCulture) + end;
+                hint = $"{interval}  ·  数量 {bin.Count}  ·  {(bin.IsOutOfSpec ? "规格外" : "规格内")}";
             }
-            var bin = bins[first];
-            hint = $"总数 {bin.Count}  ·  规格内 {bin.InSpecCount}  ·  规格外 {bin.OutOfSpecCount}";
         }
         if (!Equals(tip.Content, hint)) tip.Content = hint;
     }
@@ -174,17 +180,14 @@ public class HistogramControl : CachedPlotControl
         double w = ActualWidth, h = ActualHeight;
         dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, Math.Max(0, w), Math.Max(0, h)));
         if (w < 180 || h < 120) return;
-        var bins = Bins;
+        var bins = Bins ?? Array.Empty<HistogramBin>();
         int maxCount = 1, minPositiveCount = int.MaxValue;
-        bool integerBoundaries = true;
-        if (bins != null)
+        bool integerBoundaries = bins.Count > 0;
+        foreach (var bin in bins)
         {
-            foreach (var bin in bins)
-            {
-                maxCount = Math.Max(maxCount, bin.Count);
-                if (bin.Count > 0) minPositiveCount = Math.Min(minPositiveCount, bin.Count);
-                integerBoundaries = integerBoundaries && double.IsInteger(bin.From) && double.IsInteger(bin.To);
-            }
+            maxCount = Math.Max(maxCount, bin.Count);
+            if (bin.Count > 0) minPositiveCount = Math.Min(minPositiveCount, bin.Count);
+            integerBoundaries = integerBoundaries && double.IsInteger(bin.From) && double.IsInteger(bin.To);
         }
         bool useLogFrequency = AutoLogFrequency && maxCount > 100L * minPositiveCount;
         // At narrow widths the heading gets its own row; otherwise all top captions share a row.
@@ -194,12 +197,14 @@ public class HistogramControl : CachedPlotControl
         ChartAxis.DrawHeading(dc, this, Title, headerOffset > 0 ? ChartAxis.PlotLeft : 108,
             headerOffset > 0 ? w - ChartAxis.PlotRight : legendLeft - 10);
         string xTitle = ChartAxis.ValueTitle(Unit);
+        if (View is { } view && view.RequestedBins != bins.Count)
+            xTitle += $" · {bins.Count} 箱（设定 {view.RequestedBins}）";
         var title = ChartAxis.Text(this, xTitle);
         ChartAxis.DrawTitle(dc, this, xTitle, new Rect(Math.Max(4, (ChartAxis.PlotLeft + w - ChartAxis.PlotRight - title.Width) / 2),
             h - ChartAxis.PlotBottom + ChartAxis.AxisTitleGap, Math.Min(w - 8, title.Width + 2), 17));
-        if (bins == null || bins.Count == 0) return;
+        if (!HasPlotContent) return;
 
-        double dataMin = bins.Min(b => b.From), dataMax = bins.Max(b => b.To);
+        double dataMin = View?.From ?? bins.Min(b => b.From), dataMax = View?.To ?? bins.Max(b => b.To);
         double xSpan = dataMax - dataMin;
         if (!double.IsFinite(xSpan) || xSpan <= 0) return;
         const double left = ChartAxis.PlotLeft, right = ChartAxis.PlotRight, bottom = ChartAxis.PlotBottom;
@@ -235,7 +240,7 @@ public class HistogramControl : CachedPlotControl
         PlotBounds = new Rect(left, top, plotW, plotH);
         const double countFontSize = 10;
         var widestCount = ShowBinCounts ? ChartAxis.Text(this, maxCount.ToString(CultureInfo.InvariantCulture), countFontSize) : null;
-        double binPitch = plotW / bins.Count;
+        double binPitch = plotW / Math.Max(1, bins.Count);
         bool rotateCounts = widestCount != null && binPitch < widestCount.Width + 4;
         double countLabelHeight = widestCount == null ? 0 : rotateCounts ? widestCount.Width : widestCount.Height;
         int countLanes = rotateCounts ? (int)Math.Clamp(Math.Ceiling(widestCount!.Height / binPitch), 1, 4) : 1;
@@ -264,8 +269,9 @@ public class HistogramControl : CachedPlotControl
         var xTicks = ChartAxis.Ticks(dataMin, dataMax, Math.Max(1, (int)(plotW / 85)), integers: integerBoundaries);
         double xStep = xTicks.Count > 1 ? xTicks[1] - xTicks[0] : xSpan;
         double captionWidth = Math.Max(1, (plotW - 16) / 2);
-        var lowerCaption = ChartAxis.Text(this, _showOverflow ? "＜" + ChartAxis.Format(dataMin) : ChartAxis.Format(dataMin, xStep));
-        var upperCaption = ChartAxis.Text(this, _showOverflow ? "＞" + ChartAxis.Format(dataMax) : ChartAxis.Format(dataMax, xStep));
+        string lower = ChartAxis.Format(dataMin, xStep), upper = ChartAxis.Format(dataMax, xStep);
+        var lowerCaption = ChartAxis.Text(this, View is { Below: > 0 } leftView ? $"＜{lower} · {leftView.Below} 个" : lower);
+        var upperCaption = ChartAxis.Text(this, View is { Above: > 0 } rightView ? $"＞{upper} · {rightView.Above} 个" : upper);
         foreach (var caption in new[] { lowerCaption, upperCaption })
         {
             caption.MaxTextWidth = captionWidth;
@@ -297,15 +303,10 @@ public class HistogramControl : CachedPlotControl
         {
             if (bin.Count == 0) continue;
             double x = MapX(bin.From), width = MapX(bin.To) - x;
-            double startX = x + Math.Min(0.5, width / 4), barWidth = Math.Max(0.1, width - 1);
-            double inSpecTop = MapY(bin.InSpecCount);
-            if (bin.InSpecCount > 0)
-                dc.DrawRectangle(InSpecBrush, null, new Rect(startX, inSpecTop, barWidth, top + plotH - inSpecTop));
-            if (bin.OutOfSpecCount > 0)
-            {
-                double barTop = MapY(bin.Count);
-                dc.DrawRectangle(OutSpecBrush, null, new Rect(startX, barTop, barWidth, inSpecTop - barTop));
-            }
+            if (width <= 0) continue;
+            double gap = Math.Min(0.5, width / 4), barTop = MapY(bin.Count);
+            dc.DrawRectangle(bin.IsOutOfSpec ? OutSpecBrush : InSpecBrush, null,
+                new Rect(x + gap, barTop, width - 2 * gap, top + plotH - barTop));
         }
         void ReferenceLine(double? value, Pen pen)
         {
@@ -319,6 +320,14 @@ public class HistogramControl : CachedPlotControl
         {
             ReferenceLine(Mean - 3 * Sigma, SigmaPen);
             ReferenceLine(Mean + 3 * Sigma, SigmaPen);
+        }
+        foreach (var bin in bins)
+        {
+            if (bin.Count == 0) continue;
+            double x = MapX(bin.From);
+            if (x != MapX(bin.To)) continue;
+            dc.DrawLine(bin.IsOutOfSpec ? OutOfSpecPointPen : InSpecPointPen,
+                new Point(x, MapY(bin.Count)), new Point(x, top + plotH));
         }
         if (widestCount != null)
         {
