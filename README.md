@@ -1,6 +1,6 @@
 # Semiconductor Data Analyzer
 
-**CSV Analyzer V2.0.19 · GYF**
+**CSV Analyzer V2.0.20 · GYF**
 
 A Windows desktop application for semiconductor CSV / STDF test-data analysis, built with .NET 8 and WPF.
 
@@ -28,6 +28,11 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 - 良率明细“打开所在位置”按目录去重，每次最多请求 5 个窗口，超出部分在状态栏提示；文件存在性检查在后台进行，可取消。
 
 只启动独立分析器可使用 `SemiconductorCsvAnalyzer.exe --analyzer`。详细口径见 [使用手册](Docs/UserGuide.md)。
+
+## V2.0.20 更新
+
+- 直方图可切换数量和百分比。「设置 → 统计与绘图」可启用累计百分比折线，右轴显示 0–100%。百分比以当前横轴范围内的样本为分母。
+- 横纵轴刻度目标密度提高一倍，空间不足时自动减少刻度数字。规格内的区间柱宽至少为平均箱宽的一半，阈值线与横轴一起调整。
 
 ## V2.0.19 更新
 
@@ -171,7 +176,7 @@ Fail 芯片 XLSX 拆为“Fail 芯片”和“复测良品芯片”两个工作�
 
 ## 下载运行
 
-从 [V2.0.19 Release](https://github.com/ttt3t/semiconductor-data-analyzer/releases/tag/V2.0.19) 下载 Windows x64 单 EXE ZIP。自带运行时版解压即可运行，依赖框架版需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0)。每个 ZIP 只包含一个 `SemiconductorCsvAnalyzer.exe`。CSV 导入前请在“设置”加载或调整布局配置，STDF 可直接打开。
+从 [V2.0.20 Release](https://github.com/ttt3t/semiconductor-data-analyzer/releases/tag/V2.0.20) 下载 Windows x64 单 EXE ZIP。自带运行时版解压即可运行，依赖框架版需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0)。每个 ZIP 只包含一个 `SemiconductorCsvAnalyzer.exe`。CSV 导入前请在“设置”加载或调整布局配置，STDF 可直接打开。
 
 ## 开发与运行
 

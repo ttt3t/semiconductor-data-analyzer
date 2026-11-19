@@ -291,12 +291,13 @@ public partial class MainWindow : Window
     private void UpdateWindowTitle()
     {
         string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
-        Title = $"CSV Analyzer · V2.0.19 | 当前数据：{_currentDataName} | 配置：{configName}";
+        Title = $"CSV Analyzer · V2.0.20 | 当前数据：{_currentDataName} | 配置：{configName}";
     }
 
     private void UpdateConfigInfo()
     {
         UpdateWindowTitle();
+        Histogram.ShowCumulativePercentage = _config.ShowCumulativePercentage;
         if (_config.PreferGoodRetest) { _retestMode = RetestMode.Last; LstRetestMode.SelectedIndex = (int)RetestMode.Last; }
         LstRetestMode.IsEnabled = !_config.PreferGoodRetest;
         LstRetestMode.ToolTip = _config.PreferGoodRetest ? "良品优先已启用；在设置中取消后可选择首测或全部记录作对照。" : "默认按最新复测；可选择其他口径作对照。";
@@ -504,6 +505,7 @@ public partial class MainWindow : Window
         var histogramSize = ReportChartSize(Histogram, _histogramImageSize);
         bool histogramShowBinCounts = Histogram.ShowBinCounts;
         bool histogramAutoLogFrequency = Histogram.AutoLogFrequency;
+        bool histogramShowPercentage = Histogram.ShowPercentage;
         var scatterSize = ReportChartSize(ScatterPlot, _scatterImageSize);
         using var lease = new DatasetLease(data.Records);
         var options = new ExportDataWindow(data.Wafers, config.OutlierSigma, report: true,
@@ -518,7 +520,7 @@ public partial class MainWindow : Window
             options.HistogramMode, options.CombineSites, focused, options.ShowBinNumbers, options.ShowSiteBorders,
             options.CombineWafers, options.ScatterOrder,
             histogramSize, scatterSize,
-            options.ScatterUseLimitRange, histogramShowBinCounts, histogramAutoLogFrequency);
+            options.ScatterUseLimitRange, histogramShowBinCounts, histogramAutoLogFrequency, histogramShowPercentage);
         var exporting = IndependentOperationWindow.RunAsync("导出 XLSX 报告", async () =>
         {
             await XlsxReportService.SaveAsync(file.FileName, data, config, report, dataName);

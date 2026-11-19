@@ -179,6 +179,7 @@ public partial class SettingsWindow : Window
             ["ShowLowLimit"] = (ChkShowLowLimit.IsChecked == true).ToString(),
             ["ShowHighLimit"] = (ChkShowHighLimit.IsChecked == true).ToString(),
             ["ShowMean"] = (ChkShowMean.IsChecked == true).ToString(),
+            ["ShowCumulativePercentage"] = (ChkShowCumulativePercentage.IsChecked == true).ToString(),
             ["ShowThreeSigma"] = (ChkShowThreeSigma.IsChecked == true).ToString(),
             ["ScatterShowLowLimit"] = (ChkScatterShowLowLimit.IsChecked == true).ToString(),
             ["ScatterShowHighLimit"] = (ChkScatterShowHighLimit.IsChecked == true).ToString(),
@@ -250,6 +251,7 @@ public partial class SettingsWindow : Window
             ChkShowHighLimit.IsChecked = config.ShowHighLimit;
             ChkShowMean.IsChecked = config.ShowMean;
             ChkShowThreeSigma.IsChecked = config.ShowThreeSigma;
+            ChkShowCumulativePercentage.IsChecked = config.ShowCumulativePercentage;
             ChkScatterShowLowLimit.IsChecked = config.ScatterShowLowLimit;
             ChkScatterShowHighLimit.IsChecked = config.ScatterShowHighLimit;
             ChkScatterShowMean.IsChecked = config.ScatterShowMean;

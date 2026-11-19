@@ -122,7 +122,10 @@
                             <CheckBox x:Name="ChkShowLowLimit" Content="下限 LSL" Margin="0,0,28,14" Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>
                             <CheckBox x:Name="ChkShowHighLimit" Content="上限 USL" Margin="0,0,28,14" Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>
                             <CheckBox x:Name="ChkShowMean" Content="均值" Margin="0,0,28,14" Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>
-                            <CheckBox x:Name="ChkShowThreeSigma" Content="±3σ 参考线" Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>
+                            <CheckBox x:Name="ChkShowThreeSigma" Content="±3σ 参考线" Margin="0,0,28,14" Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"/>
+                            <CheckBox x:Name="ChkShowCumulativePercentage" Content="累计百分比折线" Margin="0,0,0,14"
+                                      Checked="AnalysisControlChanged" Unchecked="AnalysisControlChanged"
+                                      ToolTip="按当前直方图视野内样本计算累计百分比，使用独立的右侧纵轴"/>
                         </WrapPanel>
                         <Border Height="1" Background="{StaticResource BorderSoft}" Margin="0,22"/>
                         <TextBlock Text="散点图" Style="{StaticResource SectionTitle}"/>

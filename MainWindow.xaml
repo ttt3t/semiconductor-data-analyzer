@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="clr-namespace:SemiconductorCsvAnalyzer.Controls"
-        Title="CSV Analyzer · V2.0.19" Height="850" Width="1440" MinWidth="900" MinHeight="680"
+        Title="CSV Analyzer · V2.0.20" Height="850" Width="1440" MinWidth="900" MinHeight="680"
         FontFamily="Microsoft YaHei UI, Segoe UI" FontSize="12"
         Background="{DynamicResource WorkspaceBackground}" Foreground="{DynamicResource TextPrimary}"
         WindowStartupLocation="CenterScreen" UseLayoutRounding="True">
@@ -729,14 +729,20 @@
                             <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
                             <ListBoxItem Content="固定等宽"/><ListBoxItem Content="规格区间"/><ListBoxItem Content="中位数中心"/>
                         </ListBox>
-                            <CheckBox x:Name="ChkHistogramCounts" Content="显示数量" VerticalAlignment="Center" Margin="9,0,3,0"
-                                      ToolTip="在柱顶显示该分箱的样本数" AutomationProperties.Name="显示每柱样本数"/>
+                            <ComboBox x:Name="CmbHistogramFrequency" SelectedIndex="0" VerticalAlignment="Center" Margin="9,0,3,0"
+                                      AutomationProperties.Name="直方图纵轴单位">
+                                <ComboBoxItem Content="数量"/>
+                                <ComboBoxItem x:Name="HistogramPercentageOption" Content="百分比"/>
+                            </ComboBox>
+                            <CheckBox x:Name="ChkHistogramCounts" Content="柱顶标注" VerticalAlignment="Center" Margin="9,0,3,0"
+                                      ToolTip="在柱顶显示每箱的数量或百分比"/>
                             <CheckBox x:Name="ChkHistogramAutoLogFrequency" Content="自动对数纵轴" IsChecked="True"
                                       VerticalAlignment="Center" Margin="9,0,3,0"
                                       ToolTip="最大非零分箱频数超过最小非零频数的 100 倍时，使用对数纵轴"/>
                         </WrapPanel>
                         </DockPanel>
                         <controls:HistogramControl x:Name="Histogram" SizeChanged="Chart_SizeChanged"
+                                                   ShowPercentage="{Binding IsSelected, ElementName=HistogramPercentageOption}"
                                                    ShowBinCounts="{Binding IsChecked, ElementName=ChkHistogramCounts}"
                                                    AutoLogFrequency="{Binding IsChecked, ElementName=ChkHistogramAutoLogFrequency}"
                                                    PreviewMouseWheel="Histogram_MouseWheel" MouseLeftButtonDown="Histogram_MouseLeftButtonDown"

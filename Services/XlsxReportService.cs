@@ -14,7 +14,7 @@ public sealed record XlsxReportOptions(IReadOnlyCollection<string> Wafers, Retes
     bool ShowBinNumbers = false, bool ShowSiteBorders = false, bool CombineWafers = true,
     ScatterOrder ScatterOrder = ScatterOrder.SerialNumber,
     ChartImageSize? HistogramSize = null, ChartImageSize? ScatterSize = null, bool ScatterUseLimitRange = false,
-    bool HistogramShowBinCounts = false, bool HistogramAutoLogFrequency = true);
+    bool HistogramShowBinCounts = false, bool HistogramAutoLogFrequency = true, bool HistogramShowPercentage = false);
 
 public static class XlsxReportService
 {
@@ -161,7 +161,8 @@ public static class XlsxReportService
                         ScatterOrder: options.ScatterOrder, WaferOrder: wafers), AnalysisOperation.Token);
                     progress.At("绘制关注项直方图", item, i);
                     var histogram = new HistogramControl { Title = item.DisplayName, ShowBinCounts = options.HistogramShowBinCounts,
-                        AutoLogFrequency = options.HistogramAutoLogFrequency };
+                        AutoLogFrequency = options.HistogramAutoLogFrequency, ShowPercentage = options.HistogramShowPercentage,
+                        ShowCumulativePercentage = config.ShowCumulativePercentage };
                     histogram.Apply(detail.Bins, item.DisplayLowLimit, item.DisplayHighLimit, detail.Mean, detail.Sigma,
                         config.ShowLowLimit, config.ShowHighLimit, config.ShowMean, config.ShowThreeSigma, item.ShownUnit,
                         item.StdfLowLimitDisplay == null ? null : combined.LslText,

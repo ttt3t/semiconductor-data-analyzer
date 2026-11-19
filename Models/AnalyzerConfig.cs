@@ -65,6 +65,7 @@ public sealed class AnalyzerConfig
     public bool ShowHighLimit { get; set; } = true;
     public bool ShowMean { get; set; } = true;
     public bool ShowThreeSigma { get; set; } = true;
+    public bool ShowCumulativePercentage { get; set; }
     public bool IncludeOutOfLimitData { get; set; } = true;
 
     // Scatter references are independent of the histogram. Legacy files keep their existing appearance.

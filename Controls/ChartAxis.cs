@@ -25,10 +25,10 @@ public static class ChartAxis
         dc.DrawLine(pen, new Point(plot.Left + 3, yEnd + 4), new Point(plot.Left, yEnd));
     }
 
-    public static IReadOnlyList<double> Ticks(double min, double max, int target, bool integers = false)
+    public static IReadOnlyList<double> Ticks(double min, double max, int target, bool integers = false, int maxTarget = 20)
     {
         if (!double.IsFinite(min) || !double.IsFinite(max) || max <= min) return Array.Empty<double>();
-        double raw = (max - min) / Math.Clamp(target, 1, 20);
+        double raw = (max - min) / Math.Clamp(target, 1, maxTarget);
         if (!double.IsFinite(raw) || raw <= 0) return Array.Empty<double>();
         double magnitude = Math.Pow(10, Math.Floor(Math.Log10(raw)));
         double residual = raw / magnitude;

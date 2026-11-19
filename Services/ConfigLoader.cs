@@ -128,6 +128,7 @@ public static class ConfigLoader
             case "SHOWHIGHLIMIT": c.ShowHighLimit = ParseBool(value); break;
             case "SHOWMEAN": c.ShowMean = ParseBool(value); break;
             case "SHOWTHREESIGMA": c.ShowThreeSigma = ParseBool(value); break;
+            case "SHOWCUMULATIVEPERCENTAGE": c.ShowCumulativePercentage = ParseBool(value); break;
             case "SCATTERSHOWLOWLIMIT": c.ScatterShowLowLimit = ParseBool(value); break;
             case "SCATTERSHOWHIGHLIMIT": c.ScatterShowHighLimit = ParseBool(value); break;
             case "SCATTERSHOWMEAN": c.ScatterShowMean = ParseBool(value); break;
@@ -294,6 +295,7 @@ public static class ConfigLoader
             ShowHighLimit={c.ShowHighLimit}
             ShowMean={c.ShowMean}
             ShowThreeSigma={c.ShowThreeSigma}
+            ShowCumulativePercentage={c.ShowCumulativePercentage}
             IncludeOutOfLimitData={c.IncludeOutOfLimitData}
 
             [Scatter]

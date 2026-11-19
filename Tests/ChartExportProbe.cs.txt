@@ -70,19 +70,84 @@ static class Probe
         Pump();
     }
 
+    static bool HasCumulativeInk(BitmapSource image)
+    {
+        var pixels = Pixels(image);
+        for (int i = 0; i < pixels.Length; i += 4)
+            if (Math.Abs(pixels[i] - 175) < 12 && Math.Abs(pixels[i + 1] - 58) < 24 &&
+                Math.Abs(pixels[i + 2] - 124) < 16) return true;
+        return false;
+    }
+
+    static IEnumerable<GlyphRunDrawing> Glyphs(Drawing root)
+    {
+        if (root is GlyphRunDrawing glyph) yield return glyph;
+        if (root is DrawingGroup group)
+            foreach (var child in group.Children)
+                foreach (var run in Glyphs(child))
+                    yield return run;
+    }
+
+    static void CheckHistogramAxes()
+    {
+        var chart = new HistogramControl { AutoLogFrequency = false, Title = "Axis fixture" };
+        var bins = Enumerable.Range(0, 8).Select(i => new HistogramBin
+            { From = 10 * i, To = 10 * (i + 1), Count = 125 }).ToList();
+        chart.Apply(bins, null, null, null, null, false, false, false, false);
+        Rect Plot() => (Rect)typeof(HistogramControl).GetProperty("PlotBounds", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(chart)!;
+        void Resize(double width, double height)
+        {
+            chart.Measure(new Size(width, height));
+            chart.Arrange(new Rect(0, 0, width, height));
+            chart.UpdateLayout();
+            Pump();
+        }
+        Rect[] Labels(Func<GlyphRunDrawing, bool> where) =>
+            Glyphs(VisualTreeHelper.GetDrawing(chart)).Where(where).Select(run => run.Bounds).ToArray();
+        bool Spaced(Rect[] labels) => labels.SelectMany((bounds, i) => labels.Skip(i + 1)
+            .Select(next => !bounds.IntersectsWith(next))).All(separate => separate);
+
+        Resize(800, 340);
+        var plot = Plot();
+        Check(Labels(run => run.GlyphRun.BaselineOrigin.Y > plot.Bottom + 8 &&
+                            run.GlyphRun.BaselineOrigin.Y < plot.Bottom + 21).Length >= 14 &&
+            Labels(run => run.Bounds.Right < plot.Left && run.GlyphRun.BaselineOrigin.Y > plot.Top).Length >= 12,
+            "normal-size charts draw denser numeric labels along both axes");
+
+        chart.ShowPercentage = true;
+        chart.ShowCumulativePercentage = true;
+        foreach (var size in new[] { new Size(970, 112), new Size(176, 420) })
+        {
+            Resize(size.Width, size.Height);
+            plot = Plot();
+            var x = Labels(run => run.GlyphRun.BaselineOrigin.Y > plot.Bottom + 8 &&
+                                 run.GlyphRun.BaselineOrigin.Y < plot.Bottom + 21);
+            var left = Labels(run => run.Bounds.Right < plot.Left && run.GlyphRun.BaselineOrigin.Y > plot.Top);
+            var right = Labels(run => run.Bounds.Left > plot.Right && run.GlyphRun.BaselineOrigin.Y > plot.Top);
+            Check(!plot.IsEmpty && x.Length >= 2 && left.Length >= 2 && right.Length >= 2 &&
+                Spaced(x) && Spaced(left) && Spaced(right),
+                "tick labels remain separate at " + size);
+        }
+    }
+
     static void CheckHistogram(MainWindow main, HistogramControl histogram, string folder)
     {
         var legacy = ConfigLoader.Parse("[Histogram]\nBinCount=47");
-        Check(Enumerable.Range(0, 3).Select(legacy.HistogramBinCount).SequenceEqual(new[] { 47, 150, 80 }),
-            "legacy INI preserves fixed bins and both original mode defaults");
+        Check(Enumerable.Range(0, 3).Select(legacy.HistogramBinCount).SequenceEqual(new[] { 47, 150, 80 }) &&
+            !legacy.ShowCumulativePercentage, "legacy INI preserves bin defaults and leaves the cumulative line off");
         var settings = new SettingsWindow(legacy, _ => { });
         ((TextBox)settings.FindName("TxtBinCount")).Text = "40";
         ((TextBox)settings.FindName("TxtSpecZoneBinCount")).Text = "17";
         ((TextBox)settings.FindName("TxtMedianBinCount")).Text = "13";
+        ((CheckBox)settings.FindName("ChkShowCumulativePercentage")).IsChecked = true;
         var config = ConfigLoader.Parse(ConfigLoader.Serialize((AnalyzerConfig)Call(settings, "ReadConfig")!));
         settings.Close();
         Check(Enumerable.Range(0, 3).Select(config.HistogramBinCount).SequenceEqual(new[] { 40, 17, 13 }),
             "each mode can be edited independently in settings and survives INI round-trip");
+
+        Check(config.ShowCumulativePercentage, "the cumulative line setting survives INI round-trip");
+        config.ShowCumulativePercentage = false;
 
         var samples = Enumerable.Range(-50, 101).Select(value => new TestValue { Value = value }).ToArray();
         var spec = HistogramService.CreateSpecZoneBins(samples, -20, 20, false, config.SpecZoneBinCount);
@@ -246,15 +311,54 @@ static class Probe
             hint.Contains("数量 3") && hint.Contains("规格内"),
             "threshold-separated bins use a single color and report the exact interval and count");
 
+        var frequency = (ComboBox)main.FindName("CmbHistogramFrequency");
+        frequency.SelectedIndex = 1;
+        Pump();
+        var percentage = ChartImage.Capture(histogram, size);
+        Check(histogram.ShowPercentage && !Pixels(percentage).SequenceEqual(barPixels),
+            "the toolbar renders percentage instead of quantity");
+        plot = PlotBounds();
+        Call(histogram, "UpdateFrequencyToolTip", PlotCenter(plot));
+        Check(((ToolTip)histogram.ToolTip).Content.ToString()!.Contains("60%"),
+            "tooltip percentage uses the current visible total");
+        histogram.ShowCumulativePercentage = true;
+        Pump();
+        Check(HasCumulativeInk(ChartImage.Capture(histogram, size)) && !HasCumulativeInk(percentage),
+            "the optional cumulative line uses its own axis in percentage mode");
+        frequency.SelectedIndex = 0;
+        Pump();
+        Check(!histogram.ShowPercentage && HasCumulativeInk(ChartImage.Capture(histogram, size)),
+            "the cumulative line works independently in quantity mode");
+        histogram.ShowCumulativePercentage = false;
+
+        var narrowSamples = new[] { 0, 4.999, 5, 5.001, 10 }.Select(value => new TestValue { Value = value }).ToArray();
+        var narrowBins = HistogramService.CreateFixedBins(narrowSamples, 1, 4.999, 5.001, true);
+        histogram.Apply(narrowBins, 4.999, 5.001, null, null, true, true, false, false);
+        Pump();
+        plot = PlotBounds();
+        var scale = Field(histogram, "_horizontalScale")!;
+        double Map(double value) => (double)Call(scale, "Map", value)!;
+        double middleWidth = Map(5.001) - Map(4.999);
+        Call(histogram, "UpdateFrequencyToolTip", new Point(Map(5), plot.Top + plot.Height / 2));
+        Check(Math.Abs(middleWidth - plot.Width / 6) < 1e-8 &&
+            Map(0) == plot.Left && Map(10) == plot.Right &&
+            ((ToolTip)histogram.ToolTip).Content.ToString()!.Contains("[4.999, 5.001]"),
+            "a narrow in-spec bar uses half the average slot width between the two mapped limits");
+        CheckHistogramAxes();
+
         var data = (CsvParseResult)Field(main, "_data")!;
         string report = Path.Combine(folder, "histogram-mode.xlsx");
-        Wait(XlsxReportService.SaveAsync(report, data, config,
+        var reportConfig = ConfigLoader.Parse(ConfigLoader.Serialize(config));
+        reportConfig.ShowCumulativePercentage = true;
+        Wait(XlsxReportService.SaveAsync(report, data, reportConfig,
             new(data.Wafers, RetestMode.All, null, 1, true, new[] { data.Items[0].Id },
-                HistogramSize: new(590, 230), ScatterSize: new(590, 230), HistogramShowBinCounts: true), "histogram-test"));
+                HistogramSize: new(590, 230), ScatterSize: new(590, 230), HistogramShowBinCounts: true,
+                HistogramShowPercentage: true), "histogram-test"));
         using var book = new XLWorkbook(report);
         var sheet = book.Worksheet("关注测项");
         Check(sheet.Pictures.Count() == 2 && sheet.CellsUsed().Any(cell => cell.GetString().Contains("规格区间（17 箱）")),
             "XLSX report generates its histogram using the selected mode and bin count");
+        Check(HasCumulativeInk(Png(sheet.Pictures.First().ImageStream)), "XLSX embeds the cumulative line when enabled");
 
         string integerCsv = Path.Combine(folder, "integer-histogram.csv");
         File.WriteAllLines(integerCsv, new[] { "SN,X,Y,Site,SBIN,HBIN,Wafer,Measurement", "LSL,,,,,,,1.5", "USL,,,,,,,3" }
