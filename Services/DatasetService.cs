@@ -107,6 +107,13 @@ public static partial class DatasetService
     public static bool TryValue(ReadOnlySpan<char> text, out double value) =>
         double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value) && double.IsFinite(value);
 
+    internal static (double? Number, string? Text) ParseLimit(string field)
+    {
+        string text = field.Trim();
+        if (text.Length == 0) return (null, null);
+        return TryValue(text, out double value) ? (value, null) : (null, text);
+    }
+
     public static CsvParseResult Build(List<TestItemData> items, List<CsvRecord> records)
     {
         AnalysisOperation.CheckCancellation();
@@ -424,6 +431,8 @@ public static partial class DatasetService
                     target.LowLimit = source.LowLimit * factor; target.HighLimit = source.HighLimit * factor;
                     target.StdfLowLimitDisplay = source.StdfLowLimitDisplay?.ConvertUnits(factor);
                     target.StdfHighLimitDisplay = source.StdfHighLimitDisplay?.ConvertUnits(factor);
+                    target.NonNumericLowLimitText = source.NonNumericLowLimitText;
+                    target.NonNumericHighLimitText = source.NonNumericHighLimitText;
                 }
             }
             else
@@ -650,6 +659,7 @@ public static partial class DatasetService
         UnitMergeNumber = item.UnitMergeNumber, UnitMergeSlot = item.UnitMergeSlot, UnitMergeDisplayName = item.UnitMergeDisplayName,
         IsStdfMeasurement = item.IsStdfMeasurement, DisplayFactor = item.DisplayFactor, DisplayUnit = item.DisplayUnit,
         StdfLowLimitDisplay = item.StdfLowLimitDisplay, StdfHighLimitDisplay = item.StdfHighLimitDisplay,
-        LowLimit = item.LowLimit, HighLimit = item.HighLimit
+        LowLimit = item.LowLimit, HighLimit = item.HighLimit,
+        NonNumericLowLimitText = item.NonNumericLowLimitText, NonNumericHighLimitText = item.NonNumericHighLimitText
     };
 }

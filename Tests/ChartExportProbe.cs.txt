@@ -263,6 +263,22 @@ static class Probe
         Check(scaled.Bins.Count == 2 && scaled.Bins.All(bin => double.IsInteger(bin.From) && double.IsInteger(bin.To)) &&
             scaled.Bins.Sum(bin => bin.OutOfSpecCount) == 2,
             "display-unit conversion yields exact integer boundaries while the source limits classify each sample");
+
+        string textLimitsCsv = Path.Combine(folder, "visible-text-limits.csv");
+        File.WriteAllLines(textLimitsCsv, new[] { "SN,X,Y,Site,SBIN,HBIN,Wafer,Measurement",
+            "LSL,,,,,,,Inf", "USL,,,,,,,3", "A1,0,0,1,1,1,W1,1", "A2,1,0,1,2,2,W1,4" });
+        Wait((Task)Call(main, "OpenSelectedFilesAsync", (object)new[] { textLimitsCsv })!);
+        var visible = ((DataGrid)main.FindName("DgTestItems")).Items.OfType<TestItemSummary>().Single();
+        Check(visible.LslText == "Inf" && visible.Data.LowLimit == null && visible.Fails == 1,
+            "the analyzer displays the source limit text and applies only the finite side");
+        var textLimits = (CsvParseResult)Field(main, "_data")!;
+        string textReport = Path.Combine(folder, "visible-text-limits.xlsx");
+        Wait(XlsxReportService.SaveAsync(textReport, textLimits, config,
+            new(textLimits.Wafers, RetestMode.All, null, 0, true, Array.Empty<string>()), "text-limit-test"));
+        using var textBook = new XLWorkbook(textReport);
+        var summarySheet = textBook.Worksheet("Testitem Yield");
+        Check(summarySheet.Cell(8, 10).GetString() == "Inf" && summarySheet.Cell(8, 11).GetDouble() == 3 &&
+            summarySheet.Cell(8, 13).GetDouble() == 1, "XLSX report shows the disabled text bound next to a numeric one-sided bound");
     }
 
     [STAThread] static int Main(string[] args)

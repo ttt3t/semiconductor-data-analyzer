@@ -21,9 +21,9 @@ static class Probe
         LowLimit = value, HighLimit = value * 10, DisplayFactor = factor,
         StdfLowLimitDisplay = new(value, format, scale), StdfHighLimitDisplay = new(value * 10, format, scale)
     };
-    static string Fixture(string folder, bool mpr = false)
+    static string Fixture(string folder, bool mpr = false, bool nonFinite = false)
     {
-        string path = Path.Combine(folder, mpr ? "array.stdf" : "limits.stdf");
+        string path = Path.Combine(folder, (nonFinite ? "nonfinite-" : "") + (mpr ? "array.stdf" : "limits.stdf"));
         using var writer = new BinaryWriter(File.Create(path));
         void C(BinaryWriter w, string value) { byte[] bytes = Encoding.ASCII.GetBytes(value); w.Write((byte)bytes.Length); w.Write(bytes); }
         void R(byte type, byte subtype, Action<BinaryWriter> body)
@@ -32,17 +32,18 @@ static class Probe
             using (var w = new BinaryWriter(buffer, Encoding.ASCII, true)) body(w);
             writer.Write((ushort)buffer.Length); writer.Write(type); writer.Write(subtype); writer.Write(buffer.ToArray());
         }
-        void Test(uint number, string lowFormat, string highFormat, byte parm = 0xc0, bool inherit = false, string unit = "A")
+        void Test(uint number, string lowFormat, string highFormat, byte parm = 0xc0, bool inherit = false, string unit = "A",
+            float lower = .1f, float upper = .8f, float? measured = null, byte options = 0)
             => R(15, mpr ? (byte)15 : (byte)10, w =>
             {
                 w.Write(number); w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write(parm);
-                float result = unit == "V" ? .4f : number == 400 ? .1f : .01f;
+                float result = measured ?? (unit == "V" ? .4f : number == 400 ? .1f : .01f);
                 if (mpr) { w.Write((ushort)2); w.Write((ushort)2); w.Write((byte)0); w.Write(result); w.Write(unit == "V" ? .4f : .04f); }
                 else w.Write(result);
                 C(w, "Current" + number); C(w, "");
                 if (inherit) return;
-                w.Write((byte)0); w.Write((sbyte)3); w.Write((sbyte)3); w.Write((sbyte)3);
-                w.Write(.1f); w.Write(.8f);
+                w.Write(options); w.Write((sbyte)3); w.Write((sbyte)3); w.Write((sbyte)3);
+                w.Write(lower); w.Write(upper);
                 if (mpr) { w.Write(0f); w.Write(1f); w.Write((ushort)1); w.Write((ushort)2); }
                 C(w, unit); if (mpr) C(w, "V");
                 C(w, "%g"); C(w, lowFormat); C(w, highFormat);
@@ -56,11 +57,22 @@ static class Probe
         for (int chip = 0; chip < 2; chip++)
         {
             R(5, 10, w => { w.Write((byte)1); w.Write((byte)1); });
-            Test(100, chip == 0 ? "" : "%.3f", ""); // Formatting alone must not split a test.
-            Test(200, "%.1f", "%.2f", inherit: chip == 1);
-            Test(300, "%.0f", "%.1e");
-            Test(400, "", "", parm: 0); // Strict boundaries remain one double ULP inside.
-            Test(500, "%.1f", "%.2f", unit: "V");
+            if (nonFinite)
+            {
+                Test(100, "", "%.3g", lower: float.PositiveInfinity, upper: .5f, measured: chip == 0 ? .2f : .6f);
+                Test(200, "", "", inherit: chip == 1, upper: float.NegativeInfinity, measured: chip == 0 ? .05f : .2f);
+                Test(300, "", "", lower: float.NaN, upper: float.PositiveInfinity);
+                Test(400, "", "", parm: 0, upper: float.NaN);
+                Test(500, "", "", lower: float.NaN, upper: float.PositiveInfinity, options: 0xc0);
+            }
+            else
+            {
+                Test(100, chip == 0 ? "" : "%.3f", ""); // Formatting alone must not split a test.
+                Test(200, "%.1f", "%.2f", inherit: chip == 1);
+                Test(300, "%.0f", "%.1e");
+                Test(400, "", "", parm: 0); // Strict boundaries remain one double ULP inside.
+                Test(500, "%.1f", "%.2f", unit: "V");
+            }
             R(5, 20, w =>
             {
                 w.Write((byte)1); w.Write((byte)1); w.Write((byte)0); w.Write((ushort)5); w.Write((ushort)5); w.Write((ushort)5);
@@ -163,6 +175,118 @@ static class Probe
         var filtered = DatasetService.SelectRetests(newer, RetestMode.Last).Items.Single();
         Check(filtered.StdfLowLimitDisplay == target.StdfLowLimitDisplay, "derived snapshots retain immutable display metadata");
     }
+
+    static void NonFiniteStdf(string folder, bool mpr)
+    {
+        var data = DataFileService.Parse(Fixture(folder, mpr, nonFinite: true), Config);
+        TestItemData Test(string number) => data.Items.First(item => item.BaseTestNumber == number);
+        TestItemSummary Summary(TestItemData item) => SummaryService.Build(new[] { item }, new[] { "1" }, true, Config).Single();
+        var lower = Test("100");
+        var upper = Test("200");
+        var neither = Test("300");
+        var strict = Test("400");
+        Check(data.Items.Count == (mpr ? 10 : 5) && data.Records.Count == 2 &&
+            data.Items.All(item => item.Values.Count == 2 && item.Errors.Count == 0), "non-finite limit fields retain the complete test records: " + mpr);
+        Check(lower.LowLimit == null && lower.HighLimit == .5 && Text(lower) == "Inf" && Summary(lower).Fails == 1,
+            "positive infinity lower field displays while the finite upper field is enforced: " + mpr);
+        Check(upper.LowLimit == (double).1f && upper.HighLimit == null && Text(upper, true) == "-Inf" && Summary(upper).Fails == 1,
+            "negative infinity upper field is inherited and the finite lower field is enforced: " + mpr);
+        Check(neither.LowLimit == null && neither.HighLimit == null && Text(neither) == "NaN" && Text(neither, true) == "Inf" &&
+            Summary(neither).Fails == 0, "both non-finite fields stay visible without imposing a numeric bound: " + mpr);
+        Check(strict.LowLimit == Math.BitIncrement((double).1f) && strict.HighLimit == null && Text(strict, true) == "NaN" &&
+            Summary(strict).Fails == 2, "the finite side retains the strict STDF equality rule: " + mpr);
+        Check(Text(Test("500")) == "-" && Text(Test("500"), true) == "-", "explicit STDF no-limit flags still ignore filler fields: " + mpr);
+
+        string csv = Path.Combine(folder, $"special-stdf-{mpr}.csv");
+        IntegratedCsvService.Save(csv, data);
+        var restored = IntegratedCsvService.Load(csv).Items.First(item => item.BaseTestNumber == "100");
+        Check(Text(restored) == "Inf" && restored.HighLimit == lower.DisplayHighLimit,
+            "exported integrated CSV retains the non-finite text and the finite comparison limit: " + mpr);
+    }
+
+    static void TextLimitsAndBatch(string folder)
+    {
+        var config = new AnalyzerConfig { TestItemRow = 1, LowLimitRow = 2, HighLimitRow = 3, UnitRow = 4,
+            DataStartRow = 5, TestItemStartColumn = 8, SBinColumn = 5, HBinColumn = 6, WaferColumn = 7 };
+        const string header = "SN,X,Y,Site,SBIN,HBIN,Wafer,Current,Voltage,Both,Absent";
+        var raw = new[] { header, "LSL,,,,,,,iNF,20,NaN,", "USL,,,,,,,100,-Inf,N/A,Not specified",
+            "Unit,,,,,,,mA,mA,mA,A", "S3,2,0,1,1,1,W2,10,10,10,0.01", "S4,3,0,1,2,2,W2,200,200,200,0.20" };
+        string current = Path.Combine(folder, "text-limits.csv");
+        File.WriteAllLines(current, raw);
+        var parsed = DataFileService.Parse(current, config);
+        var summaries = SummaryService.Build(parsed.Items, new[] { "1" }, true, config);
+        Check(summaries[0].LslText == "iNF" && summaries[0].LslPresentation.ReportValue == null &&
+            parsed.Items[0].HighLimit == 100 && summaries[0].Fails == 1 &&
+            summaries[1].UslText == "-Inf" && summaries[1].Fails == 1,
+            "CSV text is shown verbatim and only the finite side filters observations");
+        Check(summaries[2].LslText == "NaN" && summaries[2].UslText == "N/A" && summaries[2].Fails == 0 &&
+            summaries[3].LslText == "-" && summaries[3].UslText == "Not specified", "CSV distinguishes absent and explicit text limits");
+        var histogram = HistogramService.CreateFixedBins(parsed.Items[0].Values, 1, parsed.Items[0].LowLimit, parsed.Items[0].HighLimit, true).Single();
+        Check(histogram.InSpecCount == 1 && histogram.OutOfSpecCount == 1 && summaries[0].Cpk.HasValue,
+            "histogram and capability statistics use the same one-sided numeric rule");
+
+        string workbookPath = Path.Combine(folder, "text-limits.xlsx");
+        using (var book = new XLWorkbook())
+        {
+            var sheet = book.AddWorksheet("Data");
+            for (int row = 0; row < raw.Length; row++)
+            {
+                string[] cells = raw[row].Split(',');
+                for (int column = 0; column < cells.Length; column++)
+                    if (cells[column].Length > 0) sheet.Cell(row + 1, column + 1).Value = cells[column];
+            }
+            book.SaveAs(workbookPath);
+        }
+        var office = DataFileService.Parse(workbookPath, config, worksheet: "Data");
+        Check(Text(office.Items[0]) == "iNF" && Text(office.Items[1], true) == "-Inf" && office.Items[0].HighLimit == 100,
+            "native XLSX worksheets share the non-numeric threshold handling");
+
+        string previous = Path.Combine(folder, "numeric-limits.csv");
+        File.WriteAllLines(previous, new[] { header, "LSL,,,,,,,0.02,0.02,0.02,0.02", "USL,,,,,,,0.18,0.18,0.18,0.18",
+            "Unit,,,,,,,A,A,A,A", "S1,0,0,1,1,1,W1,0.01,0.01,0.01,0.01", "S2,1,0,1,2,2,W1,0.20,0.20,0.20,0.20" });
+        CsvParseResult Batch(string path, bool newer, string? worksheet = null) => DatasetService.LoadSources(new CsvImportSource[]
+        {
+            new(previous), new(path, new(false, "", false, newer), Worksheet: worksheet)
+        }, config);
+        var newLimits = Batch(workbookPath, true, "Data");
+        var oldLimits = Batch(current, false);
+        var item = newLimits.Items[0];
+        var mergedSummary = SummaryService.Build(new[] { item }, new[] { "1" }, true, config).Single();
+        Check(newLimits.Items.Count == 4 && item.Unit == "A" && item.LowLimit == null && Text(item) == "iNF" && item.HighLimit == .1 &&
+            mergedSummary.Count == 4 && mergedSummary.Fails == 2 && newLimits.Items[1].LowLimit == .02 &&
+            Text(newLimits.Items[1], true) == "-Inf", "batch open with new limits carries text through unit conversion and uses the valid side");
+        Check(oldLimits.Items[0].LowLimit == .02 && oldLimits.Items[0].HighLimit == .18 &&
+            Text(oldLimits.Items[0]) == "0.020000" && oldLimits.Items[0].Values.Count == 4,
+            "batch open keeping old limits preserves the old thresholds together with all merged measurements");
+        var snapshot = DatasetService.SelectRetests(newLimits, RetestMode.Last);
+        Check(Text(snapshot.Items[0]) == "iNF" && snapshot.Items[0].HighLimit == .1,
+            "derived analysis views retain non-numeric limit text");
+        string integrated = Path.Combine(folder, "text-merged.csv");
+        IntegratedCsvService.Save(integrated, newLimits);
+        var restored = IntegratedCsvService.Load(integrated);
+        Check(Text(restored.Items[0]) == "iNF" && restored.Items[0].HighLimit == .1 &&
+            Text(restored.Items[2], true) == "N/A", "integrated CSV carries numeric and text bounds across save and reopen");
+
+        string xlsx = Path.Combine(folder, "text-fail.xlsx");
+        FailChipXlsxService.Save(xlsx, parsed, config, parsed.Wafers, RetestMode.All);
+        using var exported = new XLWorkbook(xlsx);
+        var failures = exported.Worksheet(1);
+        Check(failures.Cell("M4").GetString() == "iNF" && failures.Cell("M5").GetDouble() == 100 &&
+            failures.Cell("N5").GetString() == "-Inf", "fail-chip XLSX writes text limits as text and keeps valid limits numeric");
+
+        string mixedCsv = Path.Combine(folder, "for-stdf-batch.csv");
+        File.WriteAllLines(mixedCsv, new[] { "SN,X,Y,Site,SBIN,HBIN,Wafer,Current100", "LSL,,,,,,,100",
+            "USL,,,,,,,900", "Unit,,,,,,,mA", "CSV1,0,0,1,1,1,W1,25", "CSV2,1,0,1,2,2,W1,600" });
+        var mixed = DatasetService.LoadSources(new CsvImportSource[]
+        {
+            new(mixedCsv), new(Fixture(folder, nonFinite: true), new(false, "", false, true))
+        }, config);
+        var mixedItem = mixed.Items.Single(i => i.DisplayName == "Current100");
+        var mixedSummary = SummaryService.Build(new[] { mixedItem }, new[] { "1" }, true, config).Single();
+        Check(mixedItem.LowLimit == null && mixedItem.HighLimit == 500 && Text(mixedItem) == "Inf" &&
+            mixedSummary.Count == 4 && mixedSummary.Fails == 2,
+            "a mixed CSV and STDF batch merges the measurements and adopts the one-sided STDF rule in the target unit");
+    }
     static int Main(string[] args)
     {
         try
@@ -170,7 +294,8 @@ static class Probe
             CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
             string folder = args[0]; Directory.CreateDirectory(folder);
             Formatting(); ParserAndExport(folder, false); ParserAndExport(folder, true); Merge();
-            Console.WriteLine($"PASS {checks} STDF limit display checks"); return 0;
+            NonFiniteStdf(folder, false); NonFiniteStdf(folder, true); TextLimitsAndBatch(folder);
+            Console.WriteLine($"PASS {checks} limit display and comparison checks"); return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
     }

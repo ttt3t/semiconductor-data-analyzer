@@ -282,7 +282,9 @@ public static class XlsxReportService
     {
         var item = summary.Data;
         object?[] values = { focused ? "✓" : "", item.TestNumber, item.DisplayName, summary.Site, summary.Wafer, item.SBin, item.HBin, item.ShownUnit,
-            summary.LslPresentation.ReportValue, summary.UslPresentation.ReportValue, summary.Count, summary.Fails, summary.Eorr, summary.SiteSigma,
+            (object?)summary.LslPresentation.ReportValue ?? item.NonNumericLowLimitText,
+            (object?)summary.UslPresentation.ReportValue ?? item.NonNumericHighLimitText,
+            summary.Count, summary.Fails, summary.Eorr, summary.SiteSigma,
             summary.Count > 0 ? summary.Mean : null, summary.Max, summary.Min, summary.Median, summary.Count > 0 ? summary.Sigma : null,
             summary.RobustMean, summary.RobustSigma, summary.Cpk, summary.Count > 0 ? summary.InSpecPercent / 100 : null };
         for (int i = 0; i < values.Length; i++) Value(sheet.Cell(row, i + 2), values[i]);

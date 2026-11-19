@@ -18,7 +18,9 @@ public sealed class SimulationRuleRow : INotifyPropertyChanged
     public string Unit { get; init; } = "";
     public double? OriginalLower { get; init; }
     public double? OriginalUpper { get; init; }
-    public string OriginalLimits => $"{Number(OriginalLower)} ～ {Number(OriginalUpper)}";
+    internal string? OriginalLowerText { get; init; }
+    internal string? OriginalUpperText { get; init; }
+    public string OriginalLimits => $"{OriginalLowerText ?? Number(OriginalLower)} ～ {OriginalUpperText ?? Number(OriginalUpper)}";
     public string Recommendation { get; set; } = "";
     public int GoodViolations { get; set; }
     public int BadViolations { get; set; }

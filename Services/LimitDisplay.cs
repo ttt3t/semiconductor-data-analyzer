@@ -15,7 +15,8 @@ public static class LimitDisplay
     {
         culture ??= CultureInfo.CurrentCulture;
         double? boundary = upper ? item.DisplayHighLimit : item.DisplayLowLimit;
-        if (boundary is not double actual || !double.IsFinite(actual)) return new("-", null, null);
+        if (boundary is not double actual || !double.IsFinite(actual))
+            return new((upper ? item.NonNumericHighLimitText : item.NonNumericLowLimitText) ?? "-", null, null);
         var metadata = upper ? item.StdfHighLimitDisplay : item.StdfLowLimitDisplay;
         // A mixed-source merge can retain STDF samples but adopt CSV thresholds.
         // Follow the origin of this limit, rather than the origin of the samples.

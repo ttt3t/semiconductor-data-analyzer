@@ -27,6 +27,8 @@ public sealed class TestItemData
     public double? DisplayHighLimit => HighLimit * DisplayFactor;
     public double? LowLimit { get; set; }
     public double? HighLimit { get; set; }
+    internal string? NonNumericLowLimitText { get; set; }
+    internal string? NonNumericHighLimitText { get; set; }
     public TestValueColumn Values { get; } = new();
     public List<CsvRecord> Errors { get; } = new();
 }

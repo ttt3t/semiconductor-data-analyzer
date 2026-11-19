@@ -138,10 +138,11 @@ public static class FailChipXlsxService
                     WriteRow(IdentityHeaders.Concat(data.Items.Select(i => i.DisplayName)).Select(s => T(s, 5)));
                     void Metadata(string label, Func<TestItemData, int, (string, double?, uint)> value) => WriteRow(
                         new[] { T(label, 6) }.Concat(Enumerable.Repeat(T("", 6), IdentityHeaders.Length - 1)).Concat(data.Items.Select(value)));
-                    (string, double?, uint) LimitCell(LimitPresentation p) => ("", p.ReportValue,
+                    (string, double?, uint) LimitCell(LimitPresentation p, string? text) => (text ?? "", p.ReportValue,
                         p.ExcelFormat is string format ? limitStyles[format] : 6u);
                     Metadata("#TestNumber", (i, _) => T(i.TestNumber, 6)); Metadata("#Unit", (i, _) => T(i.ShownUnit, 6));
-                    Metadata("#LSL", (_, index) => LimitCell(lowLimits[index])); Metadata("#USL", (_, index) => LimitCell(highLimits[index]));
+                    Metadata("#LSL", (i, index) => LimitCell(lowLimits[index], i.NonNumericLowLimitText));
+                    Metadata("#USL", (i, index) => LimitCell(highLimits[index], i.NonNumericHighLimitText));
                     Metadata("#SBIN", (i, _) => T(i.SBin, 6)); Metadata("#HBIN", (i, _) => T(i.HBin, 6));
                     int chipIndex = 0, failIndex = 0, goodIndex = 0;
                     foreach (var chip in sheetChips)

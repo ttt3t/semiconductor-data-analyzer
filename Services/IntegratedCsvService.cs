@@ -150,8 +150,8 @@ public static class IntegratedCsvService
                     .Concat(sourceSerial ? SourceSerialHeaders : Array.Empty<string>())
                     .Concat(ftIdentity ? UuidHeaders.Concat(UuidEncodingHeader) : Array.Empty<string>()).Concat(items.Select(i => i.Name)));
                 Metadata("#TestNumber", i => i.TestNumber);
-                Metadata("#LSL", i => Number(i.DisplayLowLimit));
-                Metadata("#USL", i => Number(i.DisplayHighLimit));
+                Metadata("#LSL", i => LimitText(i.DisplayLowLimit, i.NonNumericLowLimitText));
+                Metadata("#USL", i => LimitText(i.DisplayHighLimit, i.NonNumericHighLimitText));
                 Metadata("#Unit", i => i.ShownUnit);
                 Metadata("#SBIN", i => i.SBin);
                 Metadata("#HBIN", i => i.HBin);
@@ -289,12 +289,16 @@ public static class IntegratedCsvService
         var numbers = Metadata("#TestNumber"); var lsl = Metadata("#LSL"); var usl = Metadata("#USL");
         var units = Metadata("#Unit"); var sbin = Metadata("#SBIN"); var hbin = Metadata("#HBIN"); var names = Metadata("#DisplayName");
         var mergeDefinitions = extended ? Metadata("#UnitMerge") : null;
-        double? Limit(string text) => text.Length == 0 ? null : DatasetService.TryValue(text, out double value)
-            ? value : throw new InvalidDataException("整合 CSV 的阈值不是有效数字。");
-        var items = Enumerable.Range(identityCount, header.Length - identityCount).Select(c => new TestItemData
+        var items = Enumerable.Range(identityCount, header.Length - identityCount).Select(c =>
         {
-            ColumnIndex = c, Name = header[c], DisplayName = names[c], TestNumber = numbers[c],
-            LowLimit = Limit(lsl[c]), HighLimit = Limit(usl[c]), Unit = units[c], SBin = sbin[c], HBin = hbin[c]
+            var lower = DatasetService.ParseLimit(lsl[c]);
+            var upper = DatasetService.ParseLimit(usl[c]);
+            return new TestItemData
+            {
+                ColumnIndex = c, Name = header[c], DisplayName = names[c], TestNumber = numbers[c],
+                LowLimit = lower.Number, HighLimit = upper.Number, Unit = units[c], SBin = sbin[c], HBin = hbin[c],
+                NonNumericLowLimitText = lower.Text, NonNumericHighLimitText = upper.Text
+            };
         }).ToList();
         if (mergeDefinitions != null)
             for (int i = 0; i < items.Count; i++) UnitConversion.ReadMerge(items[i], mergeDefinitions[identityCount + i]);
@@ -346,7 +350,7 @@ public static class IntegratedCsvService
         catch { rawStore?.Dispose(); throw; }
     }
 
-    private static string Number(double? value) => value?.ToString("R", CultureInfo.InvariantCulture) ?? "";
+    private static string LimitText(double? value, string? text) => value?.ToString("R", CultureInfo.InvariantCulture) ?? text ?? "";
     private static string Escape(string value) => value.IndexOfAny(new[] { ',', '"', '\r', '\n' }) >= 0
         ? "\"" + value.Replace("\"", "\"\"") + "\"" : value;
 }

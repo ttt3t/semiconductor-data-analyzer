@@ -167,11 +167,19 @@ public static class StdfParser
                     combined.Add(identity, target);
                 }
                 foreach (var (limits, item) in family.Variants)
+                {
                     if (target.Variants.TryAdd(limits, item))
                     {
                         item.ColumnIndex = Items.Count;
                         Items.Add(item);
                     }
+                    else
+                    {
+                        var retained = target.Variants[limits];
+                        retained.NonNumericLowLimitText ??= item.NonNumericLowLimitText;
+                        retained.NonNumericHighLimitText ??= item.NonNumericHighLimitText;
+                    }
+                }
                 Families[key] = target;
             }
             // When the same TEST_NUM means different tests on different sites, keep
@@ -207,11 +215,23 @@ public static class StdfParser
                 if (!discovering) throw new InvalidDataException("STDF 两次读取的测试阈值不一致。");
                 item = new TestItemData { ColumnIndex = Items.Count, TestNumber = key.Test.Number.ToString(CultureInfo.InvariantCulture), StdfChannel = key.Channel,
                     Unit = limits.Unit, LowLimit = limits.Lower, HighLimit = limits.Upper, IsStdfMeasurement = true,
-                    StdfLowLimitDisplay = limits.LowerDisplay, StdfHighLimitDisplay = limits.UpperDisplay };
+                    StdfLowLimitDisplay = limits.Lower.HasValue ? limits.LowerDisplay : null,
+                    StdfHighLimitDisplay = limits.Upper.HasValue ? limits.UpperDisplay : null };
                 family.Variants.Add(limits, item); Items.Add(item);
+            }
+            if (discovering)
+            {
+                item.NonNumericLowLimitText ??= NonNumericLimitText(limits.LowerDisplay);
+                item.NonNumericHighLimitText ??= NonNumericLimitText(limits.UpperDisplay);
             }
             hasMultipleVariants = family.Variants.Count > 1;
             return item;
+        }
+
+        private static string? NonNumericLimitText(StdfLimitDisplay? display)
+        {
+            if (display?.Value is not double value || double.IsFinite(value)) return null;
+            return double.IsNaN(value) ? "NaN" : value < 0 ? "-Inf" : "Inf";
         }
 
         public void FinishNames()
@@ -606,7 +626,6 @@ public static class StdfParser
         {
             if (optional.HasValue && (optional.Value & (1 << noneBit)) != 0) return null;
             if (!optional.HasValue || (optional.Value & (1 << invalidBit)) != 0 || value == null) return fallback;
-            if (!float.IsFinite(value.Value)) throw new InvalidDataException("有效上下限不是有限数值。");
             return value.Value;
         }
 
@@ -614,7 +633,8 @@ public static class StdfParser
         {
             // The common pipeline uses inclusive comparisons. One double ULP maps
             // STDF's strict boundary to that convention without changing any R*4 value.
-            double? low = data.Lower, high = data.Upper;
+            double? low = data.Lower is double lower && double.IsFinite(lower) ? lower : null;
+            double? high = data.Upper is double upper && double.IsFinite(upper) ? upper : null;
             if (low.HasValue && (parm & 0x40) == 0) low = Math.BitIncrement(low.Value);
             if (high.HasValue && (parm & 0x80) == 0) high = Math.BitDecrement(high.Value);
             if (low > high) throw new InvalidDataException("测试上下限及边界包含标志定义了空区间。");

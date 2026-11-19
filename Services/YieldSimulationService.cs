@@ -34,7 +34,8 @@ public static class YieldSimulationService
                 : "证据不足，需人工确认";
             if (readout) advice += "；名称疑似 debug/读值项，建议核查（未自动关闭）";
             rows.Add(new() { Item = i, Name = item.DisplayName, Unit = item.Unit, OriginalLower = item.LowLimit,
-                OriginalUpper = item.HighLimit, Included = limits, Enabled = true,
+                OriginalUpper = item.HighLimit, OriginalLowerText = item.NonNumericLowLimitText,
+                OriginalUpperText = item.NonNumericHighLimitText, Included = limits, Enabled = true,
                 Lower = SimulationRuleRow.Number(item.LowLimit), Upper = SimulationRuleRow.Number(item.HighLimit),
                 Stage = (i + 1).ToString(), Recommendation = advice, GoodViolations = goodFail, BadViolations = badFail,
                 TestCount = tested, OriginalYield = limits && tested > 0 ? (double)(tested - fail) / tested : null });

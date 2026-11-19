@@ -143,6 +143,8 @@ public static class CsvParser
                 nameCount[name] = 0;
             nameCount[name]++;
             string displayName = nameCount[name] > 1 ? $"{col + 1}_{name}" : name;
+            var lower = DatasetService.ParseLimit(GetCell(lowRow, col));
+            var upper = DatasetService.ParseLimit(GetCell(highRow, col));
 
             items.Add(new TestItemData
             {
@@ -153,8 +155,8 @@ public static class CsvParser
                 SBin = GetCell(sbinHeaderRow, col).Trim(),
                 HBin = GetCell(hbinHeaderRow, col).Trim(),
                 Unit = GetCell(unitRow, col).Trim(),
-                LowLimit = ParseDoubleOrNull(GetCell(lowRow, col)),
-                HighLimit = ParseDoubleOrNull(GetCell(highRow, col))
+                LowLimit = lower.Number, HighLimit = upper.Number,
+                NonNumericLowLimitText = lower.Text, NonNumericHighLimitText = upper.Text
             });
         }
 
@@ -376,17 +378,6 @@ public static class CsvParser
             }
         }
         result.Add(sb.Length == 0 ? "" : sb.ToString());
-    }
-
-    private static bool TryParseDouble(string s, out double value)
-    {
-        return DatasetService.TryValue(s, out value);
-    }
-
-    private static double? ParseDoubleOrNull(string s)
-    {
-        if (string.IsNullOrWhiteSpace(s)) return null;
-        return TryParseDouble(s, out double v) ? v : null;
     }
 
     private static int? ParseIntOrNull(string s)
