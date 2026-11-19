@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -53,17 +54,86 @@ static class Probe
             Check(((FrameworkElement)toggle.Template.FindName("Dash", toggle)).Visibility == Visibility.Visible, "small disabled checkbox retains its checklist dash at row width " + width);
         }
     }
-    static void Checklist(MainWindow main, DataGrid grid, string key, string? selected)
+    static ColumnValueFilterPopup OpenChecklist(MainWindow main, DataGrid grid, string key)
     {
         var column = Column(grid, key); Call(main, "OpenValueFilter", (FrameworkElement)column.Header, column, key); Pump();
-        var popup = (ColumnValueFilterPopup)Field(main, "_valueFilterPopup")!;
+        return (ColumnValueFilterPopup)Field(main, "_valueFilterPopup")!;
+    }
+    static IEnumerable<ColumnValueFilterPopup.Choice> Choices(ColumnValueFilterPopup popup) =>
+        ((IEnumerable)Field(popup, "_choices")!).Cast<ColumnValueFilterPopup.Choice>();
+    static TextBox ChecklistSearch(ColumnValueFilterPopup popup) => (TextBox)popup.FindName("SearchBox");
+    static void Click(ColumnValueFilterPopup popup, string handler) => Call(popup, handler, popup, new RoutedEventArgs());
+    static void Checklist(MainWindow main, DataGrid grid, string key, string? selected)
+    {
+        var popup = OpenChecklist(main, grid, key);
         if (selected == null) Call(popup, "Clear_Click", popup, new RoutedEventArgs());
         else
         {
-            foreach (var choice in ((IEnumerable)Field(popup, "_choices")!).Cast<ColumnValueFilterPopup.Choice>()) choice.IsChecked = choice.Value == selected;
-            Call(popup, "Apply_Click", popup, new RoutedEventArgs());
+            foreach (var choice in Choices(popup)) choice.IsChecked = choice.Value == selected;
+            Click(popup, "Apply_Click");
         }
         Refresh(main);
+    }
+    static void CheckAnalysisChecklistSearch(MainWindow main, DataGrid grid)
+    {
+        var popup = OpenChecklist(main, grid, "TestNumber");
+        ChecklistSearch(popup).Text = " 2 ";
+        Click(popup, "Apply_Click"); Refresh(main);
+        Check(grid.Items.Cast<TestItemSummary>().Select(s => s.TestNumber).Order().SequenceEqual(new[] { "102", "201" }),
+            "applying immediately uses the latest search and ignores previously checked hidden values");
+
+        popup = OpenChecklist(main, grid, "TestNumber");
+        ChecklistSearch(popup).Text = "2";
+        Click(popup, "DeselectVisible_Click");
+        Choices(popup).Single(choice => choice.Value == "201").IsChecked = true;
+        Click(popup, "Apply_Click"); Refresh(main);
+        Check(grid.Items.Cast<TestItemSummary>().Select(s => s.TestNumber).SequenceEqual(new[] { "201" }),
+            "applying search results keeps only the matching choices that remain checked");
+
+        popup = OpenChecklist(main, grid, "TestNumber");
+        ChecklistSearch(popup).Text = "102";
+        ChecklistSearch(popup).Clear();
+        Click(popup, "Apply_Click"); Refresh(main);
+        Check(grid.Items.Cast<TestItemSummary>().Select(s => s.TestNumber).SequenceEqual(new[] { "201" }),
+            "clearing the search restores the candidate list and preserves its check marks");
+        Checklist(main, grid, "TestNumber", null);
+    }
+
+    public sealed record ChecklistRow(string Value);
+
+    static void CheckManagementChecklistSearch(FrameworkElement target)
+    {
+        var grid = new DataGrid { AutoGenerateColumns = false };
+        var column = new DataGridTextColumn { Header = "编号", Binding = new Binding(nameof(ChecklistRow.Value)) };
+        grid.Columns.Add(column);
+        using var filter = new ManagementGridFilter(grid, new DataTemplate());
+        filter.SetItems(Enumerable.Range(0, 100).Select(i => new ChecklistRow(i.ToString())));
+        var state = ManagementGridFilter.GetState(column)!;
+        ColumnValueFilterPopup Open()
+        {
+            Call(filter, "OpenValueFilter", target, column, state); Pump();
+            return (ColumnValueFilterPopup)Field(filter, "_popup")!;
+        }
+        void RefreshView() { Call(filter, "Tick", null, EventArgs.Empty); Pump(); }
+
+        var popup = Open();
+        ChecklistSearch(popup).Text = "2";
+        Click(popup, "SelectVisible_Click");
+        Click(popup, "Apply_Click"); RefreshView();
+        Check(grid.Items.Count == 19 && grid.Items.Cast<ChecklistRow>().All(row => row.Value.Contains('2')),
+            "selecting and applying search results in a 100-value management column keeps exactly the 19 matches");
+        popup = Open();
+        Check(Choices(popup).Count(choice => choice.IsChecked) == 19,
+            "the reopened management checklist restores only the matching values that were applied");
+        ChecklistSearch(popup).Text = "never matches";
+        Click(popup, "Cancel_Click"); RefreshView();
+        Check(grid.Items.Count == 19, "canceling a changed popup preserves the applied filter");
+        popup = Open();
+        ChecklistSearch(popup).Text = "never matches";
+        Click(popup, "Apply_Click"); RefreshView();
+        Check(grid.Items.Count == 0, "applying a search with no matches yields an empty filtered table");
+        Click(Open(), "Clear_Click"); RefreshView();
+        Check(grid.Items.Count == 100, "clearing the management checklist restores all 100 values");
     }
     [STAThread] static int Main(string[] args)
     {
@@ -85,6 +155,8 @@ static class Probe
             var grid = (DataGrid)main.FindName("DgTestItems"); Refresh(main);
             CheckHeaderLayout(main);
             Check(grid.Items.Count == 5 && grid.Columns.Count == 24 && grid.Columns.All(c => Toggle(grid, Header<TextBox>((Panel)c.Header).Single().Tag.ToString()!).IsChecked == false), "all 24 columns start unchecked, including focus");
+            CheckAnalysisChecklistSearch(main, grid);
+            CheckManagementChecklistSearch(grid);
             var summaries = grid.Items.Cast<TestItemSummary>().ToArray();
             summaries[0].Data.DisplayName = "prefix MAIN middle TEST suffix";
             summaries[1].Data.DisplayName = "TEST before MAIN";

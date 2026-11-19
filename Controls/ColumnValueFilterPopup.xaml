@@ -8,10 +8,10 @@
             <StackPanel DockPanel.Dock="Top">
                 <TextBlock x:Name="TxtTitle" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Margin="0,0,0,8"/>
                 <TextBox x:Name="SearchBox" TextChanged="Search_Changed" Padding="4" Margin="0,0,0,8"
-                         ToolTip="搜索候选值；搜索不会改变已勾选的值"/>
+                         ToolTip="输入关键字筛选候选值。应用时只保留当前搜索结果中勾选的值。"/>
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                     <Button Content="全选搜索结果" Click="SelectVisible_Click" Padding="7,3"/>
-                    <Button Content="取消搜索结果" Click="DeselectVisible_Click" Padding="7,3" Margin="6,0,0,0"/>
+                    <Button Content="取消勾选搜索结果" Click="DeselectVisible_Click" Padding="7,3" Margin="6,0,0,0"/>
                 </StackPanel>
             </StackPanel>
             <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">

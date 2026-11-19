@@ -40,7 +40,7 @@ public partial class ColumnValueFilterPopup : Popup
             .OrderBy(s => s, StringComparer.OrdinalIgnoreCase).Select(s => new Choice(s, selected == null || selected.Contains(s))).ToList();
         _view = new ListCollectionView(_choices);
         _searchTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(120) };
-        _searchTimer.Tick += (_, _) => { _searchTimer.Stop(); RefreshSearch(); };
+        _searchTimer.Tick += (_, _) => RefreshSearch();
         InitializeComponent();
         TxtTitle.Text = "筛选：" + title;
         ValuesGrid.ItemsSource = _view;
@@ -66,6 +66,7 @@ public partial class ColumnValueFilterPopup : Popup
 
     private void RefreshSearch()
     {
+        _searchTimer.Stop();
         string search = SearchBox.Text.Trim();
         _view.Filter = search.Length == 0 ? null : o => o is Choice c && c.Label.Contains(search, StringComparison.OrdinalIgnoreCase);
         TxtCount.Text = $"显示 {_view.Count} / {_choices.Count} 个值；{_filterHint}";
@@ -73,7 +74,6 @@ public partial class ColumnValueFilterPopup : Popup
 
     private void SetVisible(bool selected)
     {
-        _searchTimer.Stop();
         RefreshSearch();
         foreach (Choice choice in _view) choice.IsChecked = selected;
     }
@@ -83,7 +83,8 @@ public partial class ColumnValueFilterPopup : Popup
     private void Clear_Click(object sender, RoutedEventArgs e) { _apply?.Invoke(null); IsOpen = false; }
     private void Apply_Click(object sender, RoutedEventArgs e)
     {
-        var selected = _choices.Where(c => c.IsChecked).Select(c => c.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        RefreshSearch();
+        var selected = _view.Cast<Choice>().Where(c => c.IsChecked).Select(c => c.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
         _apply?.Invoke(selected.Count == _choices.Count ? null : selected);
         IsOpen = false;
     }
