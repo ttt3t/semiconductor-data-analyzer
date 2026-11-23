@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using SemiconductorCsvAnalyzer.Models;
 using SemiconductorCsvAnalyzer.Services;
@@ -19,12 +20,13 @@ public sealed class SampleFilterWindow : Window
     }
     private readonly List<RangeRow> _rows;
     private readonly DataGrid _grid;
+    private readonly ListBox _sBinList;
     private readonly ComboBox _picker;
     private readonly Button _add;
     private readonly RadioButton _union;
     private readonly TextBlock _note;
     private IReadOnlyList<TestItemData> _sourceItems;
-    private readonly Func<IReadOnlyList<SampleRange>, SampleMatchMode, Task>? _apply;
+    private readonly Func<IReadOnlyList<SampleRange>, SampleMatchMode, IReadOnlyList<string>, Task>? _apply;
     private bool _applying;
     private RetestMode _mode;
     private int _removedConditions;
@@ -33,7 +35,9 @@ public sealed class SampleFilterWindow : Window
     public SampleMatchMode MatchMode => _union.IsChecked == true ? SampleMatchMode.Union : SampleMatchMode.Intersection;
 
     public SampleFilterWindow(IReadOnlyList<TestItemData> items, IReadOnlyList<SampleRange> rules, RetestMode mode,
-        SampleMatchMode match = SampleMatchMode.Intersection, Func<IReadOnlyList<SampleRange>, SampleMatchMode, Task>? apply = null)
+        SampleMatchMode match = SampleMatchMode.Intersection,
+        Func<IReadOnlyList<SampleRange>, SampleMatchMode, IReadOnlyList<string>, Task>? apply = null,
+        IReadOnlyList<string>? sBins = null, IReadOnlyList<string>? selectedSBins = null)
     {
         _sourceItems = items; _apply = apply; _mode = mode;
         items = items.Where(i => i.Focus.IsFocused).ToArray();
@@ -45,14 +49,18 @@ public sealed class SampleFilterWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = System.Windows.Media.Brushes.White;
         var root = new DockPanel { Margin = new Thickness(18) }; Content = root;
-        _note = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) };
-        DockPanel.SetDock(_note, Dock.Top); root.Children.Add(_note);
         var footer = new StackPanel(); DockPanel.SetDock(footer, Dock.Bottom); root.Children.Add(footer); footer.Children.Add(_error);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right }; footer.Children.Add(actions);
         Button Button(string text, Action action) { var b = new Button { Content = text, Padding = new Thickness(14, 6, 14, 6), Margin = new Thickness(5, 6, 0, 0) }; b.Click += (_, _) => action(); return b; }
-        actions.Children.Add(Button("取消数据筛选", () => _ = SubmitAsync(Array.Empty<SampleRange>())));
+        actions.Children.Add(Button("取消数据筛选", () => _ = SubmitAsync(Array.Empty<SampleRange>(), Array.Empty<string>())));
         actions.Children.Add(Button("应用", Apply)); actions.Children.Add(Button("关闭", Close));
-        var choose = new DockPanel { Margin = new Thickness(0, 0, 0, 10) }; DockPanel.SetDock(choose, Dock.Top); root.Children.Add(choose);
+        var tabs = new TabControl();
+        root.Children.Add(tabs);
+        var rangesPanel = new DockPanel { Margin = new Thickness(12) };
+        tabs.Items.Add(new TabItem { Header = "测项范围", Content = rangesPanel });
+        _note = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) };
+        DockPanel.SetDock(_note, Dock.Top); rangesPanel.Children.Add(_note);
+        var choose = new DockPanel { Margin = new Thickness(0, 0, 0, 10) }; DockPanel.SetDock(choose, Dock.Top); rangesPanel.Children.Add(choose);
         _picker = new ComboBox { IsEditable = true, IsTextSearchEnabled = true, DisplayMemberPath = "Name", ItemsSource = items.Select(i => new RangeRow { Item = i }).ToArray(), MaxDropDownHeight = 320, MinWidth = 280, VerticalContentAlignment = VerticalAlignment.Center, IsEnabled = items.Count > 0 };
         _add = Button("添加条件", () => { if (_picker.SelectedItem is RangeRow row && !_rows!.Any(r => r.Item.Id == row.Item.Id)) { CommitRows(); _rows!.Add(new RangeRow { Item = row.Item }); _grid!.Items.Refresh(); } });
         _add.IsEnabled = items.Count > 0;
@@ -60,7 +68,7 @@ public sealed class SampleFilterWindow : Window
         var remove = Button("移除选中", () => { if (_grid!.SelectedItem is RangeRow row) { CommitRows(); _rows!.Remove(row); _grid.Items.Refresh(); } });
         DockPanel.SetDock(remove, Dock.Right); choose.Children.Add(remove); choose.Children.Add(_picker);
         var modes = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
-        DockPanel.SetDock(modes, Dock.Top); root.Children.Add(modes);
+        DockPanel.SetDock(modes, Dock.Top); rangesPanel.Children.Add(modes);
         modes.Children.Add(new TextBlock { Text = "测项条件：", VerticalAlignment = VerticalAlignment.Center });
         var intersection = new RadioButton { Content = "交集（全部满足）", GroupName = "FilterMatch", Margin = new Thickness(8, 0, 18, 0), IsChecked = match == SampleMatchMode.Intersection };
         _union = new RadioButton { Content = "并集（任一满足）", GroupName = "FilterMatch", IsChecked = match == SampleMatchMode.Union };
@@ -74,7 +82,29 @@ public sealed class SampleFilterWindow : Window
         _grid.Columns.Add(new DataGridTextColumn { Header = "Test Item", Binding = new Binding("Name"), IsReadOnly = true, Width = new DataGridLength(1, DataGridLengthUnitType.Star) });
         _grid.Columns.Add(new DataGridTextColumn { Header = "小于等于 ≤", Binding = new Binding("Maximum"), Width = 150 });
         _grid.Columns.Add(new DataGridTextColumn { Header = "大于等于 ≥", Binding = new Binding("Minimum"), Width = 150 });
-        root.Children.Add(_grid);
+        rangesPanel.Children.Add(_grid);
+
+        var binsPanel = new DockPanel { Margin = new Thickness(12) };
+        tabs.Items.Add(new TabItem { Header = "SBIN", Content = binsPanel });
+        var binsNote = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10),
+            Text = sBins is { Count: > 0 }
+                ? "勾选要保留的 SBIN，可同时选多项。全部不勾选时保留所有 SBIN。先按 SBIN 保留记录，再按当前复测口径和测项范围筛选。"
+                : "当前数据没有可筛选的 SBIN。" };
+        DockPanel.SetDock(binsNote, Dock.Top); binsPanel.Children.Add(binsNote);
+        var checkBox = new FrameworkElementFactory(typeof(CheckBox));
+        checkBox.SetValue(FrameworkElement.MarginProperty, new Thickness(4, 3, 4, 3));
+        checkBox.SetBinding(ContentControl.ContentProperty, new Binding());
+        checkBox.SetBinding(ToggleButton.IsCheckedProperty, new Binding(nameof(ListBoxItem.IsSelected))
+        {
+            RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(ListBoxItem), 1),
+            Mode = BindingMode.TwoWay
+        });
+        _sBinList = new ListBox { SelectionMode = SelectionMode.Multiple, ItemsSource = sBins ?? Array.Empty<string>(),
+            ItemTemplate = new DataTemplate { VisualTree = checkBox } };
+        if (selectedSBins != null)
+            foreach (string bin in selectedSBins) _sBinList.SelectedItems.Add(bin);
+        binsPanel.Children.Add(_sBinList);
+        tabs.SelectedIndex = 0;
         UpdateNote();
         Activated += (_, _) => RefreshChoices();
         Closing += (_, e) => { if (_applying) e.Cancel = true; };
@@ -100,7 +130,7 @@ public sealed class SampleFilterWindow : Window
     private void RefreshChoices()
     {
         if (_applying) return;
-        _grid.CommitEdit(DataGridEditingUnit.Cell, true); _grid.CommitEdit(DataGridEditingUnit.Row, true);
+        CommitRows();
         var focused = _sourceItems.Where(i => i.Focus.IsFocused).ToArray();
         string? selected = (_picker.SelectedItem as RangeRow)?.Item.Id;
         _picker.ItemsSource = focused.Select(i => new RangeRow { Item = i }).ToArray();
@@ -117,7 +147,7 @@ public sealed class SampleFilterWindow : Window
 
     private void Apply()
     {
-        _grid.CommitEdit(DataGridEditingUnit.Cell, true); _grid.CommitEdit(DataGridEditingUnit.Row, true);
+        CommitRows();
         var rules = new List<SampleRange>();
         foreach (var row in _rows)
         {
@@ -131,19 +161,20 @@ public sealed class SampleFilterWindow : Window
             }
             catch (FormatException ex) { _error.Text = row.Item.DisplayName + "：" + ex.Message; return; }
         }
-        _ = SubmitAsync(rules);
+        _ = SubmitAsync(rules, _sBinList.SelectedItems.Cast<string>().Order(StringComparer.Ordinal).ToArray());
     }
 
-    private async Task SubmitAsync(IReadOnlyList<SampleRange> rules)
+    private async Task SubmitAsync(IReadOnlyList<SampleRange> rules, IReadOnlyList<string> sBins)
     {
         if (_applying) return;
         _applying = true; IsEnabled = false;
         try
         {
-            if (_apply != null) await _apply(rules, MatchMode);
+            if (_apply != null) await _apply(rules, MatchMode, sBins);
             Rules = rules;
-            if (rules.Count == 0) { _grid.CommitEdit(DataGridEditingUnit.Cell, true); _grid.CommitEdit(DataGridEditingUnit.Row, true); _rows.Clear(); _grid.Items.Refresh(); }
-            _error.Text = rules.Count == 0 ? "已取消数据筛选。" : "已应用，可以继续操作主窗口或修改条件。";
+            if (rules.Count == 0) { CommitRows(); _rows.Clear(); _grid.Items.Refresh(); }
+            if (sBins.Count == 0) _sBinList.UnselectAll();
+            _error.Text = rules.Count == 0 && sBins.Count == 0 ? "已取消数据筛选。" : "已应用，可以继续操作主窗口或修改条件。";
             _removedConditions = 0; UpdateNote();
         }
         catch (OperationCanceledException) { _error.Text = "已取消计算，保留原筛选。"; }

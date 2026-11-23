@@ -21,15 +21,18 @@ public partial class MainWindow
         public readonly List<(string Lot, string Wafer)> Wafers = new();
         public readonly int[] Positions = new int[records];
         public readonly HashSet<RawMeasurementStore> Stores = new();
+        public string[] SBins { get; private set; } = Array.Empty<string>();
 
         public static RunLookup Build(CsvParseResult data)
         {
             var lookup = new RunLookup(data.Records.Count, data.Items.Count);
+            var rawSBins = new HashSet<string>(StringComparer.Ordinal);
             for (int row = 0; row < data.Records.Count; row++)
             {
                 if ((row & 1023) == 0) AnalysisOperation.CheckCancellation();
                 var record = data.Records[row];
                 lookup.BySerial.TryAdd(record.SerialNumber.Trim(), row);
+                rawSBins.Add(record.SBin);
                 if (record.Measurements.RawStore is { } store) lookup.Stores.Add(store);
                 lookup.Positions[row] = -1;
                 if (record.X is not int x || record.Y is not int y) continue;
@@ -44,6 +47,8 @@ public partial class MainWindow
                 lookup.ByCoordinates[(scope.Lot, scope.Wafer, x, y)] = row;
             }
             foreach (var item in data.Items) lookup.Items[item.Id] = item;
+            lookup.SBins = rawSBins.Select(BinStatisticsService.NormalizeBin).Where(bin => bin.Length > 0)
+                .Distinct(StringComparer.Ordinal).OrderBy(NumericText.SortKey).ThenBy(bin => bin, StringComparer.Ordinal).ToArray();
             return lookup;
         }
     }

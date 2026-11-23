@@ -153,14 +153,14 @@ static class Probe
     {
         original.Items[0].Focus.IsFocused = true;
         Call(main, "SampleFilter_Click", main, new RoutedEventArgs());
-        var popup = (SampleFilterWindow)Field(main, "_sampleFilterWindow")!;
+        var popup = Application.Current.Windows.OfType<SampleFilterWindow>().Single();
         Check(popup.IsVisible && main.IsEnabled, "filter is modeless and leaves the analyzer interactive");
         var list = (DataGrid)main.FindName("DgTestItems"); list.SelectedIndex = Math.Max(0, list.Items.Count - 1); Pump();
         Check(popup.IsVisible && list.SelectedIndex >= 0, "main test selection remains available with filter open");
         string id = original.Items[0].Id, second = original.Items[1].Id;
-        Wait((Task)Call(main, "ApplySampleFiltersAsync", new[] { new SampleRange(id, 1, 2), new SampleRange(second, 2.5, null) }, SampleMatchMode.Union)!);
+        Wait((Task)Call(main, "ApplySampleFiltersAsync", new[] { new SampleRange(id, 1, 2), new SampleRange(second, 2.5, null) }, SampleMatchMode.Union, Array.Empty<string>())!);
         Check(((CsvParseResult)Field(main, "_scopeData")!).Records.Count == 3, "modeless filter applies union through the shared calculation pipeline");
-        Wait((Task)Call(main, "ApplySampleFiltersAsync", Array.Empty<SampleRange>(), SampleMatchMode.Intersection)!); popup.Close();
+        Wait((Task)Call(main, "ApplySampleFiltersAsync", Array.Empty<SampleRange>(), SampleMatchMode.Intersection, Array.Empty<string>())!); popup.Close();
         list.SelectedIndex = 0;
         var chartWait = System.Diagnostics.Stopwatch.StartNew(); while ((bool)Field(main, "_detailPending")! && chartWait.ElapsedMilliseconds < 10000) { Pump(); Thread.Sleep(5); }
         Call(main, "SetPlotView", "Histogram"); main.UpdateLayout();

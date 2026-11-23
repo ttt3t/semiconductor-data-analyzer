@@ -146,6 +146,7 @@ public partial class MainWindow : Window
             _allItems = new();
             _devices = new();
             _data = new(); _scopeData = _scopeSource = null; _sampleRanges = _scopeRanges = Array.Empty<SampleRange>(); _sampleIncludedIds = null;
+            _sampleSBins = _scopeSBins = Array.Empty<string>();
             _sources.Clear();
             _datasetLease?.Dispose(); _datasetLease = null;
             _runIndex = -1;
@@ -499,7 +500,7 @@ public partial class MainWindow : Window
         var focused = _data.Items.Where(i => i.Focus.IsFocused).Select(i => i.Id).ToArray();
         var data = ActiveData;
         var config = ConfigLoader.Parse(ConfigLoader.Serialize(_config));
-        var dataName = _currentDataName + (_sampleRanges.Count > 0 ? "（已应用数据筛选）" : "");
+        var dataName = _currentDataName + (SampleFilterCount > 0 ? "（已应用数据筛选）" : "");
         var histogramSize = ReportChartSize(Histogram, _histogramImageSize);
         bool histogramShowBinCounts = Histogram.ShowBinCounts;
         bool histogramAutoLogFrequency = Histogram.AutoLogFrequency;
@@ -572,7 +573,7 @@ public partial class MainWindow : Window
     }
 
     private sealed record PreparedAnalysis(CsvParseResult Data, List<string> Sites, List<TestItemSummary> Summaries,
-        CsvParseResult Source, CsvParseResult Scope, IReadOnlyList<SampleRange> Ranges, SampleMatchMode Match,
+        CsvParseResult Source, CsvParseResult Scope, IReadOnlyList<SampleRange> Ranges, SampleMatchMode Match, IReadOnlyList<string> SBins,
         RunLookup? NewRunLookup, HashSet<string>? IncludedIds, int RunRow);
 
     private Task<PreparedAnalysis> PrepareAnalysisAsync(CsvParseResult data, AnalyzerConfig config)
@@ -586,9 +587,12 @@ public partial class MainWindow : Window
         string definition = RetestPreference.Signature(config);
         bool combine = _combineSites;
         bool combineWafers = _combineWafers;
-        var ranges = ReferenceEquals(data, _data) ? _sampleRanges.ToArray() : Array.Empty<SampleRange>();
-        var match = ReferenceEquals(data, _data) ? _sampleMatch : SampleMatchMode.Intersection;
-        var cachedScope = ReferenceEquals(data, _scopeSource) && _scopeRetestDefinition == definition && _scopeMode == mode && _scopeMatch == match && _scopeRanges.SequenceEqual(ranges) ? _scopeData : null;
+        bool sameSource = ReferenceEquals(data, currentSource);
+        var ranges = sameSource ? _sampleRanges.ToArray() : Array.Empty<SampleRange>();
+        var match = sameSource ? _sampleMatch : SampleMatchMode.Intersection;
+        var sBins = sameSource ? _sampleSBins : Array.Empty<string>();
+        var cachedScope = ReferenceEquals(data, scopeSource) && _scopeRetestDefinition == definition && _scopeMode == mode &&
+            _scopeMatch == match && _scopeRanges.SequenceEqual(ranges) && _scopeSBins.SequenceEqual(sBins) ? _scopeData : null;
         return Task.Run(() =>
         {
             using var progress = ImportProgress.Stage(.85, .99, "计算统计");
@@ -597,7 +601,7 @@ public partial class MainWindow : Window
                 data = RetestIdentityService.Prepare(data, config);
             CsvParseResult scope, analysis;
             using (ImportProgress.Stage(.1, .3, "筛选数据"))
-                scope = ReferenceEquals(data, scopeSource) && cachedScope != null ? cachedScope : SampleFilterService.Apply(data, ranges, mode, match, config);
+                scope = ReferenceEquals(data, scopeSource) && cachedScope != null ? cachedScope : SampleFilterService.Apply(data, ranges, mode, match, config, sBins);
             using (ImportProgress.Stage(.3, .65, "整理复测记录"))
                 analysis = DatasetService.SelectRetests(scope, mode, config);
             List<string> sites;
@@ -612,7 +616,7 @@ public partial class MainWindow : Window
             {
                 var lookup = ReferenceEquals(currentSource, data) ? null : RunLookup.Build(data);
                 HashSet<string>? included = null;
-                if (ranges.Length > 0)
+                if (ranges.Length > 0 || sBins.Count > 0)
                 {
                     included = new(StringComparer.Ordinal);
                     foreach (var record in scope.Records)
@@ -624,7 +628,7 @@ public partial class MainWindow : Window
                 AnalysisOperation.CheckCancellation();
                 int row = lookup == null ? currentRun : FirstRun(data, lookup, runMode);
                 SetRunValues(summaries, data, lookup ?? currentLookup, row, included, AnalysisOperation.Token);
-                return new PreparedAnalysis(analysis, sites, summaries, data, scope, ranges, match, lookup, included, row);
+                return new PreparedAnalysis(analysis, sites, summaries, data, scope, ranges, match, sBins, lookup, included, row);
             }
         });
     }
@@ -657,8 +661,9 @@ public partial class MainWindow : Window
         _scopeData = prepared.Scope;
         _scopeSource = data; _scopeMode = _config.PreferGoodRetest ? RetestMode.Last : _retestMode; _scopeRetestDefinition = RetestPreference.Signature(_config); _scopeRanges = prepared.Ranges;
         _sampleMatch = _scopeMatch = prepared.Match;
+        _sampleSBins = _scopeSBins = prepared.SBins;
         _sampleIncludedIds = prepared.IncludedIds;
-        TxtSampleFilterAction.Text = _sampleRanges.Count == 0 ? "数据筛选" : $"数据筛选（{_sampleRanges.Count}）";
+        TxtSampleFilterAction.Text = SampleFilterCount == 0 ? "数据筛选" : $"数据筛选（{SampleFilterCount}）";
         _allItems = prepared.Data.Items;
         _devices = prepared.Scope.Devices;
         _allSites = prepared.Sites;
@@ -904,7 +909,7 @@ public partial class MainWindow : Window
         TxtBottomInfo.Text =
             $"测试项 {_allItems.Count} 个 | Site {_allSites.Count} 个 | Wafer {ActiveData.Wafers.Count} 个 | 表格 {_summaries.Count} 行 | 唯一芯片 {_devices.Count} 颗" +
             (_config.PreferGoodRetest ? " | 良品优先" : "") +
-            (_sampleRanges.Count > 0 ? $" | 筛选记录 {ActiveData.Records.Count:N0}/{_data.Records.Count:N0}" : "");
+            (SampleFilterCount > 0 ? $" | 筛选记录 {ActiveData.Records.Count:N0}/{_data.Records.Count:N0}" : "");
     }
 
     #endregion

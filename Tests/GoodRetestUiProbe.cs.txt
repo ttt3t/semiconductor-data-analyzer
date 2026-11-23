@@ -3,6 +3,8 @@ using System.IO;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Media;
 using System.Windows.Threading;
 using ClosedXML.Excel;
 using SemiconductorCsvAnalyzer;
@@ -17,6 +19,72 @@ static class Probe
     static object? Call(object target, string name, params object[] args) => target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(target, args);
     static void Pump() { var f = new DispatcherFrame(); Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => f.Continue = false)); Dispatcher.PushFrame(f); }
     static void Wait(Task task) { var w = Stopwatch.StartNew(); while (!task.IsCompleted) { Pump(); Thread.Sleep(3); if (w.Elapsed.TotalSeconds > 60) throw new TimeoutException(); } task.GetAwaiter().GetResult(); Pump(); }
+    static IEnumerable<T> Children<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T item) yield return item;
+            foreach (var nested in Children<T>(child)) yield return nested;
+        }
+    }
+    static void CheckSBinFilter(MainWindow main, DataGrid grid, CsvParseResult original)
+    {
+        SampleFilterWindow Open()
+        {
+            Call(main, "SampleFilter_Click", main, new RoutedEventArgs());
+            var window = Application.Current.Windows.OfType<SampleFilterWindow>().Single();
+            ((DockPanel)window.Content).Children.OfType<TabControl>().Single().SelectedIndex = 1;
+            window.UpdateLayout(); Pump();
+            return window;
+        }
+        void Click(SampleFilterWindow window, string content)
+        {
+            Children<Button>(window).Single(button => Equals(button.Content, content)).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            var timer = Stopwatch.StartNew();
+            while (!window.IsEnabled)
+            {
+                if (timer.Elapsed > TimeSpan.FromSeconds(30)) throw new TimeoutException("SBIN selection");
+                Pump(); Thread.Sleep(3);
+            }
+            Pump();
+        }
+        var filter = Open();
+        var choices = (ListBox)Field(filter, "_sBinList")!;
+        var checks = Children<CheckBox>(choices).ToArray();
+        Check(checks.Select(box => box.Content).SequenceEqual(new object[] { "1", "2" }) &&
+            checks.All(box => box.IsChecked == false), "SBIN tab lists loaded bin numbers and starts fully unchecked");
+        checks[0].SetCurrentValue(ToggleButton.IsCheckedProperty, true); Pump();
+        Check(choices.SelectedItems.Cast<string>().SequenceEqual(new[] { "1" }), "checkbox changes the SBIN selection");
+        checks[1].SetCurrentValue(ToggleButton.IsCheckedProperty, true); Pump();
+        Check(choices.SelectedItems.Count == 2, "multiple SBIN checkboxes can be selected together");
+        checks[1].SetCurrentValue(ToggleButton.IsCheckedProperty, false); Pump();
+        Click(filter, "应用");
+        Check(((CsvParseResult)Field(main, "_scopeData")!).Records.Single().SBin == "1" &&
+            grid.Items.OfType<TestItemSummary>().Single().Mean == 1 &&
+            ((TextBlock)main.FindName("TxtSampleFilterAction")).Text == "数据筛选（1）" &&
+            ReferenceEquals(original, Field(main, "_data")), "applying only SBIN filters the real analyzer and leaves loaded history available");
+        Call(main, "SelectRun", 1); Pump();
+        Check(grid.Items.OfType<TestItemSummary>().Single().RunValue == null, "Run Value is blank for a record excluded by SBIN");
+        var scoped = Field(main, "_scopeData");
+        Wait((Task)Call(main, "RefreshTestItemList")!);
+        Check(ReferenceEquals(scoped, Field(main, "_scopeData")), "unchanged SBIN selection reuses the cached scope");
+        filter.Close(); Pump();
+        filter = Open();
+        choices = (ListBox)Field(filter, "_sBinList")!;
+        Check(choices.SelectedItems.Cast<string>().SequenceEqual(new[] { "1" }), "reopening restores the applied SBIN checks");
+        checks = Children<CheckBox>(choices).ToArray();
+        checks[0].SetCurrentValue(ToggleButton.IsCheckedProperty, false);
+        checks[1].SetCurrentValue(ToggleButton.IsCheckedProperty, true); Pump();
+        Click(filter, "应用");
+        Check(((CsvParseResult)Field(main, "_scopeData")!).Records.Count == 2 &&
+            grid.Items.OfType<TestItemSummary>().Single().Mean == 25,
+            "changing SBIN with the same selection count replaces the cached sample scope");
+        Click(filter, "取消数据筛选");
+        Check(choices.SelectedItems.Count == 0 && ReferenceEquals(original, Field(main, "_scopeData")) &&
+            grid.Items.OfType<TestItemSummary>().Single().Mean == 25, "clearing data filters restores all records and unchecks the SBIN tab");
+        filter.Close(); Pump();
+    }
     [STAThread] static int Main(string[] args)
     {
         try
@@ -64,12 +132,13 @@ static class Probe
             var bins = MapDataService.BinPages(original, true, edited).Single().Dies;
             Check(pf.Single(d => d.X == 0).Value == 1 && bins.Single(d => d.X == 0).SBin == "1", "PF and BIN maps follow the same good record as analyzer statistics");
             var rules = new[] { new SampleRange(original.Items[0].Id, null, 10) };
-            Wait((Task)Call(main, "ApplySampleFiltersAsync", rules, SampleMatchMode.Intersection)!);
+            Wait((Task)Call(main, "ApplySampleFiltersAsync", rules, SampleMatchMode.Intersection, Array.Empty<string>())!);
             Check(((CsvParseResult)Field(main, "_scopeData")!).Records.Count == 2, "sample filter admits the chip whose preferred good record satisfies the condition");
             edited.PreferGoodRetest = false; Wait((Task)Call(main, "ApplySettings", edited)!);
             Check(((CsvParseResult)Field(main, "_scopeData")!).Records.Count == 0 && ((ListBox)main.FindName("LstRetestMode")).IsEnabled, "turning preference off invalidates cached membership and restores selectable latest mode");
-            Wait((Task)Call(main, "ApplySampleFiltersAsync", Array.Empty<SampleRange>(), SampleMatchMode.Intersection)!);
+            Wait((Task)Call(main, "ApplySampleFiltersAsync", Array.Empty<SampleRange>(), SampleMatchMode.Intersection, Array.Empty<string>())!);
             Check(grid.Items.OfType<TestItemSummary>().Single().Mean == 25 && ReferenceEquals(original, Field(main, "_data")), "removing filter restores latest statistics over unchanged loaded data");
+            CheckSBinFilter(main, grid, original);
             edited.PreferGoodRetest = true;
             string report = Path.Combine(folder, "preferred.xlsx");
             Wait(XlsxReportService.SaveAsync(report, original, edited, new(new[] { "W" }, RetestMode.Last, null, 0, true, Array.Empty<string>()), "test"));

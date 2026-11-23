@@ -40,6 +40,17 @@ static class Probe
             Check(BinStatisticsService.Build(rows, RetestMode.Last, config).PassCount == 3, "BIN statistics use the same preferred records as analyzer statistics");
             var filtered = SampleFilterService.Apply(data, new[] { new SampleRange("a", null, 10) }, RetestMode.Last, SampleMatchMode.Intersection, config);
             Check(filtered.Records.Select(r => DatasetService.ChipKey(r)).Distinct().Count() == 3, "sample filter membership uses preferred good records");
+            Check(ReferenceEquals(data, SampleFilterService.Apply(data, Array.Empty<SampleRange>(), RetestMode.Last,
+                config: config, sBins: Array.Empty<string>())), "no SBIN selection keeps the original dataset");
+            var binScope = SampleFilterService.Apply(data, Array.Empty<SampleRange>(), RetestMode.Last, config: config, sBins: new[] { "02", "4.0" });
+            Check(binScope.Records.Select(r => r.Id).SequenceEqual(new[] { "bad-later", "bad-first", "fail-old", "fail-last", "other-wafer" }) &&
+                binScope.Items[0].Values.Count == 5 && data.Records.Count == 10, "multiple normalized SBINs retain only eligible raw records");
+            var binAndRanges = SampleFilterService.Apply(data, new[] { new SampleRange("a", null, 20), new SampleRange("a", 23, null) },
+                RetestMode.Last, SampleMatchMode.Union, config, new[] { "2" });
+            Check(binAndRanges.Records.Select(r => r.Id).SequenceEqual(new[] { "bad-later", "other-wafer" }),
+                "range union runs after SBIN filtering and does not bring back another SBIN from chip history");
+            Check(SampleFilterService.Apply(data, Array.Empty<SampleRange>(), RetestMode.All, sBins: new[] { "999" }).Records.Count == 0,
+                "an SBIN selection with no records creates an empty view");
             var snapshot = SimulationSnapshot.Build(data, config, RetestMode.Last, default);
             Check(snapshot.Count == 5 && snapshot.Chips.Select(r => r.Id).Contains("good-first"), "joint yield snapshots share good-priority identities and measurements");
             var round = ConfigLoader.Parse(ConfigLoader.Serialize(config));
