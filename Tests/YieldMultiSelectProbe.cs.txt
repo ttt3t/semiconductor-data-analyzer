@@ -45,7 +45,12 @@ static class Probe
                 product.Files.Add(new() { Id = "F" + i, StageId = i == 3 ? hot.Id : cold.Id, Lot = "L" + (i == 3 ? 1 : i), FilePath = path, TestTime = new DateTime(2026, 10, 25) });
             }
             product.Snapshot = ProductYieldService.Calculate(product);
-            var store = new ProductCatalogStore(Path.Combine(folder, "catalog.json")); store.Save(new ProductCatalog { Products = new() { product } });
+            var alternate = new ManagedProduct { Name = "other-product", Flow = new() { cold }, Files = new()
+            {
+                new() { Id = "manual", StageId = cold.Id, Lot = "M", UseSpecifiedYield = true, SpecifiedPercent = 98 }
+            } };
+            var store = new ProductCatalogStore(Path.Combine(folder, "catalog.json"));
+            store.Save(new ProductCatalog { Products = new() { product, alternate } });
             var window = new ProductManagementWindow(store); window.Show(); ((TabControl)window.FindName("MainTabs")).SelectedIndex = 1; Pump();
             var grid = (DataGrid)window.FindName("DgYields");
             Check(grid.SelectionMode == DataGridSelectionMode.Extended, "yield details allow Ctrl/Shift multi-row selection");
@@ -101,6 +106,41 @@ static class Probe
             Call(window, "Standalone_Click", window, new RoutedEventArgs()); Pump();
             var independent = app.Windows.OfType<MainWindow>().ToArray();
             Check(independent.Length == 3 && independent.All(w => w.Owner == null), "standalone and managed analyzer entry points use independent top-level windows");
+            var activeProduct = (ManagedProduct)Field(window, "_product")!;
+            Until(() => Field(window, "_sourceCheck") == null);
+            var previousStatuses = files.Items.OfType<ProductManagementWindow.FileRow>().ToDictionary(r => r.File.Id, r => r.Status);
+            File.AppendAllText(activeProduct.Files[0].FilePath, "\n");
+            var sourceGate = (SemaphoreSlim)Field(window, "_sourceCheckGate")!;
+            sourceGate.Wait();
+            try
+            {
+                var filter = (TextBox)window.FindName("TxtFilter");
+                filter.Text = "L2";
+                Until(() => files.Items.Count == 1);
+                filter.Clear();
+                Until(() => files.Items.Count == 3);
+                Check(files.Items.OfType<ProductManagementWindow.FileRow>().All(r => r.Status == previousStatuses[r.File.Id]),
+                    "filtering completes with the probe gate held and uses the last verified status");
+                Call(window, "CheckSources_Click", window, new RoutedEventArgs());
+                Check(Field(window, "_sourceCheck") != null, "manual status check yields while storage is busy");
+                ((RadioButton)window.FindName("PeriodLot")).IsChecked = true;
+                Check(files.Items.Count == 3, "period change remains usable while a status check is waiting");
+            }
+            finally { sourceGate.Release(); }
+            Until(() => Field(window, "_sourceCheck") == null);
+            Check(files.Items.OfType<ProductManagementWindow.FileRow>().Single(r => r.File.Id == "F1").Status == "文件已修改，请重算",
+                "explicit recheck observes a change on disk and publishes it to the file tab");
+            sourceGate.Wait();
+            try
+            {
+                Call(window, "CheckSources_Click", window, new RoutedEventArgs());
+                ((ListBox)window.FindName("ProductList")).SelectedIndex = 1;
+            }
+            finally { sourceGate.Release(); }
+            Until(() => Field(window, "_sourceCheck") == null);
+            Check(files.Items.OfType<ProductManagementWindow.FileRow>().Single().File.Id == "manual" &&
+                files.Items.OfType<ProductManagementWindow.FileRow>().Single().Status.StartsWith("指定良率"),
+                "a superseded check cannot overwrite the new product or probe manual yield paths");
             window.Close(); Pump();
             Check(independent.All(w => w.IsVisible) && independent.Count(w => ((CsvParseResult)Field(w, "_data")!).Records.Count > 0) == 2, "closing manager preserves all analyzers and their loaded data");
             foreach (var child in independent) child.Close(); Pump();

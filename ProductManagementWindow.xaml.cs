@@ -23,6 +23,11 @@ public partial class ProductManagementWindow : Window
     private CancellationTokenSource? _calculation;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly DispatcherTimer _filterTimer;
+    private readonly SemaphoreSlim _sourceCheckGate = new(1, 1);
+    private CancellationTokenSource? _sourceCheck;
+    private ProductYieldService.SourceStatus? _sourceStatus;
+    private ILookup<string, ManagedFileResult>? _fileResults;
+    private readonly HashSet<TabItem> _pendingTabs = new();
     private readonly IdleMemoryReclaimer _memoryReclaimer;
     private readonly ManagementGridFilter _yieldFilters, _fileFilters, _categoryFilters;
     private readonly HashSet<string> _analyticsQueued = new(StringComparer.Ordinal);
@@ -44,7 +49,7 @@ public partial class ProductManagementWindow : Window
         layout.TrackTable("Files", DgFiles); layout.TrackTable("Yields", DgYields);
         Closed += (_, _) =>
         {
-            _closed = true; ++_version; _calculation?.Cancel(); _filterTimer.Stop(); _memoryReclaimer.Dispose();
+            _closed = true; _sourceCheck?.Cancel(); ++_version; _calculation?.Cancel(); _filterTimer.Stop(); _memoryReclaimer.Dispose();
             _yieldFilters.Dispose(); _fileFilters.Dispose(); _categoryFilters.Dispose();
             YieldTrend.SetData(new(Array.Empty<string>(), new()));
             CategoryTrend.SetData(new(Array.Empty<string>(), new()));
@@ -67,13 +72,23 @@ public partial class ProductManagementWindow : Window
     private void SelectProduct(ManagedProduct? product)
     {
         if (_product?.Id != product?.Id) { CancelCalculation(); TxtFilter.Text = ""; _yieldFilters.Clear(); _fileFilters.Clear(); _categoryFilters.Clear(); }
+        bool changed = !ReferenceEquals(_product, product);
         _product = product;
+        if (changed)
+        {
+            _fileResults = product?.Snapshot?.Files.ToLookup(f => f.FileId, StringComparer.Ordinal);
+            _sourceStatus = null;
+            _sourceCheck?.Cancel();
+            if (product != null) _ = RefreshSourceStatusAsync(product);
+        }
         TxtProductName.Text = product?.Name ?? "欢迎使用产品数据管理";
         TxtProductInfo.Text = product?.FlowDescription ?? "";
         ProductActions.IsEnabled = product != null && !_busy;
         DgFlow.ItemsSource = product?.Flow;
+        _refreshing = true;
         CategoryStages.ItemsSource = product?.Flow; CategoryStages.SelectedIndex = product?.Flow.Count > 0 ? 0 : -1;
         DefectStages.ItemsSource = product?.Flow; DefectStages.SelectedIndex = product?.Flow.Count > 0 ? 0 : -1;
+        _refreshing = false;
         TxtRules.Text = product == null ? "" : $"良品口径：{(product.IncludePartialPass ? "Pass + PartialPass" : "Pass")}；复测：{(product.PreferGoodRetest ? "良品优先（无良品取末次）" : product.RetestMode == RetestMode.Last ? "保留末次整条记录" : "保留首测整条记录")}。CP：批次 + 晶圆 + XY；FT：批次 + UUID（Test Num {product.UuidTestNumbers}）。综合分母为必测温度芯片并集，缺温/身份缺失显示未完成。文件登记顺序决定同温跨文件复测的先后。";
         RefreshDetails();
         if (product?.Snapshot is { AnalyticsVersion: < 1 } && product.Files.Count > 0 && _analyticsQueued.Add(product.Id))
@@ -89,7 +104,6 @@ public partial class ProductManagementWindow : Window
         string filter = TxtFilter.Text.Trim();
         var product = _product; var snapshot = product?.Snapshot;
         var rows = snapshot?.Yields.Where(r => ManagementTrendService.Matches(r.Lot, r.Wafer, filter)).ToArray() ?? Array.Empty<ManagedYieldRow>();
-        _yieldFilters?.SetItems(product == null ? Array.Empty<ManagedYieldRow>() : ManagementTrendService.DetailYieldRows(product, filter, Period));
         void Metric(string kind, TextBlock yield, TextBlock count)
         {
             if (product != null && !product.Flow.Any(s => s.Kind == kind)) { yield.Text = "未启用"; count.Text = "产品未包含 " + kind + " 流程"; return; }
@@ -105,37 +119,104 @@ public partial class ProductManagementWindow : Window
         TxtLots.Text = $"{rows.Select(r => r.Lot).Distinct().Count()} / {rows.Where(r => r.Kind == "CP").Select(r => (r.Lot, r.Wafer)).Distinct().Count()}";
         TxtFiles.Text = $"{product?.Files.Count ?? 0} / {snapshot?.FailedFiles ?? 0}";
         TxtCalculated.Text = snapshot == null ? "尚未计算" : $"上次 {snapshot.CalculatedUtc.ToLocalTime():MM-dd HH:mm}";
+        RefreshFileNotice();
+        _pendingTabs.UnionWith(new[] { YieldTrendTab, YieldDetailsTab, FilesTab, CategoryTab, DefectTab });
+        RefreshTab(MainTabs.SelectedItem as TabItem);
+    }
+
+    private void RefreshFileNotice()
+    {
+        var snapshot = _product?.Snapshot;
+        TxtNotice.Text = snapshot == null ? "" :
+            _sourceStatus == null ? "正在后台核对源文件，当前显示上次统计。" :
+            !_sourceStatus.Current ? "原文件、路径或测试配置已变化，当前显示上次统计，请重新计算。" :
+            snapshot.FailedFiles > 0 ? $"{snapshot.FailedFiles} 个文件未参与计算，统计仅覆盖成功读取的数据。请在数据文件页查看原因。" :
+            snapshot.Files.Any(f => f.Warning.Length > 0) ? $"{snapshot.Files.Count(f => f.Warning.Length > 0)} 个文件带警告，已保留可读数据参与计算；缺少 HBIN 的记录按未完成处理。请在数据文件页查看详情。" : "";
+        NoticePanel.Visibility = TxtNotice.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void RefreshFileRows()
+    {
+        var product = _product;
+        string filter = TxtFilter.Text.Trim();
+        var selected = DgFiles.SelectedItems.OfType<FileRow>().Select(r => r.File.Id).ToHashSet(StringComparer.Ordinal);
+        var rows = new List<FileRow>();
         if (product != null)
         {
-            bool current = ProductYieldService.IsCurrent(product);
-            TxtNotice.Text = snapshot == null ? "" :
-                !current ? "原文件、路径或测试配置已变化，当前显示上次统计，请重新计算。" :
-                snapshot.FailedFiles > 0 ? $"{snapshot.FailedFiles} 个文件未参与计算，统计仅覆盖成功读取的数据。请在数据文件页查看原因。" :
-                snapshot.Files.Any(f => f.Warning.Length > 0) ? $"{snapshot.Files.Count(f => f.Warning.Length > 0)} 个文件带警告，已保留可读数据参与计算；缺少 HBIN 的记录按未完成处理。请在数据文件页查看详情。" : "";
-        }
-        else TxtNotice.Text = "";
-        NoticePanel.Visibility = TxtNotice.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
-        var files = product?.Files.Where(f => filter.Length == 0 || f.Lot.Contains(filter, StringComparison.OrdinalIgnoreCase) || f.WaferOverride.Contains(filter, StringComparison.OrdinalIgnoreCase) || f.FileName.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToArray() ?? Array.Empty<ManagedDataFile>();
-        _fileFilters?.SetItems(files.Select(file =>
-        {
-            var state = snapshot?.Files.FirstOrDefault(f => f.FileId == file.Id);
-            string status;
-            try
+            foreach (var file in product.Files)
             {
-                if (file.UseSpecifiedYield) status = state?.Error.Length > 0 ? state.Error : "指定良率 · " + file.SpecifiedOrigin;
-                else
-                {
-                    var info = new FileInfo(file.FilePath);
-                    status = !info.Exists ? "原文件不存在" : state == null ? "待计算" : state.Error.Length > 0 ? state.Error :
-                        info.Length != state.Length || info.LastWriteTimeUtc != state.LastWriteUtc ? "文件已修改，请重算" :
-                        state.Warning.Length > 0 ? "已统计（警告，悬停查看）" : "已统计";
-                }
+                if (filter.Length > 0 && !file.Lot.Contains(filter, StringComparison.OrdinalIgnoreCase) &&
+                    !file.WaferOverride.Contains(filter, StringComparison.OrdinalIgnoreCase) &&
+                    !file.FileName.Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
+                var state = _fileResults?[file.Id].FirstOrDefault();
+                string status = _sourceStatus?.FileStatuses.GetValueOrDefault(file.Id) ??
+                    (file.UseSpecifiedYield ? "指定良率 · " + file.SpecifiedOrigin : "正在核对源文件…");
+                string stage = product.Flow.FirstOrDefault(s => s.Id == file.StageId)?.Label ??
+                    (file.StageId.StartsWith("COMBINED:") ? file.SpecifiedKind + " 综合良率" : "步骤不存在");
+                rows.Add(new(file, stage, status, state?.Records ?? 0, state?.Warning ?? ""));
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { status = ex.Message; }
-            return new FileRow(file, product!.Flow.FirstOrDefault(s => s.Id == file.StageId)?.Label ?? (file.StageId.StartsWith("COMBINED:") ? file.SpecifiedKind + " 综合良率" : "步骤不存在"), status, state?.Records ?? 0, state?.Warning ?? "");
-        }).ToList());
-        RefreshTrend(); RefreshCategories(); RefreshDefects();
+        }
+        _fileFilters.SetItems(rows);
+        if (selected.Count > 0)
+            foreach (var row in DgFiles.Items.OfType<FileRow>())
+                if (selected.Contains(row.File.Id)) DgFiles.SelectedItems.Add(row);
     }
+
+    private async Task<ProductYieldService.SourceStatus> CheckSourcesAsync(ManagedProduct product, CancellationToken token)
+    {
+        // A cancelled network stat can still be in the OS. Hold the slot until it returns.
+        await _sourceCheckGate.WaitAsync(token);
+        try { return await Task.Run(() => ProductYieldService.CheckSources(product, token), token); }
+        finally { _sourceCheckGate.Release(); }
+    }
+
+    private async Task RefreshSourceStatusAsync(ManagedProduct product)
+    {
+        _sourceCheck?.Cancel();
+        using var cancellation = new CancellationTokenSource();
+        _sourceCheck = cancellation;
+        try
+        {
+            var result = await CheckSourcesAsync(product, cancellation.Token);
+            if (_closed || cancellation.IsCancellationRequested || !ReferenceEquals(product, _product)) return;
+            _sourceStatus = result;
+            RefreshFileNotice();
+            InvalidateTab(FilesTab);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            if (!_closed && !cancellation.IsCancellationRequested && ReferenceEquals(product, _product))
+                TxtStatus.Text = "源文件核对失败：" + ex.Message;
+        }
+        finally { if (ReferenceEquals(_sourceCheck, cancellation)) _sourceCheck = null; }
+    }
+
+    private async void CheckSources_Click(object sender, RoutedEventArgs e)
+    {
+        if (_product == null) return;
+        _sourceStatus = null;
+        RefreshFileNotice();
+        await RefreshSourceStatusAsync(_product);
+    }
+
+    private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ReferenceEquals(e.OriginalSource, MainTabs)) RefreshTab(MainTabs.SelectedItem as TabItem);
+    }
+
+    private void RefreshTab(TabItem? tab)
+    {
+        if (tab == null || !_pendingTabs.Remove(tab)) return;
+        if (tab == YieldTrendTab) RefreshTrend();
+        else if (tab == YieldDetailsTab)
+            _yieldFilters.SetItems(_product == null ? Array.Empty<ManagedYieldRow>() :
+                ManagementTrendService.DetailYieldRows(_product, TxtFilter.Text.Trim(), Period));
+        else if (tab == FilesTab) RefreshFileRows();
+        else if (tab == CategoryTab) RefreshCategories();
+        else if (tab == DefectTab) RefreshDefects();
+    }
+
     private void RefreshTrend()
     {
         if (YieldTrend == null) return;
@@ -150,7 +231,14 @@ public partial class ProductManagementWindow : Window
         if (CategoryTrend != null) CategoryTrend.SetData(_product == null || id == null ? new(Array.Empty<string>(), new()) :
             ManagementTrendService.FailTrend(_product, id, CategorySbin.IsChecked == true ? "SBIN" : "HBIN", TxtFilter.Text.Trim(), Period));
     }
-    private void CategoryBin_Changed(object sender, RoutedEventArgs e) { if (DgCategories != null) RefreshCategories(); }
+    private void InvalidateTab(TabItem? tab)
+    {
+        if (tab == null || _store == null || _refreshing || _closed) return;
+        _pendingTabs.Add(tab);
+        if (tab.IsSelected) RefreshTab(tab);
+    }
+
+    private void CategoryBin_Changed(object sender, RoutedEventArgs e) => InvalidateTab(CategoryTab);
     private void RefreshDefects()
     {
         if (DefectTrend == null) return;
@@ -158,7 +246,7 @@ public partial class ProductManagementWindow : Window
         DefectTrend.SetData(_product == null || id == null ? new(Array.Empty<string>(), new()) :
             ManagementTrendService.DefectTrend(_product, id, TxtFilter.Text.Trim(), Period));
     }
-    private void DefectStage_Changed(object sender, SelectionChangedEventArgs e) => RefreshDefects();
+    private void DefectStage_Changed(object sender, SelectionChangedEventArgs e) => InvalidateTab(DefectTab);
     private void Period_Changed(object sender, RoutedEventArgs e)
     {
         if (DgYields == null || YieldPeriodColumn == null) return;
@@ -169,8 +257,8 @@ public partial class ProductManagementWindow : Window
     private void ProductSearch_Changed(object sender, TextChangedEventArgs e) { if (_store != null) RefreshProducts(); }
     private void Product_Changed(object sender, SelectionChangedEventArgs e) { if (!_refreshing) SelectProduct(ProductList.SelectedItem as ManagedProduct); }
     private void Filter_Changed(object sender, TextChangedEventArgs e) { if (_filterTimer != null && !_closed) { _filterTimer.Stop(); _filterTimer.Start(); } }
-    private void TrendMode_Changed(object sender, RoutedEventArgs e) => RefreshTrend();
-    private void CategoryStage_Changed(object sender, SelectionChangedEventArgs e) => RefreshCategories();
+    private void TrendMode_Changed(object sender, RoutedEventArgs e) => InvalidateTab(YieldTrendTab);
+    private void CategoryStage_Changed(object sender, SelectionChangedEventArgs e) => InvalidateTab(CategoryTab);
     private void SaveProduct(ManagedProduct product)
     {
         if (_store == null) throw new InvalidOperationException("产品目录不可用。");
@@ -347,16 +435,43 @@ public partial class ProductManagementWindow : Window
         var window = new WaferCategoryTrendWindow(result.Wafers, result.CategoryRows.Select(r => r.Category)) { Owner = this, Title = _product.Name + " · " + stage.Label + " · 分类趋势" + (Period == ManagementPeriod.Year ? "（按年）" : Period == ManagementPeriod.Month ? "（按月）" : Period == ManagementPeriod.Lot ? "（按批次）" : "") };
         window.UpdateStatistics(result, _product.RetestMode == RetestMode.First); window.Show();
     }
+    private async Task<bool> EnsureCurrentProductAsync(ManagedProduct product)
+    {
+        using var cancellation = new CancellationTokenSource();
+        _calculation = cancellation;
+        long version = ++_version;
+        SetBusy(true);
+        try
+        {
+            var status = await CheckSourcesAsync(product, cancellation.Token);
+            if (_closed || version != _version || !ReferenceEquals(product, _product)) return false;
+            if (status.Current) return true;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { return false; }
+        catch (Exception ex)
+        {
+            if (!_closed && version == _version) TxtStatus.Text = "源文件核对失败：" + ex.Message;
+            return false;
+        }
+        finally
+        {
+            if (ReferenceEquals(_calculation, cancellation)) _calculation = null;
+            if (!_closed && version == _version) SetBusy(false);
+        }
+        return await CalculateAsync(product.Id);
+    }
+
     private async void ExportReport_Click(object sender, RoutedEventArgs e)
     {
         if (_product == null || _busy) return;
         string id = _product.Id;
-        if (!ProductYieldService.IsCurrent(_product) && !await CalculateAsync(id)) return;
+        if (!await EnsureCurrentProductAsync(_product)) return;
         if (_product?.Id != id || _product.Snapshot == null || _closed) return;
         var options = new ManagementReportOptionsWindow(_product, TxtFilter.Text.Trim(), YieldTrend.TargetYield) { Owner = this };
         if (options.ShowDialog() != true) return;
         var file = new SaveFileDialog { Filter = "Excel 报告|*.xlsx", FileName = SafeName(_product.Name) + "-产品良率报告.xlsx" };
         if (file.ShowDialog() != true) return;
+        RefreshTab(YieldTrendTab); RefreshTab(CategoryTab); RefreshTab(DefectTab);
         var product = ProductCatalogStore.Clone(_product); string filter = TxtFilter.Text.Trim(); var period = Period;
         var reportOptions = options.Options with { BinDisplay = CategoryTrend.CountDisplay, DefectDisplay = DefectTrend.CountDisplay,
             BinType = CategorySbin.IsChecked == true ? "SBIN" : "HBIN", BinLayout = CategoryTrend.ReportLayout, DefectLayout = DefectTrend.ReportLayout,
@@ -369,13 +484,16 @@ public partial class ProductManagementWindow : Window
     }
     private async void ExportPng_Click(object sender, RoutedEventArgs e)
     {
-        if (_product == null || _busy || YieldTrend.SelectedData.Labels.Length == 0) return;
+        if (_product == null || _busy) return;
+        RefreshTab(YieldTrendTab);
+        if (YieldTrend.SelectedData.Labels.Length == 0) return;
         if (YieldTrend.SelectedData.Series.Count == 0) { TxtStatus.Text = "请至少勾选一个测试步骤后再导出趋势图。"; return; }
         var file = new SaveFileDialog { Filter = "PNG 图片|*.png", FileName = SafeName(_product.Name) + "-良率趋势.png" };
         if (file.ShowDialog() != true) return;
         string id = _product.Id;
-        if (!ProductYieldService.IsCurrent(_product) && !await CalculateAsync(id)) return;
+        if (!await EnsureCurrentProductAsync(_product)) return;
         if (_product?.Id != id || _closed) return;
+        RefreshTab(YieldTrendTab);
         var data = YieldTrend.SelectedData; var layout = YieldTrend.ReportLayout;
         string title = _product.Name + (FtMode.IsChecked == true ? " · FT 良率" : " · CP 良率");
         title += Period == ManagementPeriod.Year ? "（按年）" : Period == ManagementPeriod.Month ? "（按月）" : Period == ManagementPeriod.Lot ? "（按批次）" : "（按晶圆）";

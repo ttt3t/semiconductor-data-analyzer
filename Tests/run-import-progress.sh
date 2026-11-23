@@ -13,7 +13,7 @@ cat > "$task_probe/CoreMemoryProbe.csproj" <<'PROJECT'
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../Models/*.cs" Exclude="../../Models/WaferDie.cs;../../Models/WaferMapPage.cs" />
-    <Compile Include="../../Services/*.cs" Exclude="../../Services/HeatmapScale.cs;../../Services/IdleMemoryReclaimer.cs;../../Services/XlsxReportService.cs;../../Services/WindowLayoutPersistence.cs;../../Services/ManagementReportService.cs;../../Services/LayoutSettings.cs;../../Services/ManagementTrendService.cs;../../Services/MarkdownDocumentService.cs;../../Services/BinPalette.cs;../../Services/MapDataService.cs" />
+    <Compile Include="../../Services/*.cs" Exclude="../../Services/HeatmapScale.cs;../../Services/IdleMemoryReclaimer.cs;../../Services/XlsxReportService.cs;../../Services/WindowLayoutPersistence.cs;../../Services/ManagementReportService.cs;../../Services/LayoutSettings.cs;../../Services/ManagementTrendService.cs;../../Services/MarkdownDocumentService.cs;../../Services/BinPalette.cs;../../Services/MapDataService.cs;../../Services/CumulativeMapService.cs;../../Services/ManagementAnalytics.cs;../../Services/TriStateGridSorting.cs;../../Services/IndependentWindow.cs" />
     <PackageReference Include="ClosedXML" Version="0.105.1" />
   </ItemGroup>
 </Project>

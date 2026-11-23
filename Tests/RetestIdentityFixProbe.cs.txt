@@ -137,9 +137,10 @@ static class Probe
         var data = DatasetService.Build(new() { Item("a", "201") }, rows); using var lease = new DatasetLease(data.Records);
         var window = new MainWindow();
         var flags = BindingFlags.Instance | BindingFlags.NonPublic;
-        typeof(MainWindow).GetField("_data", flags)!.SetValue(window, data);
         typeof(MainWindow).GetField("_runSelectionMode", flags)!.SetValue(window, RunSelectionMode.WaferCoordinates);
-        typeof(MainWindow).GetMethod("InitializeRun", flags)!.Invoke(window, new object[] { true });
+        var preparation = (Task)typeof(MainWindow).GetMethod("PrepareAnalysisAsync", flags)!.Invoke(window, new object[] { data, new AnalyzerConfig() })!;
+        preparation.GetAwaiter().GetResult();
+        typeof(MainWindow).GetMethod("CommitAnalysis", flags)!.Invoke(window, new[] { data, preparation.GetType().GetProperty("Result")!.GetValue(preparation) });
         int Index() => (int)typeof(MainWindow).GetField("_runIndex", flags)!.GetValue(window)!;
         Check(Index() == 2 && ((TextBox)window.FindName("RunWaferTextBox")).Text == "A / W", "Run initialization selects the current LOT's latest XY and disambiguates its wafer label");
         bool changed = (bool)typeof(MainWindow).GetMethod("SelectRunWafer", flags)!.Invoke(window, new object[] { "B / W" })!;

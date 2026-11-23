@@ -51,17 +51,21 @@ public sealed class RecentFilesService
         return result;
     }
 
-    public bool RememberConfig(string path) => Remember(_history.Configs, path);
-    public bool RememberCsv(string path) => Remember(_history.Csvs, path);
-    private bool Remember(List<RecentFileEntry> entries, string path)
+    public bool RememberConfig(string path) => Remember(_history.Configs, new[] { path });
+    public bool RememberCsv(string path) => RememberCsvs(new[] { path });
+    public bool RememberCsvs(IEnumerable<string> paths) => Remember(_history.Csvs, paths);
+    private bool Remember(List<RecentFileEntry> entries, IEnumerable<string> paths)
     {
         string? temporary = null;
         try
         {
-            path = Path.GetFullPath(path);
-            entries.RemoveAll(e => string.Equals(e.FilePath, path, StringComparison.OrdinalIgnoreCase));
-            entries.Insert(0, new(path, DateTime.UtcNow));
-            if (entries.Count > Limit) entries.RemoveRange(Limit, entries.Count - Limit);
+            foreach (string input in paths)
+            {
+                string path = Path.GetFullPath(input);
+                entries.RemoveAll(e => string.Equals(e.FilePath, path, StringComparison.OrdinalIgnoreCase));
+                entries.Insert(0, new(path, DateTime.UtcNow));
+                if (entries.Count > Limit) entries.RemoveRange(Limit, entries.Count - Limit);
+            }
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_path))!);
             temporary = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             File.WriteAllText(temporary, JsonSerializer.Serialize(_history));

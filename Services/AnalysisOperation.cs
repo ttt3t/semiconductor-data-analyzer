@@ -34,11 +34,14 @@ public sealed class DatasetLease : IDisposable
 {
     private RawMeasurementStore[]? _stores;
     public DatasetLease(IEnumerable<CsvRecord> records)
+        : this(records.Select(r => r.Measurements.RawStore).OfType<RawMeasurementStore>().Distinct()) { }
+
+    internal DatasetLease(IEnumerable<RawMeasurementStore> stores)
     {
         var acquired = new List<RawMeasurementStore>();
         try
         {
-            foreach (var store in records.Select(r => r.Measurements.RawStore).OfType<RawMeasurementStore>().Distinct())
+            foreach (var store in stores)
             { store.Acquire(); acquired.Add(store); }
             _stores = acquired.ToArray();
         }

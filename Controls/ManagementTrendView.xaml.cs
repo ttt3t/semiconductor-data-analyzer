@@ -32,19 +32,23 @@ public partial class ManagementTrendView : UserControl
     {
         var previous = _choices.ToDictionary(c => c.Category, c => c.IsVisible);
         foreach (var choice in _choices) choice.PropertyChanged -= Choice_Changed;
+        bool sameColumns = _data.Mode == data.Mode && _data.Labels.SequenceEqual(data.Labels);
         _data = data;
         ReferencePanel.Visibility = data.Mode == ManagementChartMode.YieldBars ? Visibility.Visible : Visibility.Collapsed;
         CountDisplayPanel.Visibility = data.IsStacked ? Visibility.Visible : Visibility.Collapsed;
         Table.ItemsSource = null;
-        while (Table.Columns.Count > 1) Table.Columns.RemoveAt(Table.Columns.Count - 1);
-        var style = new Style(typeof(TextBlock));
-        style.Setters.Add(new Setter(TextBlock.TextAlignmentProperty, TextAlignment.Center));
-        style.Setters.Add(new Setter(VerticalAlignmentProperty, VerticalAlignment.Center));
-        for (int i = 0; i < data.Labels.Length; i++) Table.Columns.Add(new DataGridTextColumn
+        if (!sameColumns)
         {
-            Header = data.Labels[i].Replace(" / ", "\n"), Width = 82, MinWidth = 0,
-            Binding = new Binding($"Values[{i}]") { Mode = BindingMode.OneTime, StringFormat = ValueFormat, TargetNullValue = "–" }, ElementStyle = style
-        });
+            while (Table.Columns.Count > 1) Table.Columns.RemoveAt(Table.Columns.Count - 1);
+            var style = new Style(typeof(TextBlock));
+            style.Setters.Add(new Setter(TextBlock.TextAlignmentProperty, TextAlignment.Center));
+            style.Setters.Add(new Setter(VerticalAlignmentProperty, VerticalAlignment.Center));
+            for (int i = 0; i < data.Labels.Length; i++) Table.Columns.Add(new DataGridTextColumn
+            {
+                Header = data.Labels[i].Replace(" / ", "\n"), Width = 82, MinWidth = 0,
+                Binding = new Binding($"Values[{i}]") { Mode = BindingMode.OneTime, StringFormat = ValueFormat, TargetNullValue = "–" }, ElementStyle = style
+            });
+        }
         _choices = data.Series.Select(s => new WaferCategoryTrendWindow.CategoryChoice(s.Category, s.LineBrush)).ToList();
         bool restore = _choices.Any(c => previous.ContainsKey(c.Category));
         for (int i = 0; i < _choices.Count; i++)

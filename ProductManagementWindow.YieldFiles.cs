@@ -48,11 +48,12 @@ public partial class ProductManagementWindow
         var productId = _product.Id;
         var period = Period;
         var filter = TxtFilter.Text.Trim();
-        if (ProductYieldService.IsCurrent(_product)) return selected;
+        var original = _product;
+        if (!await EnsureCurrentProductAsync(original) || _closed || _product?.Id != productId) return null;
+        if (Period != period || TxtFilter.Text.Trim() != filter) return null;
+        if (ReferenceEquals(original, _product)) return selected;
         // Old snapshots have no source associations. Recompute before resolving;
         // never guess a month's files from the registration timestamp.
-        if (!await CalculateAsync(productId) || _closed || _product?.Id != productId) return null;
-        if (Period != period || TxtFilter.Text.Trim() != filter) return null;
         static (string, string, string, string, string, bool) Key(ManagedYieldRow row) =>
             (row.Kind, row.StageId, row.Lot, row.Wafer, row.Period, row.IsCombined);
         var current = ManagementTrendService.DetailYieldRows(_product, filter, period).ToLookup(Key);

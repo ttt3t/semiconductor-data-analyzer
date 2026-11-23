@@ -46,24 +46,48 @@ public static partial class ProductYieldService
         JsonSerializer.Serialize(new { Schema = 6, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
             product.IncludePartialPass, product.PreferGoodRetest, product.Files }))));
 
-    public static bool IsCurrent(ManagedProduct product)
+    internal sealed record SourceStatus(bool Current, Dictionary<string, string> FileStatuses);
+    private readonly record struct FileStamp(long? Length, DateTime Modified, string? Error)
     {
-        if (product.Snapshot is not { } snapshot || snapshot.DefinitionSignature != Signature(product)) return false;
-        foreach (var entry in product.Files)
+        public static FileStamp Read(string path)
         {
-            if (entry.UseSpecifiedYield) continue;
-            var prior = snapshot.Files.FirstOrDefault(f => f.FileId == entry.Id);
             try
             {
-                var file = new FileInfo(entry.FilePath);
-                if (prior == null || !file.Exists || file.Length != prior.Length || file.LastWriteTimeUtc != prior.LastWriteUtc) return false;
+                var info = new FileInfo(path);
+                return info.Exists ? new(info.Length, info.LastWriteTimeUtc, null) : new(null, default, "原文件不存在");
             }
-            catch (IOException) { return false; }
-            catch (UnauthorizedAccessException) { return false; }
-            catch (ArgumentException) { return false; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            { return new(null, default, ex.Message); }
         }
-        return true;
     }
+
+    internal static SourceStatus CheckSources(ManagedProduct product, CancellationToken token)
+    {
+        var snapshot = product.Snapshot;
+        bool current = snapshot != null && snapshot.DefinitionSignature == Signature(product);
+        var priorById = snapshot?.Files.ToLookup(f => f.FileId, StringComparer.Ordinal);
+        var stamps = new Dictionary<string, FileStamp>(StringComparer.Ordinal);
+        var statuses = new Dictionary<string, string>(product.Files.Count, StringComparer.Ordinal);
+        foreach (var entry in product.Files)
+        {
+            token.ThrowIfCancellationRequested();
+            var prior = priorById?[entry.Id].FirstOrDefault();
+            if (entry.UseSpecifiedYield)
+            {
+                statuses[entry.Id] = prior?.Error.Length > 0 ? prior.Error : "指定良率 · " + entry.SpecifiedOrigin;
+                continue;
+            }
+            if (!stamps.TryGetValue(entry.FilePath, out var stamp))
+                stamps.Add(entry.FilePath, stamp = FileStamp.Read(entry.FilePath));
+            bool matches = stamp.Error == null && prior != null && stamp.Length == prior.Length && stamp.Modified == prior.LastWriteUtc;
+            current &= matches;
+            statuses[entry.Id] = stamp.Error ?? (prior == null ? "待计算" : prior.Error.Length > 0 ? prior.Error :
+                !matches ? "文件已修改，请重算" : prior.Warning.Length > 0 ? "已统计（警告，悬停查看）" : "已统计");
+        }
+        return new(current, statuses);
+    }
+
+    public static bool IsCurrent(ManagedProduct product) => product.Snapshot != null && CheckSources(product, default).Current;
 
     public static ManagementSnapshot Calculate(ManagedProduct product, CancellationToken token = default, IProgress<string>? progress = null)
     {

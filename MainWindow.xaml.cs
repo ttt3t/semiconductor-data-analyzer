@@ -149,9 +149,7 @@ public partial class MainWindow : Window
             _sources.Clear();
             _datasetLease?.Dispose(); _datasetLease = null;
             _runIndex = -1;
-            _runBySerial = new(StringComparer.Ordinal);
-            _runItems = new(StringComparer.Ordinal);
-            ClearCoordinateRunIndex();
+            _runLookup = new(0, 0);
             DgTestItems.ScrollActivityChanged -= OnListScrollActivityChanged;
             settings.SaveFailed -= OnLayoutSaveFailed;
         };
@@ -291,7 +289,7 @@ public partial class MainWindow : Window
     private void UpdateWindowTitle()
     {
         string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
-        Title = $"CSV Analyzer · V2.0.20 | 当前数据：{_currentDataName} | 配置：{configName}";
+        Title = $"CSV Analyzer · V2.0.21 | 当前数据：{_currentDataName} | 配置：{configName}";
     }
 
     private void UpdateConfigInfo()
@@ -574,10 +572,16 @@ public partial class MainWindow : Window
     }
 
     private sealed record PreparedAnalysis(CsvParseResult Data, List<string> Sites, List<TestItemSummary> Summaries,
-        CsvParseResult Source, CsvParseResult Scope, IReadOnlyList<SampleRange> Ranges, SampleMatchMode Match);
+        CsvParseResult Source, CsvParseResult Scope, IReadOnlyList<SampleRange> Ranges, SampleMatchMode Match,
+        RunLookup? NewRunLookup, HashSet<string>? IncludedIds, int RunRow);
 
     private Task<PreparedAnalysis> PrepareAnalysisAsync(CsvParseResult data, AnalyzerConfig config)
     {
+        var currentSource = _data;
+        var currentLookup = _runLookup;
+        int currentRun = _runIndex;
+        var runMode = _runSelectionMode;
+        var scopeSource = _scopeSource;
         var mode = config.PreferGoodRetest ? RetestMode.Last : _retestMode;
         string definition = RetestPreference.Signature(config);
         bool combine = _combineSites;
@@ -593,15 +597,34 @@ public partial class MainWindow : Window
                 data = RetestIdentityService.Prepare(data, config);
             CsvParseResult scope, analysis;
             using (ImportProgress.Stage(.1, .3, "筛选数据"))
-                scope = ReferenceEquals(data, _scopeSource) && cachedScope != null ? cachedScope : SampleFilterService.Apply(data, ranges, mode, match, config);
+                scope = ReferenceEquals(data, scopeSource) && cachedScope != null ? cachedScope : SampleFilterService.Apply(data, ranges, mode, match, config);
             using (ImportProgress.Stage(.3, .65, "整理复测记录"))
                 analysis = DatasetService.SelectRetests(scope, mode, config);
-            using (ImportProgress.Stage(.65, 1, "生成测试项统计"))
+            List<string> sites;
+            List<TestItemSummary> summaries;
+            using (ImportProgress.Stage(.65, .95, "生成测试项统计"))
             {
-                var sites = CollectSites(scope.Items, scope.Records);
-                var summaries = SummaryService.Build(analysis.Items, sites, scope.Wafers, combine, combineWafers, config);
+                sites = CollectSites(scope.Items, scope.Records);
+                summaries = SummaryService.Build(analysis.Items, sites, scope.Wafers, combine, combineWafers, config);
                 ImportProgress.Report(1, true);
-                return new PreparedAnalysis(analysis, sites, summaries, data, scope, ranges, match);
+            }
+            using (ImportProgress.Stage(.95, 1, "准备 Run 索引"))
+            {
+                var lookup = ReferenceEquals(currentSource, data) ? null : RunLookup.Build(data);
+                HashSet<string>? included = null;
+                if (ranges.Length > 0)
+                {
+                    included = new(StringComparer.Ordinal);
+                    foreach (var record in scope.Records)
+                    {
+                        AnalysisOperation.CheckCancellation();
+                        included.Add(record.Id);
+                    }
+                }
+                AnalysisOperation.CheckCancellation();
+                int row = lookup == null ? currentRun : FirstRun(data, lookup, runMode);
+                SetRunValues(summaries, data, lookup ?? currentLookup, row, included, AnalysisOperation.Token);
+                return new PreparedAnalysis(analysis, sites, summaries, data, scope, ranges, match, lookup, included, row);
             }
         });
     }
@@ -617,26 +640,30 @@ public partial class MainWindow : Window
         using var progress = ImportProgress.Stage(.99, 1, "更新界面");
         AnalysisOperation.CheckCancellation();
         data = prepared.Source;
-        var lease = new DatasetLease(data.Records);
         string? keepName = _currentItem?.DisplayName;
         string keepSite = _combineSites ? TestItemSummary.CombinedSite : _currentSite;
         string? keepWafer = _combineWafers ? null : _currentWafer;
         ClearDetail();
-        bool changedData = !ReferenceEquals(_data, data);
-        if (changedData) ScatterPlot.ClearChipMarks();
+        if (prepared.NewRunLookup is { } lookup)
+        {
+            var lease = new DatasetLease(lookup.Stores);
+            var previousLease = _datasetLease;
+            _datasetLease = lease;
+            previousLease?.Dispose();
+            ScatterPlot.ClearChipMarks();
+        }
         _data = data;
         _sampleRanges = prepared.Ranges;
         _scopeData = prepared.Scope;
         _scopeSource = data; _scopeMode = _config.PreferGoodRetest ? RetestMode.Last : _retestMode; _scopeRetestDefinition = RetestPreference.Signature(_config); _scopeRanges = prepared.Ranges;
         _sampleMatch = _scopeMatch = prepared.Match;
-        _sampleIncludedIds = _sampleRanges.Count == 0 ? null : prepared.Scope.Records.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+        _sampleIncludedIds = prepared.IncludedIds;
         TxtSampleFilterAction.Text = _sampleRanges.Count == 0 ? "数据筛选" : $"数据筛选（{_sampleRanges.Count}）";
-        var previousLease = _datasetLease; _datasetLease = lease; previousLease?.Dispose();
         _allItems = prepared.Data.Items;
         _devices = prepared.Scope.Devices;
         _allSites = prepared.Sites;
         _summaries = prepared.Summaries;
-        InitializeRun(changedData);
+        InitializeRun(prepared.NewRunLookup, prepared.RunRow);
         ApplySearchFilter(keepName, keepSite, keepWafer);
         UpdateBottomInfo();
         ScheduleDetail();

@@ -39,7 +39,7 @@ public partial class MainWindow
             _sources = sources.ToList(); _currentCsvPath = sources[0].Path;
             _currentDataName = $"整合数据（{sources.Count} 个文件 / {result.Wafers.Count} 个 wafer）";
             UpdateWindowTitle();
-            foreach (var source in sources) _recentFiles.RememberCsv(source.Path);
+            _recentFiles.RememberCsvs(sources.Select(source => source.Path));
             TxtStatus.Text = $"已按所选顺序打开 {sources.Count} 个文件，原始测试记录全部保留";
             ShowSerialNumberNotice(_data);
         });
@@ -55,7 +55,7 @@ public partial class MainWindow
             _sources.AddRange(sources);
             _currentDataName = $"整合数据（{_sources.Count} 个文件 / {_data.Wafers.Count} 个 wafer）";
             UpdateWindowTitle();
-            foreach (var source in sources) _recentFiles.RememberCsv(source.Path);
+            _recentFiles.RememberCsvs(sources.Select(source => source.Path));
             TxtStatus.Text = $"已导入 {sources.Count} 个文件，原始测试记录全部保留";
             ShowSerialNumberNotice(_data);
         });

@@ -9,77 +9,83 @@ namespace SemiconductorCsvAnalyzer;
 public partial class MainWindow
 {
     private int _runIndex = -1;
-    private Dictionary<string, int> _runBySerial = new(StringComparer.Ordinal);
-    private Dictionary<string, TestItemData> _runItems = new(StringComparer.Ordinal);
+    private RunLookup _runLookup = new(0, 0);
     private RunSelectionMode _runSelectionMode;
-    private Dictionary<(string Lot, string Wafer, int X, int Y), int> _runByCoordinates = new();
-    private Dictionary<(string Lot, string Wafer), List<int>> _runRowsByWafer = new();
-    private List<(string Lot, string Wafer)> _runWafers = new();
-    private int[] _runPositions = Array.Empty<int>();
+
+    private sealed class RunLookup(int records, int items)
+    {
+        public readonly Dictionary<string, int> BySerial = new(records, StringComparer.Ordinal);
+        public readonly Dictionary<string, TestItemData> Items = new(items, StringComparer.Ordinal);
+        public readonly Dictionary<(string Lot, string Wafer, int X, int Y), int> ByCoordinates = new();
+        public readonly Dictionary<(string Lot, string Wafer), List<int>> RowsByWafer = new();
+        public readonly List<(string Lot, string Wafer)> Wafers = new();
+        public readonly int[] Positions = new int[records];
+        public readonly HashSet<RawMeasurementStore> Stores = new();
+
+        public static RunLookup Build(CsvParseResult data)
+        {
+            var lookup = new RunLookup(data.Records.Count, data.Items.Count);
+            for (int row = 0; row < data.Records.Count; row++)
+            {
+                if ((row & 1023) == 0) AnalysisOperation.CheckCancellation();
+                var record = data.Records[row];
+                lookup.BySerial.TryAdd(record.SerialNumber.Trim(), row);
+                if (record.Measurements.RawStore is { } store) lookup.Stores.Add(store);
+                lookup.Positions[row] = -1;
+                if (record.X is not int x || record.Y is not int y) continue;
+                var scope = RunScope(record);
+                if (!lookup.RowsByWafer.TryGetValue(scope, out var rows))
+                {
+                    lookup.RowsByWafer[scope] = rows = new();
+                    lookup.Wafers.Add(scope);
+                }
+                lookup.Positions[row] = rows.Count;
+                rows.Add(row);
+                lookup.ByCoordinates[(scope.Lot, scope.Wafer, x, y)] = row;
+            }
+            foreach (var item in data.Items) lookup.Items[item.Id] = item;
+            return lookup;
+        }
+    }
+
     private bool _updatingRunInput;
     private static (string Lot, string Wafer) RunScope(CsvRecord row) => (row.Lot.Trim(), row.WaferId);
     private static (string Lot, string Wafer, int X, int Y) RunCoordinateKey(CsvRecord row) =>
         (row.Lot.Trim(), row.WaferId, row.X!.Value, row.Y!.Value);
     private string RunWaferLabel((string Lot, string Wafer) scope) =>
-        _runWafers.Any(other => other.Wafer == scope.Wafer && other.Lot != scope.Lot)
+        _runLookup.Wafers.Any(other => other.Wafer == scope.Wafer && other.Lot != scope.Lot)
             ? (scope.Lot.Length > 0 ? scope.Lot : "(未指定 LOT)") + " / " + scope.Wafer : scope.Wafer;
 
     private bool ResolveRunScope(string text, out (string Lot, string Wafer) scope)
     {
-        var candidates = _runWafers.Where(s => RunWaferLabel(s) == text).ToArray();
+        var candidates = _runLookup.Wafers.Where(s => RunWaferLabel(s) == text).ToArray();
         if (candidates.Length == 1) { scope = candidates[0]; return true; }
         var current = (uint)_runIndex < (uint)_data.Records.Count ? RunScope(_data.Records[_runIndex]) : default;
         if (candidates.Contains(current)) { scope = current; return true; }
-        candidates = _runWafers.Where(s => s.Wafer == text).ToArray();
+        candidates = _runLookup.Wafers.Where(s => s.Wafer == text).ToArray();
         if (candidates.Length == 1) { scope = candidates[0]; return true; }
         if (candidates.Contains(current)) { scope = current; return true; }
         scope = default; return false;
     }
 
-    private void ClearCoordinateRunIndex()
+    private static int FirstRun(CsvParseResult source, RunLookup lookup, RunSelectionMode mode)
     {
-        _runByCoordinates = new();
-        _runRowsByWafer = new();
-        _runWafers = new();
-        _runPositions = Array.Empty<int>();
+        if (mode != RunSelectionMode.WaferCoordinates) return source.Records.Count == 0 ? -1 : 0;
+        if (lookup.Wafers.Count == 0) return -1;
+        var first = source.Records[lookup.RowsByWafer[lookup.Wafers[0]][0]];
+        return lookup.ByCoordinates[RunCoordinateKey(first)];
     }
 
-    private void InitializeRun(bool changedData)
+    private void InitializeRun(RunLookup? replacement, int preparedRow)
     {
-        if (changedData)
+        if (replacement != null)
         {
-            // Drop old index capacity too when a large file is replaced by a small one.
-            _runBySerial = new(_data.Records.Count, StringComparer.Ordinal);
-            _runItems = new(_data.Items.Count, StringComparer.Ordinal);
-            ClearCoordinateRunIndex();
-            _runPositions = new int[_data.Records.Count];
-            Array.Fill(_runPositions, -1);
-            for (int row = 0; row < _data.Records.Count; row++)
-            {
-                _runBySerial.TryAdd(_data.Records[row].SerialNumber.Trim(), row);
-                var record = _data.Records[row];
-                if (record.X is not int x || record.Y is not int y) continue;
-                var scope = RunScope(record);
-                if (!_runRowsByWafer.TryGetValue(scope, out var rows))
-                {
-                    _runRowsByWafer[scope] = rows = new();
-                    _runWafers.Add(scope);
-                }
-                _runPositions[row] = rows.Count;
-                rows.Add(row);
-                _runByCoordinates[(scope.Lot, scope.Wafer, x, y)] = row;
-            }
-            foreach (var item in _data.Items) _runItems[item.Id] = item;
-            _runIndex = _data.Records.Count == 0 ? -1 : 0;
+            _runLookup = replacement;
+            _runIndex = FirstRun(_data, replacement, _runSelectionMode);
         }
-        EnsureRunForMode();
-        if (changedData && _runSelectionMode == RunSelectionMode.WaferCoordinates && _runIndex >= 0)
-        {
-            var current = _data.Records[_runIndex];
-            _runIndex = _runByCoordinates[RunCoordinateKey(current)];
-        }
+        else EnsureRunForMode();
         UpdateRunInput();
-        RefreshRunValues(refreshView: false);
+        if (_runIndex != preparedRow) RefreshRunValues(refreshView: false);
     }
 
     private void UpdateRunInput()
@@ -102,12 +108,12 @@ public partial class MainWindow
             RunWaferTextBox.Text = current == null ? "" : RunWaferLabel(RunScope(current));
             RunXTextBox.Text = current?.X?.ToString(CultureInfo.InvariantCulture) ?? "";
             RunYTextBox.Text = current?.Y?.ToString(CultureInfo.InvariantCulture) ?? "";
-            int waferIndex = current == null ? -1 : _runWafers.IndexOf(RunScope(current));
+            int waferIndex = current == null ? -1 : _runLookup.Wafers.IndexOf(RunScope(current));
             PreviousRunWaferButton.IsEnabled = waferIndex > 0;
-            NextRunWaferButton.IsEnabled = waferIndex >= 0 && waferIndex + 1 < _runWafers.Count;
-            int position = available && _runPositions.Length > _runIndex ? _runPositions[_runIndex] : -1;
+            NextRunWaferButton.IsEnabled = waferIndex >= 0 && waferIndex + 1 < _runLookup.Wafers.Count;
+            int position = available && _runLookup.Positions.Length > _runIndex ? _runLookup.Positions[_runIndex] : -1;
             PreviousCoordinateRunButton.IsEnabled = position > 0;
-            NextCoordinateRunButton.IsEnabled = position >= 0 && current != null && position + 1 < _runRowsByWafer[RunScope(current)].Count;
+            NextCoordinateRunButton.IsEnabled = position >= 0 && current != null && position + 1 < _runLookup.RowsByWafer[RunScope(current)].Count;
             RunWaferTextBox.ToolTip = "输入晶圆名称后回车，同名跨批次晶圆使用 LOT / 晶圆号；上下按钮切换批次晶圆，优先保留当前 XY，找不到时显示该片首个坐标的末次记录。";
             RunCoordinatesInput.ToolTip = current == null ? "没有完整 XY 坐标，请在设置中改用序列号模式。" :
                 $"{RunWaferLabel(RunScope(current))} · ({current.X}, {current.Y}) · Run {current.SerialNumber}\n输入 X/Y 后回车定位同 LOT 晶圆末次记录；上下按钮按导入顺序浏览该 LOT 晶圆的原始记录（含各次复测）。";
@@ -119,13 +125,13 @@ public partial class MainWindow
     {
         if (_runSelectionMode == RunSelectionMode.WaferCoordinates)
         {
-            if ((uint)_runIndex >= (uint)_runPositions.Length || _runPositions[_runIndex] < 0)
+            if ((uint)_runIndex >= (uint)_runLookup.Positions.Length || _runLookup.Positions[_runIndex] < 0)
             {
-                _runIndex = _runWafers.Count == 0 ? -1 : _runRowsByWafer[_runWafers[0]][0];
+                _runIndex = _runLookup.Wafers.Count == 0 ? -1 : _runLookup.RowsByWafer[_runLookup.Wafers[0]][0];
                 if (_runIndex >= 0)
                 {
                     var current = _data.Records[_runIndex];
-                    _runIndex = _runByCoordinates[RunCoordinateKey(current)];
+                    _runIndex = _runLookup.ByCoordinates[RunCoordinateKey(current)];
                 }
             }
         }
@@ -143,7 +149,7 @@ public partial class MainWindow
         if (mode == RunSelectionMode.WaferCoordinates && _runIndex >= 0)
         {
             var current = _data.Records[_runIndex];
-            _runIndex = _runByCoordinates[RunCoordinateKey(current)];
+            _runIndex = _runLookup.ByCoordinates[RunCoordinateKey(current)];
         }
         UpdateRunInput();
         RefreshRunValues();
@@ -164,22 +170,7 @@ public partial class MainWindow
 
     private void RefreshRunValues(bool refreshView = true)
     {
-        var record = (uint)_runIndex < (uint)_data.Records.Count ? _data.Records[_runIndex] : null;
-        string site = record == null ? "" : SiteKey(record.Site);
-        bool included = record != null && (_sampleIncludedIds == null || _sampleIncludedIds.Contains(record.Id));
-        // Read one position from each numeric column; never materialize raw strings or scan every die.
-        foreach (var summary in _summaries)
-        {
-            double? value = null;
-            if (included && record != null && (summary.IsCombined || summary.Site == site) &&
-                (summary.IsWaferCombined || summary.Wafer == record.WaferId) &&
-                _runItems.TryGetValue(summary.Data.Id, out var source))
-            {
-                double number = source.Values.GetSourceRowValue(_runIndex);
-                if (double.IsFinite(number)) value = number * summary.Data.DisplayFactor;
-            }
-            summary.RunValue = value;
-        }
+        SetRunValues(_summaries, _data, _runLookup, _runIndex, _sampleIncludedIds);
         // Ordinary Run navigation updates only the Value cells, without rebuilding the view or charts.
         if (refreshView && (_columnValueFilters.ContainsKey("RunValue") ||
             _columnFilters.TryGetValue("RunValue", out var filter) && filter.IsSearchActive ||
@@ -187,10 +178,32 @@ public partial class MainWindow
             ApplySearchFilter(_currentItem?.DisplayName, _currentSite, _currentWafer);
     }
 
+    private static void SetRunValues(List<TestItemSummary> summaries, CsvParseResult data, RunLookup lookup,
+        int row, HashSet<string>? includedIds, CancellationToken token = default)
+    {
+        var record = (uint)row < (uint)data.Records.Count ? data.Records[row] : null;
+        string site = record == null ? "" : SiteKey(record.Site);
+        bool included = record != null && (includedIds == null || includedIds.Contains(record.Id));
+        // Read one position from each numeric column; never materialize raw strings or scan every die.
+        foreach (var summary in summaries)
+        {
+            token.ThrowIfCancellationRequested();
+            double? value = null;
+            if (included && record != null && (summary.IsCombined || summary.Site == site) &&
+                (summary.IsWaferCombined || summary.Wafer == record.WaferId) &&
+                lookup.Items.TryGetValue(summary.Data.Id, out var source))
+            {
+                double number = source.Values.GetSourceRowValue(row);
+                if (double.IsFinite(number)) value = number * summary.Data.DisplayFactor;
+            }
+            summary.RunValue = value;
+        }
+    }
+
     private bool CommitRunText()
     {
         if (_updatingRunInput || _runSelectionMode != RunSelectionMode.SerialNumber || _isBusy || _data.Records.Count == 0) return false;
-        if (_runBySerial.TryGetValue(RunTextBox.Text.Trim(), out int index))
+        if (_runLookup.BySerial.TryGetValue(RunTextBox.Text.Trim(), out int index))
         {
             SelectRun(index);
             return true;
@@ -219,8 +232,8 @@ public partial class MainWindow
     {
         if (_runSelectionMode == RunSelectionMode.SerialNumber) { SelectRun(_runIndex + step); return; }
         if (!CommitCoordinateRunText()) return;
-        var rows = _runRowsByWafer[RunScope(_data.Records[_runIndex])];
-        int position = _runPositions[_runIndex] + step;
+        var rows = _runLookup.RowsByWafer[RunScope(_data.Records[_runIndex])];
+        int position = _runLookup.Positions[_runIndex] + step;
         if ((uint)position < (uint)rows.Count) SelectRun(rows[position]);
     }
 
@@ -231,7 +244,7 @@ public partial class MainWindow
         if (ResolveRunScope(RunWaferTextBox.Text.Trim(), out var scope) &&
             int.TryParse(RunXTextBox.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int x) &&
             int.TryParse(RunYTextBox.Text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int y) &&
-            _runByCoordinates.TryGetValue((scope.Lot, scope.Wafer, x, y), out int row))
+            _runLookup.ByCoordinates.TryGetValue((scope.Lot, scope.Wafer, x, y), out int row))
         {
             // Leaving the fields unchanged must not jump away from a browsed first retest.
             var current = _data.Records[_runIndex];
@@ -251,14 +264,14 @@ public partial class MainWindow
     }
     private bool SelectRunScope((string Lot, string Wafer) scope)
     {
-        if (_isBusy || !_runRowsByWafer.TryGetValue(scope, out var rows) || rows.Count == 0) return false;
+        if (_isBusy || !_runLookup.RowsByWafer.TryGetValue(scope, out var rows) || rows.Count == 0) return false;
         var current = (uint)_runIndex < (uint)_data.Records.Count ? _data.Records[_runIndex] : null;
         int row = rows[0];
-        if (current?.X is int x && current.Y is int y && _runByCoordinates.TryGetValue((scope.Lot, scope.Wafer, x, y), out int match)) row = match;
+        if (current?.X is int x && current.Y is int y && _runLookup.ByCoordinates.TryGetValue((scope.Lot, scope.Wafer, x, y), out int match)) row = match;
         else
         {
             var first = _data.Records[row];
-            row = _runByCoordinates[(scope.Lot, scope.Wafer, first.X!.Value, first.Y!.Value)];
+            row = _runLookup.ByCoordinates[(scope.Lot, scope.Wafer, first.X!.Value, first.Y!.Value)];
         }
         SelectRun(row);
         return true;
@@ -279,8 +292,8 @@ public partial class MainWindow
     private void StepRunWafer(int step)
     {
         if (_runIndex < 0 || !CommitRunWaferText()) return;
-        int index = _runWafers.IndexOf(RunScope(_data.Records[_runIndex])) + step;
-        if ((uint)index < (uint)_runWafers.Count) SelectRunScope(_runWafers[index]);
+        int index = _runLookup.Wafers.IndexOf(RunScope(_data.Records[_runIndex])) + step;
+        if ((uint)index < (uint)_runLookup.Wafers.Count) SelectRunScope(_runLookup.Wafers[index]);
     }
 
     private void RunCoordinates_KeyDown(object sender, KeyEventArgs e)
@@ -291,7 +304,7 @@ public partial class MainWindow
             if (CommitCoordinateRunText())
             {
                 var current = _data.Records[_runIndex];
-                SelectRun(_runByCoordinates[RunCoordinateKey(current)]);
+                SelectRun(_runLookup.ByCoordinates[RunCoordinateKey(current)]);
             }
             e.Handled = true;
         }

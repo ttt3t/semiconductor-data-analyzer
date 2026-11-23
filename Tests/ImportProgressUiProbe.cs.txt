@@ -97,14 +97,16 @@ static class Probe
             Wait(main.OpenManagedFilesAsync(new CsvImportSource[] { new(small), new(next, options) }, config, RetestMode.Last), main);
             Check(((CsvParseResult)Field(main, "_data")!).Records.Count == 800 && bar.Value == 100 && !bar.IsVisible, "management multi-file entry uses the progress pipeline");
 
-            var original = Field(main, "_data"); string broken = Path.Combine(folder, "broken.csv"); File.WriteAllText(broken, "broken\n");
+            var original = Field(main, "_data");
+            var originalLookup = Field(main, "_runLookup");
+            string broken = Path.Combine(folder, "broken.csv"); File.WriteAllText(broken, "broken\n");
             bool failed = false; try { Wait(main.OpenManagedFileAsync(broken, config, StdfImportMode.Standard, RetestMode.Last), main); } catch (InvalidDataException) { failed = true; }
-            Check(failed && ReferenceEquals(original, Field(main, "_data")) && !bar.IsVisible && bar.Value < 100 && Field(main, "_importProgress") == null && !(bool)Field(main, "_isBusy")!, "parse failure hides progress, restores controls and retains the previous dataset");
+            Check(failed && ReferenceEquals(originalLookup, Field(main, "_runLookup")) && ReferenceEquals(original, Field(main, "_data")) && !bar.IsVisible && bar.Value < 100 && Field(main, "_importProgress") == null && !(bool)Field(main, "_isBusy")!, "parse failure hides progress, restores controls and retains the previous dataset");
             var pending = main.OpenManagedFileAsync(csv, config, StdfImportMode.Standard, RetestMode.Last);
             while (Field(main, "_importProgress") == null && !pending.IsCompleted) Pump();
             Call(main, "CancelOperation"); bool canceled = false;
             try { Wait(pending, main); } catch (OperationCanceledException) { canceled = true; }
-            Check(canceled && ReferenceEquals(original, Field(main, "_data")) && !bar.IsVisible && bar.Value < 100 && Field(main, "_importProgress") == null && !(bool)Field(main, "_isBusy")!, "canceling import hides progress and retains the previous valid dataset");
+            Check(canceled && ReferenceEquals(originalLookup, Field(main, "_runLookup")) && ReferenceEquals(original, Field(main, "_data")) && !bar.IsVisible && bar.Value < 100 && Field(main, "_importProgress") == null && !(bool)Field(main, "_isBusy")!, "canceling import hides progress and retains the previous valid dataset");
 
             var other = Window("other"); other.Show(); Pump();
             var first = main.OpenManagedFileAsync(csv, config, StdfImportMode.Standard, RetestMode.Last);
