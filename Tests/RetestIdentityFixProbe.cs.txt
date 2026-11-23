@@ -58,7 +58,7 @@ static class Probe
         Check(ftAgain.Records[0].RetestUuid == "001|1", "CP/FT switching retains UUID encoding for partial records");
 
         var parser = typeof(CsvParser).GetMethod("ParseLine", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
-        var legacyRows = File.ReadAllLines(path).Select(line => ((string[])parser.Invoke(null, new object[] { line, ',', true })!).ToList()).ToList();
+        var legacyRows = File.ReadAllLines(path).Select(line => ((string[])parser.Invoke(null, new object[] { line, ',', true, Type.Missing })!).ToList()).ToList();
         legacyRows[0] = new() { "#CSVAnalyzerIntegrated", "4" };
         for (int i = 1; i < legacyRows.Count; i++) legacyRows[i].RemoveAt(17);
         legacyRows[9][15] = "0011";
