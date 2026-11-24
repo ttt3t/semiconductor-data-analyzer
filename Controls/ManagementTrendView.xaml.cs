@@ -74,7 +74,8 @@ public partial class ManagementTrendView : UserControl
         get
         {
             var data = ManagementTrendService.DisplayCounts(_data, CountDisplay);
-            return data with { Series = data.Series.Where((_, i) => _choices[i].IsVisible).ToList(), TargetYield = TargetYield };
+            var visible = _choices.Where(choice => choice.IsVisible).Select(choice => choice.Category).ToHashSet(StringComparer.Ordinal);
+            return data with { Series = data.Series.Where(series => visible.Contains(series.Category)).ToList(), TargetYield = TargetYield };
         }
     }
     private void Choice_Changed(object? sender, PropertyChangedEventArgs e) => Refresh();

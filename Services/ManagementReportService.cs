@@ -175,13 +175,14 @@ public static class ManagementReportService
                     timed.Cell(3, 1).Value = "各分类数量合计 ÷ 对应期间有效 SBIN 总数；只覆盖自动解析的逐颗记录。";
                 }
                 string binType = options?.BinType == "SBIN" ? "SBIN" : "HBIN";
-                var categoryPlots = Sheet("Bin分类图", new[] { binType + " Fail 堆叠图 · 每张最多 13 列 · 数量 / 百分比口径跟随界面 · 仅自动解析记录" }); row = 6;
-                foreach (var stage in product.Flow)
-                    foreach (var page in Pages(ManagementTrendService.DisplayCounts(ManagementTrendService.FailTrend(product, stage.Id, binType, filter, period), options?.BinDisplay ?? ManagementCountDisplay.Count), 13, options?.BinLayout))
+                var categoryPlots = Sheet("Bin分类图", new[] { binType + " 单温 Fail 与多温综合分布 · 每张最多 13 列 · 数量 / 百分比口径跟随界面 · 仅自动解析记录" }); row = 6;
+                foreach (var stage in ManagementTrendService.BinStages(product))
+                    foreach (var page in Pages(ManagementTrendService.DisplayCounts(ManagementTrendService.BinTrend(product, stage, binType, filter, period), options?.BinDisplay ?? ManagementCountDisplay.Count), 13, options?.BinLayout))
                     {
                         token.ThrowIfCancellationRequested();
                         var layout = options?.BinLayout;
-                        using var stream = new MemoryStream(TrendImage(page, product.Name + " · " + stage.Label + " · " + binType + " Fail · " + periodLabel, false, layout));
+                        string title = product.Name + " · " + stage.Label + " · " + binType + (stage.CombinedKind == null ? " Fail" : "") + " · " + periodLabel;
+                        using var stream = new MemoryStream(TrendImage(page, title, false, layout));
                         int imageHeight = TrendImageHeight(page, layout), imageWidth = TrendImageWidth(page, layout);
                         int displayWidth = layout == null ? 1200 : imageWidth, displayHeight = (int)Math.Ceiling(imageHeight * (double)displayWidth / imageWidth);
                         categoryPlots.AddPicture(stream).MoveTo(categoryPlots.Cell(row, 1)).WithSize(displayWidth, displayHeight);

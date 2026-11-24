@@ -71,6 +71,7 @@ public partial class ProductManagementWindow : Window
     }
     private void SelectProduct(ManagedProduct? product)
     {
+        string? previousBinStage = _product?.Id == product?.Id ? (CategoryStages.SelectedItem as ManagementBinStage)?.Id : null;
         if (_product?.Id != product?.Id) { CancelCalculation(); TxtFilter.Text = ""; _yieldFilters.Clear(); _fileFilters.Clear(); _categoryFilters.Clear(); }
         bool changed = !ReferenceEquals(_product, product);
         _product = product;
@@ -86,7 +87,9 @@ public partial class ProductManagementWindow : Window
         ProductActions.IsEnabled = product != null && !_busy;
         DgFlow.ItemsSource = product?.Flow;
         _refreshing = true;
-        CategoryStages.ItemsSource = product?.Flow; CategoryStages.SelectedIndex = product?.Flow.Count > 0 ? 0 : -1;
+        var binStages = product == null ? Array.Empty<ManagementBinStage>() : ManagementTrendService.BinStages(product);
+        CategoryStages.ItemsSource = binStages;
+        CategoryStages.SelectedItem = binStages.FirstOrDefault(s => s.Id == previousBinStage) ?? binStages.FirstOrDefault();
         DefectStages.ItemsSource = product?.Flow; DefectStages.SelectedIndex = product?.Flow.Count > 0 ? 0 : -1;
         _refreshing = false;
         TxtRules.Text = product == null ? "" : $"良品口径：{(product.IncludePartialPass ? "Pass + PartialPass" : "Pass")}；复测：{(product.PreferGoodRetest ? "良品优先（无良品取末次）" : product.RetestMode == RetestMode.Last ? "保留末次整条记录" : "保留首测整条记录")}。CP：批次 + 晶圆 + XY；FT：批次 + UUID（Test Num {product.UuidTestNumbers}）。综合分母为必测温度芯片并集，缺温/身份缺失显示未完成。文件登记顺序决定同温跨文件复测的先后。";
@@ -226,10 +229,23 @@ public partial class ProductManagementWindow : Window
     private void RefreshCategories()
     {
         if (DgCategories == null) return;
-        string? id = (CategoryStages.SelectedItem as ProductTestStage)?.Id;
-        _categoryFilters?.SetItems(_product == null ? Array.Empty<ManagedCategoryCount>() : ManagementTrendService.CategoryRows(_product, TxtFilter.Text.Trim(), Period).Where(c => c.StageId == id).ToArray());
-        if (CategoryTrend != null) CategoryTrend.SetData(_product == null || id == null ? new(Array.Empty<string>(), new()) :
-            ManagementTrendService.FailTrend(_product, id, CategorySbin.IsChecked == true ? "SBIN" : "HBIN", TxtFilter.Text.Trim(), Period));
+        var stage = CategoryStages.SelectedItem as ManagementBinStage;
+        string filter = TxtFilter.Text.Trim();
+        _categoryFilters?.SetItems(_product == null ? Array.Empty<ManagedCategoryCount>() :
+            ManagementTrendService.CategoryRows(_product, filter, Period).Where(c => c.StageId == stage?.Id).ToArray());
+        if (CategoryTrend == null) return;
+        var data = _product == null || stage == null ? new ManagementTrendData(Array.Empty<string>(), new()) :
+            ManagementTrendService.BinTrend(_product, stage, CategorySbin.IsChecked == true ? "SBIN" : "HBIN", filter, Period);
+        bool combined = stage?.CombinedKind != null;
+        CategoryHbin.Content = combined ? "综合 HBIN" : "HBIN Fail 数量";
+        CategorySbin.Content = combined ? "综合 SBIN" : "SBIN Fail 数量";
+        TxtCombinedBinNote.Visibility = combined ? Visibility.Visible : Visibility.Collapsed;
+        if (combined)
+            TxtCombinedBinNote.Text = _product?.Snapshot?.AnalyticsVersion is not (>= ProductYieldService.CombinedBinAnalyticsVersion)
+                ? "请点击「重新计算」，从源文件生成多温综合 Bin 分布。"
+                : data.Labels.Length == 0 ? "当前范围内暂无可用于综合分 Bin 的逐颗记录。"
+                    : "按必测步骤逐颗分 Bin。PartialPass 取产品配置的 HBIN，未完成单列。";
+        CategoryTrend.SetData(data);
     }
     private void InvalidateTab(TabItem? tab)
     {
@@ -429,7 +445,7 @@ public partial class ProductManagementWindow : Window
     }
     private void CategoryTrend_Click(object sender, RoutedEventArgs e)
     {
-        if (_product == null || CategoryStages.SelectedItem is not ProductTestStage stage) return;
+        if (_product == null || CategoryStages.SelectedItem is not ManagementBinStage { CombinedKind: null } stage) return;
         var result = ManagementTrendService.Categories(_product, stage.Id, TxtFilter.Text.Trim(), Period);
         if (result.Wafers.Count == 0) { TxtStatus.Text = "该步骤暂无自动解析的分类数据；指定汇总良率不含逐颗分类分布。"; return; }
         var window = new WaferCategoryTrendWindow(result.Wafers, result.CategoryRows.Select(r => r.Category)) { Owner = this, Title = _product.Name + " · " + stage.Label + " · 分类趋势" + (Period == ManagementPeriod.Year ? "（按年）" : Period == ManagementPeriod.Month ? "（按月）" : Period == ManagementPeriod.Lot ? "（按批次）" : "") };

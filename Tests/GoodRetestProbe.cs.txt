@@ -8,6 +8,52 @@ static class Probe
     static void Check(bool ok, string name) { if (!ok) throw new Exception(name); checks++; Console.WriteLine("PASS " + name); }
     static CsvRecord R(string id, int x, string bin, string value, string wafer = "W") => new()
     { Id = id, SerialNumber = id, WaferId = wafer, X = x, Y = 0, Lot = "L", Site = "1", HBin = bin, SBin = bin, Measurements = new() { ["a"] = value } };
+    static void CheckCombinedBins(string folder, AnalyzerConfig config)
+    {
+        config.PartialPassHBins = new() { "2", "3" };
+        var product = new ManagedProduct { Name = "Combined bins", ConfigText = ConfigLoader.Serialize(config),
+            UuidTestNumbers = "101", IncludePartialPass = true, RetestMode = RetestMode.Last };
+        void Add(string kind, string stage, int month, string body, bool required = true)
+        {
+            var path = Path.Combine(folder, stage + ".csv");
+            File.WriteAllText(path, "SN,X,Y,Site,SBIN,HBIN,Wafer,A\nLSL,,,,,,,0\nUSL,,,,,,,200\nUnit,,,,,,,V\nTest Num,,,,,,,101\n" + body);
+            product.Flow.Add(new() { Id = stage, Kind = kind, Name = stage, Temperature = 20 + month, Required = required });
+            product.Files.Add(new() { Id = stage, StageId = stage, Lot = "L", FilePath = path, TestTime = new DateTime(2026, month, 1) });
+        }
+        Add("CP", "cp-cold", 1, "a,0,0,1,1,1,W,10\nb,1,0,1,1,1,W,11\nc,2,0,1,32,3,W,12\nd,3,0,1,100,10,W,13\ne,4,0,1,1,1,W,14\nf,5,0,1,70,7,W,15\ng,6,0,1,32,3,W,16\nh,7,0,1,4,4,W,17\nh2,7,0,1,1,1,W,17\n");
+        Add("CP", "cp-hot", 2, "a,0,0,1,01,01,W,10\nb,1,0,1,32,3,W,11\nc,2,0,1,22,2,W,12\nd,3,0,1,9,8,W,13\ng,6,0,1,100,4,W,16\nh,7,0,1,1,1,W,17\n");
+        Add("CP", "cp-extra", 3, "a,0,0,1,0,0,W,10\n", required: false);
+        Add("FT", "ft-cold", 1, "a,0,0,1,1,1,W1,51\nb,1,0,1,32,3,W1,52\nc,2,0,1,80,8,W1,53\n");
+        Add("FT", "ft-hot", 2, "A,9,9,1,1,1,W2,51\nB,8,9,1,1,1,W2,52\nC,7,9,1,100,10,W2,53\n");
+        var snapshot = ProductYieldService.Calculate(product);
+        int Count(string kind, string type, string bin, string? month = null) => snapshot.CombinedBins
+            .Where(row => row.Kind == kind && row.BinType == type && row.Bin == bin && (month == null || row.Period == month))
+            .Sum(row => row.Count);
+        Check(snapshot.FailedFiles == 0 && snapshot.AnalyticsVersion == 2, "combined bin snapshot prepares both CP and FT from source files");
+        Check(Count("CP", "HBIN", "1") == 2 && Count("CP", "HBIN", "3") == 1 && Count("CP", "HBIN", "2") == 1,
+            "CP uses the latest record, ignores optional temperatures, and requires all Bin 1 for combined Bin 1");
+        Check(Count("CP", "HBIN", "8") == 1 && Count("CP", "HBIN", "10") == 0 && Count("CP", "HBIN", "4") == 1 &&
+            Count("CP", "SBIN", "100") == 1 && Count("CP", "SBIN", "22") == 1 && Count("CP", "SBIN", "9") == 1,
+            "ordinary failures outrank PartialPass and lowest numeric priority is independently applied to HBIN and SBIN");
+        Check(Count("CP", "HBIN", "", "2026-01") == 1 && Count("CP", "HBIN", "7", "2026-01") == 1 &&
+            Count("CP", "HBIN", "1", "2026-02") == 2 && Count("CP", "HBIN", "1", "2026-03") == 0,
+            "missing mandatory parts stay incomplete unless a known failure exists, and dates use the latest required result");
+        Check(Count("FT", "HBIN", "1") == 1 && Count("FT", "HBIN", "3") == 1 && Count("FT", "HBIN", "8") == 1 &&
+            snapshot.CombinedBins.Where(row => row.Kind == "FT").All(row => row.Wafer == "" && row.Period == "2026-02"),
+            "FT joins UUIDs across wafer and XY changes, independently of CP");
+        Check(snapshot.CombinedBins.Count(row => row.IsFailure) > 0 &&
+            snapshot.CombinedBins.Where(row => row.Bin is "32" or "22" or "1" or "").All(row => !row.IsFailure),
+            "configured PartialPass is separate from the hard failure and incomplete populations");
+        product.IncludePartialPass = false;
+        snapshot = ProductYieldService.Calculate(product);
+        Check(Count("CP", "HBIN", "2") == 1 &&
+            snapshot.CombinedBins.Where(row => row.Bin == "22").All(row => row.IsFailure),
+            "excluding PartialPass from good changes its failure flag while keeping its bin number");
+        product.Files.Add(new() { Id = "manual-hot", StageId = "cp-hot", Lot = "L", WaferOverride = "W",
+            UseSpecifiedYield = true, SpecifiedKind = "CP", SpecifiedPercent = 90 });
+        snapshot = ProductYieldService.Calculate(product);
+        Check(snapshot.CombinedBins.All(row => row.Kind == "FT"), "a manually specified required result supplies no CP per-chip distribution");
+    }
     static int Main(string[] args)
     {
         try
@@ -59,6 +105,7 @@ static class Probe
             string folder = Path.GetFullPath(args[0]); Directory.CreateDirectory(folder);
             var csvConfig = new AnalyzerConfig { TestItemRow = 1, LowLimitRow = 2, HighLimitRow = 3, UnitRow = 4, TestNumberRow = 5,
                 DataStartRow = 6, TestItemStartColumn = 8, SerialNumberColumn = 1, XColumn = 2, YColumn = 3, SiteColumn = 4, SBinColumn = 5, HBinColumn = 6, WaferColumn = 7, PartialPassHBins = new() { "3" } };
+            CheckCombinedBins(folder, ConfigLoader.Parse(ConfigLoader.Serialize(csvConfig)));
             var stage = new ProductTestStage { Id = "CP", Kind = "CP" };
             var product = new ManagedProduct { Name = "good priority", ConfigText = ConfigLoader.Serialize(csvConfig), Flow = new() { stage } };
             foreach (var (name, month, body) in new[] { ("old", 1, "1,0,0,1,1,1,W,1\n2,1,0,1,2,2,W,20\n3,2,0,1,1,1,W,2\n"),

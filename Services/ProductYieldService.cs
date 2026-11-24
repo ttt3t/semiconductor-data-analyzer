@@ -8,6 +8,7 @@ namespace SemiconductorCsvAnalyzer.Services;
 
 public static partial class ProductYieldService
 {
+    internal const int CombinedBinAnalyticsVersion = 2;
     private readonly record struct DeviceKey(string Kind, string Lot, string Wafer, string Identity);
     private sealed record Observation(bool KnownIdentity, string HBin, string SBin, OriginalDisposition Disposition, DateTime? TestTime);
 
@@ -43,7 +44,7 @@ public static partial class ProductYieldService
     }
 
     public static string Signature(ManagedProduct product) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-        JsonSerializer.Serialize(new { Schema = 6, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
+        JsonSerializer.Serialize(new { Schema = 7, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
             product.IncludePartialPass, product.PreferGoodRetest, product.Files }))));
 
     internal sealed record SourceStatus(bool Current, Dictionary<string, string> FileStatuses);
@@ -117,6 +118,7 @@ public static partial class ProductYieldService
         token.ThrowIfCancellationRequested();
         var config = ConfigLoader.Parse(product.ConfigText);
         AddAnalytics(product, result, devices, token);
+        var binCodes = new Dictionary<string, RankedBin>(StringComparer.Ordinal);
         var categories = config.SBinCategories.SelectMany(c => c.Value.Select(bin => (Bin: BinStatisticsService.NormalizeBin(bin), Name: c.Key)))
             .ToDictionary(c => c.Bin, c => c.Name);
         foreach (var group in devices.GroupBy(d => (d.Key.Kind, d.Key.Lot, d.Key.Wafer)))
@@ -151,12 +153,15 @@ public static partial class ProductYieldService
                     AddStage(month.ToArray(), month.Key, result.MonthlyYields, result.MonthlyCategories);
             }
             var required = stages.Where(s => s.Required).Select(s => s.Id).ToArray();
+            Dictionary<(string Period, string BinType, string Bin, bool IsFailure), int>? combinedBins =
+                required.Length > 1 ? new() : null;
             var combined = Row(group.Key, "COMBINED:" + group.Key.Kind, group.Key.Kind + " 综合", true);
             foreach (var stage in stages) combined.SourceFileIds.UnionWith(sources.Find(group.Key, stage.Id, null));
             var monthly = new Dictionary<string, ManagedYieldRow>();
             var periodSources = new Dictionary<string, HashSet<(string Stage, string Month)>>();
             foreach (var device in population.Where(d => required.Any(d.Value.ContainsKey)))
             {
+                token.ThrowIfCancellationRequested();
                 var observations = device.Value;
                 // Match all temperatures first, then assign the selected chip to its latest measured required step.
                 // Missing timestamps stay explicitly unassigned; registration time is never substituted.
@@ -179,6 +184,11 @@ public static partial class ProductYieldService
                 bool known = observations.Values.All(o => o.KnownIdentity);
                 bool sufficientIdentity = known || required.Length == 1; // One required step needs no cross-temperature matching.
                 bool missingStage = required.Any(s => !observations.ContainsKey(s));
+                if (combinedBins != null)
+                {
+                    CountCombinedBin(combinedBins, tested, sufficientIdentity && !missingStage, month, false, product.IncludePartialPass, binCodes);
+                    CountCombinedBin(combinedBins, tested, sufficientIdentity && !missingStage, month, true, product.IncludePartialPass, binCodes);
+                }
                 bool missing = required.Any(s => !observations.TryGetValue(s, out var o) || o.HBin.Length == 0);
                 bool failed = required.Any(s => observations.TryGetValue(s, out var o) && o.HBin.Length > 0 && !HBinClassifier.IsGood(o.Disposition, product.IncludePartialPass));
                 foreach (var target in new[] { combined, periodRow })
@@ -195,8 +205,14 @@ public static partial class ProductYieldService
             }
             result.Yields.Add(combined);
             result.MonthlyYields.AddRange(monthly.Values);
+            if (combinedBins != null)
+                foreach (var (key, count) in combinedBins)
+                    result.CombinedBins.Add(new(group.Key.Kind, group.Key.Lot, group.Key.Wafer, key.Period, key.BinType, key.Bin, key.IsFailure, count));
         }
         ApplySpecified(product, result);
+        var overridden = result.Yields.Where(r => r.IsCombined && !r.HasDispositionCounts)
+            .Select(r => (r.Kind, r.Lot, r.Wafer)).ToHashSet();
+        result.CombinedBins.RemoveAll(r => overridden.Contains((r.Kind, r.Lot, r.Wafer)));
         foreach (var file in product.Files.Where(f => !f.UseSpecifiedYield))
         {
             token.ThrowIfCancellationRequested();
@@ -206,6 +222,7 @@ public static partial class ProductYieldService
             if (!current.Exists || current.Length != state.Length || current.LastWriteTimeUtc != state.LastWriteUtc)
                 throw new IOException($"文件“{file.FileName}”在计算期间又发生变化，本次结果未保存，请重新计算。");
         }
+        result.AnalyticsVersion = CombinedBinAnalyticsVersion;
         result.CalculatedUtc = DateTime.UtcNow;
         return result;
     }

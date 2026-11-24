@@ -1,6 +1,6 @@
 <Window x:Class="SemiconductorCsvAnalyzer.ProductManagementWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:controls="clr-namespace:SemiconductorCsvAnalyzer.Controls"
-        Title="产品良率与数据管理 · CSV Analyzer V2.0.21" Width="1460" Height="910" MinHeight="720"
+        Title="产品良率与数据管理 · CSV Analyzer V2.0.22" Width="1460" Height="910" MinHeight="720"
         WindowStartupLocation="CenterScreen" Background="#F3F6FB" FontFamily="Microsoft YaHei UI" FontSize="12">
     <Window.Resources><ResourceDictionary>
         <ResourceDictionary.MergedDictionaries><ResourceDictionary Source="Styles/WorkspaceTheme.xaml"/></ResourceDictionary.MergedDictionaries>
@@ -166,6 +166,7 @@
                                 <RadioButton x:Name="CategoryHbin" Content="HBIN Fail 数量" GroupName="FailBin" IsChecked="True" Checked="CategoryBin_Changed" Margin="0,0,16,0"/>
                                 <RadioButton x:Name="CategorySbin" Content="SBIN Fail 数量" GroupName="FailBin" Checked="CategoryBin_Changed"/>
                             </StackPanel>
+                            <TextBlock x:Name="TxtCombinedBinNote" Visibility="Collapsed" TextWrapping="Wrap" Foreground="#475569" Margin="2,0,0,4"/>
                             
                         </StackPanel>
                         <DataGrid x:Name="DgCategories" Visibility="Collapsed" ColumnHeaderStyle="{StaticResource FilterableHeader}"><DataGrid.Columns>

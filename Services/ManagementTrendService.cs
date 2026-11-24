@@ -6,9 +6,11 @@ namespace SemiconductorCsvAnalyzer.Services;
 
 public enum ManagementChartMode { YieldBars, StackedCounts, Pareto, RadialLines, CenterEdge, HorizontalBars, StackedPercentages }
 public enum ManagementCountDisplay { Count, PercentOfTotal, PercentOfFailures }
+public sealed record ManagementBinStage(string Id, string Label, string? CombinedKind = null);
 public sealed record ManagementTrendData(string[] Labels, List<WaferCategorySeries> Series,
     ManagementChartMode Mode = ManagementChartMode.YieldBars, string AxisTitle = "良率（%）", double TargetYield = 85,
-    double?[]? SampleCounts = null, string[]? Descriptions = null, double CumulativeStart = 0)
+    double?[]? SampleCounts = null, string[]? Descriptions = null, double CumulativeStart = 0,
+    List<WaferCategorySeries>? FailureSeries = null)
 {
     public bool IsStacked => Mode is ManagementChartMode.StackedCounts or ManagementChartMode.StackedPercentages;
 }
@@ -49,6 +51,46 @@ public static partial class ManagementTrendService
         var brush = (SolidColorBrush)new BrushConverter().ConvertFromString(hex)!; brush.Freeze(); return brush;
     }
 
+    public static ManagementBinStage[] BinStages(ManagedProduct product) => product.Flow
+        .Select(stage => new ManagementBinStage(stage.Id, stage.Label))
+        .Concat(product.Flow.Where(stage => stage.Required).GroupBy(stage => stage.Kind)
+            .Where(stages => stages.Count() > 1)
+            .Select(stages => new ManagementBinStage("COMBINED:" + stages.Key, stages.Key + " 多温综合", stages.Key)))
+        .ToArray();
+
+    public static ManagementTrendData BinTrend(ManagedProduct product, ManagementBinStage stage, string type, string filter, ManagementPeriod period)
+    {
+        if (stage.CombinedKind == null) return FailTrend(product, stage.Id, type, filter, period);
+        var rows = product.Snapshot?.CombinedBins.Where(row =>
+            row.Kind == stage.CombinedKind && row.BinType == type && Matches(row.Lot, row.Wafer, filter)).ToArray()
+            ?? Array.Empty<ManagedCombinedBinCount>();
+        string Label(ManagedCombinedBinCount row) => period switch
+        {
+            ManagementPeriod.Wafer => row.Lot + (row.Kind == "FT" ? " / FT" : " / " + row.Wafer),
+            ManagementPeriod.Lot => row.Lot,
+            _ => row.Period.Length == 0 ? "未指定时间" : PeriodKey(row.Period, period)
+        };
+        var byLabel = rows.GroupBy(Label);
+        var groups = (period is ManagementPeriod.Month or ManagementPeriod.Year
+            ? byLabel.OrderBy(group => group.Key == "未指定时间").ThenBy(group => group.Key, StringComparer.Ordinal)
+            : byLabel).ToArray();
+        var labels = groups.Select(group => group.Key).ToArray();
+        var totals = groups.Select(group => (double?)group.Sum(row => row.Count)).ToArray();
+
+        List<WaferCategorySeries> BuildSeries(IEnumerable<ManagedCombinedBinCount> entries)
+        {
+            var counts = entries.GroupBy(row => (Label(row), row.Bin))
+                .ToDictionary(group => group.Key, group => group.Sum(row => row.Count));
+            return counts.Keys.Select(key => key.Bin).Distinct(StringComparer.Ordinal)
+                .OrderBy(bin => bin.Length == 0).ThenBy(NumericText.SortKey).ThenBy(bin => bin, StringComparer.Ordinal)
+                .Select(bin => new WaferCategorySeries(bin.Length == 0 ? "未完成" : "Bin " + bin,
+                    bin.Length == 0 ? Brushes.Gray : FailColor(bin),
+                    labels.Select(label => (double?)counts.GetValueOrDefault((label, bin))).ToArray())).ToList();
+        }
+        return new(labels, BuildSeries(rows), ManagementChartMode.StackedCounts, "综合 Bin 芯片数（颗）",
+            SampleCounts: totals, FailureSeries: BuildSeries(rows.Where(row => row.IsFailure)));
+    }
+
     public static ManagementTrendData FailTrend(ManagedProduct product, string stageId, string type, string filter, ManagementPeriod period)
         => FailTrend(product, stageId, type, filter, period, null);
 
@@ -83,15 +125,18 @@ public static partial class ManagementTrendService
     public static ManagementTrendData DisplayCounts(ManagementTrendData data, ManagementCountDisplay display)
     {
         if (data.Mode != ManagementChartMode.StackedCounts || display == ManagementCountDisplay.Count) return data;
+        var series = display == ManagementCountDisplay.PercentOfFailures ? data.FailureSeries ?? data.Series : data.Series;
         // Always use the full population, before any legend series are hidden.
         var denominators = Enumerable.Range(0, data.Labels.Length).Select(i => display == ManagementCountDisplay.PercentOfTotal
             ? data.SampleCounts is { } samples && i < samples.Length ? samples[i] : null
-            : (double?)data.Series.Sum(s => i < s.Values.Length ? s.Values[i] ?? 0 : 0)).ToArray();
+            : (double?)series.Sum(s => i < s.Values.Length ? s.Values[i] ?? 0 : 0)).ToArray();
         return data with
         {
             Mode = ManagementChartMode.StackedPercentages,
-            AxisTitle = display == ManagementCountDisplay.PercentOfTotal ? "不良率（% · 占总芯片数）" : "不良构成（% · 占不良芯片数）",
-            Series = data.Series.Select(s => s with
+            AxisTitle = display == ManagementCountDisplay.PercentOfTotal
+                ? data.FailureSeries == null ? "不良率（% · 占总芯片数）" : "综合 Bin 占比（% · 占总芯片数）"
+                : "不良构成（% · 占不良芯片数）",
+            Series = series.Select(s => s with
             {
                 Values = s.Values.Select((value, i) => i < denominators.Length && denominators[i] is double denominator && denominator > 0 && value.HasValue
                     ? value * 100 / denominator : null).ToArray()

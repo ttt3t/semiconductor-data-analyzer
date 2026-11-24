@@ -52,6 +52,46 @@ public static partial class ProductYieldService
                 snapshot.Radial.AddRange(rings);
             }
         }
-        snapshot.AnalyticsVersion = 1;
+    }
+
+    private readonly record struct RankedBin(string Code, decimal? Number)
+    {
+        public bool Precedes(RankedBin? other) => other is not { } candidate ||
+            (Number is decimal number ? candidate.Number is not decimal otherNumber || number < otherNumber
+                : candidate.Number == null && StringComparer.Ordinal.Compare(Code, candidate.Code) < 0);
+    }
+
+    private static void CountCombinedBin(Dictionary<(string Period, string BinType, string Bin, bool IsFailure), int> counts,
+        Observation[] observations, bool complete, string period, bool soft, bool includePartial,
+        Dictionary<string, RankedBin> binCodes)
+    {
+        RankedBin? fail = null, partial = null;
+        foreach (var observation in observations)
+        {
+            string raw = soft ? observation.SBin : observation.HBin;
+            if (raw.Length == 0 || observation.HBin.Length == 0)
+            {
+                complete = false;
+                continue;
+            }
+            if (!binCodes.TryGetValue(raw, out var bin))
+            {
+                string code = BinStatisticsService.NormalizeBin(raw);
+                binCodes.Add(raw, bin = new(code, decimal.TryParse(code, NumberStyles.Float,
+                    CultureInfo.InvariantCulture, out decimal number) ? number : null));
+            }
+            if (bin.Code == "1") continue;
+            // PartialPass is configured on the product's HBIN, including when retaining an SBIN number.
+            if (observation.Disposition == OriginalDisposition.PartialPass)
+            {
+                if (bin.Precedes(partial)) partial = bin;
+            }
+            else if (bin.Precedes(fail)) fail = bin;
+        }
+        // A known failure remains attributable even when another mandatory test is missing.
+        string combined = fail?.Code ?? (complete ? partial?.Code ?? "1" : "");
+        bool isFailure = fail.HasValue || complete && partial.HasValue && !includePartial;
+        var key = (period, soft ? "SBIN" : "HBIN", combined, isFailure);
+        counts[key] = counts.GetValueOrDefault(key) + 1;
     }
 }

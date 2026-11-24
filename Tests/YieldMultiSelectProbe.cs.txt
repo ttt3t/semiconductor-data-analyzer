@@ -5,7 +5,9 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
+using ClosedXML.Excel;
 using SemiconductorCsvAnalyzer;
+using SemiconductorCsvAnalyzer.Controls;
 using SemiconductorCsvAnalyzer.Models;
 using SemiconductorCsvAnalyzer.Services;
 
@@ -24,6 +26,37 @@ static class Probe
     {
         var menu = row.ContextMenu; menu.PlacementTarget = row; menu.IsOpen = true; Pump(); return (MenuItem)menu.Items[0];
     }
+    static void CheckCombinedBinView(ProductManagementWindow window, ManagedProduct product, string folder)
+    {
+        var tabs = (TabControl)window.FindName("MainTabs");
+        tabs.SelectedItem = window.FindName("CategoryTab"); Pump();
+        var stageList = (ListBox)window.FindName("CategoryStages");
+        var stages = stageList.Items.OfType<ManagementBinStage>().ToArray();
+        Check(stages.Where(stage => stage.CombinedKind != null).Select(stage => stage.Label)
+            .SequenceEqual(new[] { "CP 多温综合", "FT 多温综合" }), "Bin classification offers both configured multi-temperature steps");
+        stageList.SelectedItem = stages.Single(stage => stage.CombinedKind == "CP"); Pump();
+        var trend = (ManagementTrendView)window.FindName("CategoryTrend");
+        Check(Equals(((RadioButton)window.FindName("CategoryHbin")).Content, "综合 HBIN") &&
+            trend.SelectedData.Labels.Length == 3 && trend.SelectedData.Series.Single().Category == "未完成",
+            "selecting the combined step shows the complete automatic distribution in the existing chart and table");
+        ((RadioButton)window.FindName("CategorySbin")).IsChecked = true;
+        trend.CountDisplay = ManagementCountDisplay.PercentOfTotal;
+        Check(trend.SelectedData.Series.Single().Values.All(value => value == 100),
+            "combined SBIN percentages use all chips including the incomplete population");
+        trend.CountDisplay = ManagementCountDisplay.PercentOfFailures;
+        Check(trend.SelectedData.Series.Count == 0, "failure percentages exclude incomplete chips");
+        trend.CountDisplay = ManagementCountDisplay.Count;
+        ((RadioButton)window.FindName("CategoryHbin")).IsChecked = true;
+        var selected = ManagementAnalytics.Select(product, new() { new("CP", "L1", "W1") });
+        var scoped = ManagementTrendService.BinTrend(selected, stages.Single(stage => stage.CombinedKind == "CP"), "HBIN", "", ManagementPeriod.Month);
+        Check(scoped.Labels.SequenceEqual(new[] { "2026-10" }) && scoped.SampleCounts!.Single() == 1,
+            "combined monthly bins keep only the selected wafer in report scope");
+        string report = Path.Combine(folder, "combined-bins.xlsx");
+        ManagementReportService.SaveWorkbook(report, product);
+        using var book = new XLWorkbook(report);
+        Check(book.Worksheet("Bin分类图").Pictures.Count() == 3, "XLSX includes the combined bin chart alongside both populated CP step charts");
+        tabs.SelectedItem = window.FindName("YieldDetailsTab"); Pump();
+    }
     [STAThread] static int Main(string[] args)
     {
         try
@@ -37,7 +70,8 @@ static class Probe
                 SBinColumn = 5, HBinColumn = 6, WaferColumn = 7, SBinRow = 0, HBinRow = 0 };
             var cold = new ProductTestStage { Id = "cold", Kind = "CP", Name = "常温" };
             var hot = new ProductTestStage { Id = "hot", Kind = "CP", Name = "高温", Temperature = 85 };
-            var product = new ManagedProduct { Name = "multi-row", ConfigText = ConfigLoader.Serialize(config), Flow = new() { cold, hot }, RetestMode = RetestMode.Last };
+            var product = new ManagedProduct { Name = "multi-row", ConfigText = ConfigLoader.Serialize(config),
+                Flow = new() { cold, hot, new() { Id = "ft-cold", Kind = "FT" }, new() { Id = "ft-hot", Kind = "FT", Temperature = 85 } }, RetestMode = RetestMode.Last };
             for (int i = 1; i <= 3; i++)
             {
                 string path = Path.Combine(folder, "file" + i + ".csv");
@@ -52,6 +86,7 @@ static class Probe
             var store = new ProductCatalogStore(Path.Combine(folder, "catalog.json"));
             store.Save(new ProductCatalog { Products = new() { product, alternate } });
             var window = new ProductManagementWindow(store); window.Show(); ((TabControl)window.FindName("MainTabs")).SelectedIndex = 1; Pump();
+            CheckCombinedBinView(window, product, folder);
             var grid = (DataGrid)window.FindName("DgYields");
             Check(grid.SelectionMode == DataGridSelectionMode.Extended, "yield details allow Ctrl/Shift multi-row selection");
             var coldRows = grid.Items.OfType<ManagedYieldRow>().Where(r => r.StageId == "cold" && r.SourceFileIds.Count > 0).ToArray();
