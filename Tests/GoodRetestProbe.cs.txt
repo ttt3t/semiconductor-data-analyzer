@@ -8,6 +8,37 @@ static class Probe
     static void Check(bool ok, string name) { if (!ok) throw new Exception(name); checks++; Console.WriteLine("PASS " + name); }
     static CsvRecord R(string id, int x, string bin, string value, string wafer = "W") => new()
     { Id = id, SerialNumber = id, WaferId = wafer, X = x, Y = 0, Lot = "L", Site = "1", HBin = bin, SBin = bin, Measurements = new() { ["a"] = value } };
+    static void CheckRangeFilters()
+    {
+        var records = new List<CsvRecord> { R("negative", 0, "1", "-12"), R("low", 1, "1", "8"),
+            R("middle", 2, "1", "10"), R("high", 3, "1", "12"), R("missing", 4, "1", "NaN"),
+            R("second-wafer", 0, "2", "80", "W2"), R("second-lot", 0, "2", "100") };
+        records[^1].Lot = "L2";
+        using var lease = new DatasetLease(records);
+        var data = DatasetService.Build(new() { new() { Id = "a", DisplayName = "A", LowLimit = 8, HighLimit = 12 } }, records);
+        string[] Select(SampleRange rule, params string[] bins) =>
+            SampleFilterService.Apply(data, new[] { rule }, RetestMode.All, sBins: bins).Records.Select(r => r.Id).ToArray();
+        SampleRange Deviation(SampleBaseline source, double? negative, double? positive, double? reference = null,
+            SampleCalculation calculation = SampleCalculation.Absolute) =>
+            new("a", null, null) { Deviation = new(calculation, source, negative, positive, reference) };
+        var relative = Deviation(SampleBaseline.Custom, 20, 50, -10, SampleCalculation.Relative);
+        Check(Select(relative).SequenceEqual(new[] { "negative" }), "asymmetric relative offsets use the magnitude of a negative reference and include the exact boundary");
+        Check(Select(new("a", 8, 12) { Outside = true }).SequenceEqual(new[] { "negative", "second-wafer", "second-lot" }) &&
+            Select(new("a", 8, null) { Outside = true }).SequenceEqual(new[] { "negative" }) &&
+            Select(new("a", 12, 8)).SequenceEqual(new[] { "negative", "low", "high", "second-wafer", "second-lot" }),
+            "outside excludes boundary and invalid values, with one-sided and legacy reversed bounds supported");
+        Check(Select(Deviation(SampleBaseline.Mean, 1, 4), "1").SequenceEqual(new[] { "low" }) &&
+            Select(Deviation(SampleBaseline.Median, 0, 1), "1").SequenceEqual(new[] { "middle" }),
+            "mean and median use the selected SBIN population and skip invalid values");
+        Check(Select(Deviation(SampleBaseline.SpecCenter, 0, 0)).SequenceEqual(new[] { "middle" }) &&
+            Select(Deviation(SampleBaseline.Golden, null, 0, 8)).SequenceEqual(new[] { "negative", "low" }),
+            "spec center uses both limits and Golden uses the stored raw reference with a one-sided deviation");
+        var byWafer = Deviation(SampleBaseline.WaferMean, 1, 4);
+        Check(Select(byWafer).SequenceEqual(new[] { "low", "second-wafer", "second-lot" }) &&
+            SampleFilterService.Preview(data, new[] { byWafer }, RetestMode.All, new(), Array.Empty<string>(), records[^1])["a"]
+                .Contains("99 ~ 104"),
+            "wafer means separate lots with the same wafer name and preview the current run's interval");
+    }
     static void CheckCombinedBins(string folder, AnalyzerConfig config)
     {
         config.PartialPassHBins = new() { "2", "3" };
@@ -101,6 +132,7 @@ static class Probe
     {
         try
         {
+            CheckRangeFilters();
             var config = new AnalyzerConfig { PreferGoodRetest = true, PartialPassHBins = new() { "3" } };
             var rows = new List<CsvRecord> { R("good-first", 0, "1", "1"), R("bad-later", 0, "2", "20"),
                 R("bad-first", 1, "2", "21"), R("good-middle", 1, "1", "2"), R("good-last", 1, "01", "3"),

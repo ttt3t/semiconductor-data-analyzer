@@ -1,8 +1,10 @@
+using System.ComponentModel;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
+using System.Windows.Threading;
 using SemiconductorCsvAnalyzer.Models;
 using SemiconductorCsvAnalyzer.Services;
 
@@ -10,78 +12,153 @@ namespace SemiconductorCsvAnalyzer;
 
 public sealed class SampleFilterWindow : Window
 {
-    public sealed class RangeRow
+    public sealed class RangeRow : INotifyPropertyChanged
     {
-        public TestItemData Item { get; set; } = null!;
-        public string Minimum { get; set; } = "";
-        public string Maximum { get; set; } = "";
-        public string Unit => Item.ShownUnit;
-        public string Name => Item.TestNumber + " · " + Item.DisplayName + " [" + Unit + "]";
+        private readonly (string Lower, string Upper)[] _inputs = [("", ""), ("", ""), ("", "")];
+        private SampleCalculation _calculation;
+        private SampleBaseline _baseline;
+        private string _reference = "";
+        private string _preview = "填写后预览";
+        public required TestItemData Item { get; init; }
+        public SampleCalculation Calculation { get => _calculation; set => Set(ref _calculation, value); }
+        public SampleBaseline Baseline { get => _baseline; set => Set(ref _baseline, value); }
+        public string Minimum { get => _inputs[(int)Calculation].Lower; set => Set(ref _inputs[(int)Calculation].Lower, value); }
+        public string Maximum { get => _inputs[(int)Calculation].Upper; set => Set(ref _inputs[(int)Calculation].Upper, value); }
+        public string Reference { get => _reference; set => Set(ref _reference, value); }
+        public string Preview
+        {
+            get => _preview;
+            set { if (_preview == value) return; _preview = value; PropertyChanged?.Invoke(this, new(nameof(Preview))); }
+        }
+        public bool UsesDeviation => Calculation != SampleCalculation.Bounds;
+        public bool UsesCustom => UsesDeviation && Baseline == SampleBaseline.Custom;
+        public string Name => Item.TestNumber + " · " + Item.DisplayName + " [" + Item.ShownUnit + "]";
+        internal SampleDeviation? SavedGolden { get; init; }
+        public event PropertyChangedEventHandler? PropertyChanged;
+        internal event Action? Edited;
+        private void Set<T>(ref T field, T value)
+        {
+            if (EqualityComparer<T>.Default.Equals(field, value)) return;
+            field = value;
+            PropertyChanged?.Invoke(this, new(""));
+            Edited?.Invoke();
+        }
     }
-    private readonly List<RangeRow> _rows;
+
+    private static readonly Dictionary<SampleCalculation, string> Calculations = new()
+    {
+        [SampleCalculation.Bounds] = "绝对范围", [SampleCalculation.Relative] = "相对偏差 (%)", [SampleCalculation.Absolute] = "绝对偏差"
+    };
+    private static readonly Dictionary<SampleBaseline, string> Baselines = new()
+    {
+        [SampleBaseline.Custom] = "自定义基准", [SampleBaseline.Mean] = "数据均值", [SampleBaseline.Median] = "数据中位数",
+        [SampleBaseline.SpecCenter] = "Spec 中心值", [SampleBaseline.Golden] = "Golden 样品", [SampleBaseline.WaferMean] = "Wafer 均值"
+    };
+
+    private readonly List<RangeRow> _rows = new();
+    private readonly Dictionary<string, RangeRow> _drafts = new(StringComparer.Ordinal);
     private readonly DataGrid _grid;
     private readonly ListBox _sBinList;
-    private readonly ComboBox _picker;
-    private readonly Button _add;
-    private readonly RadioButton _union;
-    private readonly TextBlock _note;
-    private IReadOnlyList<TestItemData> _sourceItems;
+    private readonly RadioButton _union, _outside;
+    private readonly TextBlock _note, _goldenNote;
+    private readonly IReadOnlyList<TestItemData> _sourceItems;
     private readonly Func<IReadOnlyList<SampleRange>, SampleMatchMode, IReadOnlyList<string>, Task>? _apply;
-    private bool _applying;
-    private RetestMode _mode;
-    private int _removedConditions;
+    private readonly Func<IReadOnlyList<SampleRange>, IReadOnlyList<string>, CancellationToken, Task<Dictionary<string, string>>>? _preview;
+    private readonly Func<CsvRecord?>? _currentRun;
+    private readonly DispatcherTimer _previewTimer;
+    private readonly SemaphoreSlim _previewGate = new(1, 1);
+    private CancellationTokenSource? _previewCancellation;
+    private CsvRecord? _goldenRecord;
+    private string? _goldenLabel;
+    private bool _applying, _closed;
+    private readonly RetestMode _mode;
     private readonly TextBlock _error = new() { Foreground = System.Windows.Media.Brushes.Firebrick, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 4) };
-    public IReadOnlyList<SampleRange> Rules { get; private set; } = Array.Empty<SampleRange>();
+    public IReadOnlyList<SampleRange> Rules { get; private set; }
     public SampleMatchMode MatchMode => _union.IsChecked == true ? SampleMatchMode.Union : SampleMatchMode.Intersection;
+    private bool Outside => _outside.IsChecked == true;
 
     public SampleFilterWindow(IReadOnlyList<TestItemData> items, IReadOnlyList<SampleRange> rules, RetestMode mode,
         SampleMatchMode match = SampleMatchMode.Intersection,
         Func<IReadOnlyList<SampleRange>, SampleMatchMode, IReadOnlyList<string>, Task>? apply = null,
-        IReadOnlyList<string>? sBins = null, IReadOnlyList<string>? selectedSBins = null)
+        IReadOnlyList<string>? sBins = null, IReadOnlyList<string>? selectedSBins = null,
+        Func<CsvRecord?>? currentRun = null,
+        Func<IReadOnlyList<SampleRange>, IReadOnlyList<string>, CancellationToken, Task<Dictionary<string, string>>>? preview = null)
     {
-        _sourceItems = items; _apply = apply; _mode = mode;
-        items = items.Where(i => i.Focus.IsFocused).ToArray();
-        var availableIds = items.Select(i => i.Id).ToHashSet(StringComparer.Ordinal);
-        int removedCount = rules.Count(r => !availableIds.Contains(r.ItemId));
-        _removedConditions = removedCount;
-        rules = rules.Where(r => availableIds.Contains(r.ItemId)).ToArray();
-        Title = "数据筛选"; Width = 850; Height = 520; MinWidth = 650; MinHeight = 350;
+        _sourceItems = items; _apply = apply; _mode = mode; _currentRun = currentRun; _preview = preview;
+        Rules = rules;
+        _previewTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(250) };
+        _previewTimer.Tick += async (_, _) => { _previewTimer.Stop(); await UpdatePreviewsAsync(); };
+        var prior = rules.ToDictionary(r => r.ItemId, StringComparer.Ordinal);
+        foreach (var item in items)
+            if (prior.TryGetValue(item.Id, out var rule)) _drafts[item.Id] = MakeRow(item, rule);
+
+        Title = "数据筛选"; Width = 1130; Height = 540; MinWidth = 650; MinHeight = 350;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = System.Windows.Media.Brushes.White;
         var root = new DockPanel { Margin = new Thickness(18) }; Content = root;
         var footer = new StackPanel(); DockPanel.SetDock(footer, Dock.Bottom); root.Children.Add(footer); footer.Children.Add(_error);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right }; footer.Children.Add(actions);
         Button Button(string text, Action action) { var b = new Button { Content = text, Padding = new Thickness(14, 6, 14, 6), Margin = new Thickness(5, 6, 0, 0) }; b.Click += (_, _) => action(); return b; }
-        actions.Children.Add(Button("取消数据筛选", () => _ = SubmitAsync(Array.Empty<SampleRange>(), Array.Empty<string>())));
+        actions.Children.Add(Button("取消数据筛选", () => _ = SubmitAsync(Array.Empty<SampleRange>(), Array.Empty<string>(), clearDrafts: true)));
         actions.Children.Add(Button("应用", Apply)); actions.Children.Add(Button("关闭", Close));
-        var tabs = new TabControl();
-        root.Children.Add(tabs);
+
+        var tabs = new TabControl(); root.Children.Add(tabs);
         var rangesPanel = new DockPanel { Margin = new Thickness(12) };
         tabs.Items.Add(new TabItem { Header = "测项范围", Content = rangesPanel });
-        _note = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) };
+        _note = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) };
         DockPanel.SetDock(_note, Dock.Top); rangesPanel.Children.Add(_note);
-        var choose = new DockPanel { Margin = new Thickness(0, 0, 0, 10) }; DockPanel.SetDock(choose, Dock.Top); rangesPanel.Children.Add(choose);
-        _picker = new ComboBox { IsEditable = true, IsTextSearchEnabled = true, DisplayMemberPath = "Name", ItemsSource = items.Select(i => new RangeRow { Item = i }).ToArray(), MaxDropDownHeight = 320, MinWidth = 280, VerticalContentAlignment = VerticalAlignment.Center, IsEnabled = items.Count > 0 };
-        _add = Button("添加条件", () => { if (_picker.SelectedItem is RangeRow row && !_rows!.Any(r => r.Item.Id == row.Item.Id)) { CommitRows(); _rows!.Add(new RangeRow { Item = row.Item }); _grid!.Items.Refresh(); } });
-        _add.IsEnabled = items.Count > 0;
-        DockPanel.SetDock(_add, Dock.Right); choose.Children.Add(_add);
-        var remove = Button("移除选中", () => { if (_grid!.SelectedItem is RangeRow row) { CommitRows(); _rows!.Remove(row); _grid.Items.Refresh(); } });
-        DockPanel.SetDock(remove, Dock.Right); choose.Children.Add(remove); choose.Children.Add(_picker);
-        var modes = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10) };
+        var modes = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
         DockPanel.SetDock(modes, Dock.Top); rangesPanel.Children.Add(modes);
-        modes.Children.Add(new TextBlock { Text = "测项条件：", VerticalAlignment = VerticalAlignment.Center });
-        var intersection = new RadioButton { Content = "交集（全部满足）", GroupName = "FilterMatch", Margin = new Thickness(8, 0, 18, 0), IsChecked = match == SampleMatchMode.Intersection };
-        _union = new RadioButton { Content = "并集（任一满足）", GroupName = "FilterMatch", IsChecked = match == SampleMatchMode.Union };
-        modes.Children.Add(intersection); modes.Children.Add(_union);
-        intersection.Checked += (_, _) => UpdateNote(); _union.Checked += (_, _) => UpdateNote();
-        _rows = rules.Select(r => new RangeRow { Item = items.First(i => i.Id == r.ItemId),
-            Minimum = (r.Minimum * items.First(i => i.Id == r.ItemId).DisplayFactor)?.ToString("G", CultureInfo.InvariantCulture) ?? "",
-            Maximum = (r.Maximum * items.First(i => i.Id == r.ItemId).DisplayFactor)?.ToString("G", CultureInfo.InvariantCulture) ?? "" }).ToList();
+        modes.Children.Add(new TextBlock { Text = "条件组合", VerticalAlignment = VerticalAlignment.Center });
+        RadioButton Radio(string text, string group, bool active)
+        {
+            var button = new RadioButton { Content = text, GroupName = group, Margin = new Thickness(8, 2, 12, 2), IsChecked = active };
+            modes.Children.Add(button);
+            return button;
+        }
+        Radio("交集 AND", "FilterMatch", match == SampleMatchMode.Intersection);
+        _union = Radio("并集 OR", "FilterMatch", match == SampleMatchMode.Union);
+        bool outside = rules.FirstOrDefault()?.Outside == true;
+        var inside = Radio("范围内", "FilterSide", !outside);
+        _outside = Radio("范围外", "FilterSide", outside);
+        inside.Checked += (_, _) => SchedulePreview();
+        _outside.Checked += (_, _) => SchedulePreview();
+
+        var golden = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+        DockPanel.SetDock(golden, Dock.Top); rangesPanel.Children.Add(golden);
+        var setGolden = Button("将当前 Run 设为 Golden", SetGolden);
+        setGolden.Margin = new Thickness(0, 0, 10, 0);
+        setGolden.IsEnabled = currentRun != null;
+        DockPanel.SetDock(setGolden, Dock.Left); golden.Children.Add(setGolden);
+        string[] savedGolden = rules.Select(r => r.Deviation?.GoldenLabel).OfType<string>().Distinct().ToArray();
+        _goldenNote = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap,
+            Text = savedGolden.Length == 1 ? "Golden：" + savedGolden[0] : "Golden：从主窗口选定 Run 后设置" };
+        golden.Children.Add(_goldenNote);
+
         _grid = new DataGrid { AutoGenerateColumns = false, CanUserAddRows = false, CanUserDeleteRows = false, ItemsSource = _rows,
             EnableRowVirtualization = true, EnableColumnVirtualization = true, SelectionMode = DataGridSelectionMode.Single };
-        _grid.Columns.Add(new DataGridTextColumn { Header = "Test Item", Binding = new Binding("Name"), IsReadOnly = true, Width = new DataGridLength(1, DataGridLengthUnitType.Star) });
-        _grid.Columns.Add(new DataGridTextColumn { Header = "小于等于 ≤", Binding = new Binding("Maximum"), Width = 150 });
-        _grid.Columns.Add(new DataGridTextColumn { Header = "大于等于 ≥", Binding = new Binding("Minimum"), Width = 150 });
+        _grid.Columns.Add(new DataGridTextColumn { Header = "Test Item", Binding = new Binding(nameof(RangeRow.Name)), IsReadOnly = true,
+            MinWidth = 170, Width = new DataGridLength(1, DataGridLengthUnitType.Star) });
+        void Combo(string header, string property, System.Collections.IEnumerable options, int width, string? enabled = null)
+        {
+            var col = new DataGridComboBoxColumn { Header = header, ItemsSource = options,
+                SelectedValueBinding = new Binding(property) { Mode = BindingMode.TwoWay }, SelectedValuePath = "Key", DisplayMemberPath = "Value", Width = width };
+            if (enabled != null) col.CellStyle = EnabledCell(enabled);
+            _grid.Columns.Add(col);
+        }
+        void TextColumn(string header, string property, int width, string? enabled = null, bool readOnly = false)
+        {
+            var col = new DataGridTextColumn { Header = header, Binding = new Binding(property) { UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged },
+                Width = width, IsReadOnly = readOnly };
+            if (enabled != null) col.CellStyle = EnabledCell(enabled);
+            _grid.Columns.Add(col);
+        }
+        Combo("计算方式", nameof(RangeRow.Calculation), Calculations, 126);
+        Combo("基准来源", nameof(RangeRow.Baseline), Baselines, 128, nameof(RangeRow.UsesDeviation));
+        TextColumn("自定义基准值", nameof(RangeRow.Reference), 105, nameof(RangeRow.UsesCustom));
+        TextColumn("下限 / 负偏差", nameof(RangeRow.Minimum), 109);
+        TextColumn("上限 / 正偏差", nameof(RangeRow.Maximum), 109);
+        TextColumn("计算范围", nameof(RangeRow.Preview), 225, readOnly: true);
         rangesPanel.Children.Add(_grid);
 
         var binsPanel = new DockPanel { Margin = new Thickness(12) };
@@ -103,47 +180,167 @@ public sealed class SampleFilterWindow : Window
             ItemTemplate = new DataTemplate { VisualTree = checkBox } };
         if (selectedSBins != null)
             foreach (string bin in selectedSBins) _sBinList.SelectedItems.Add(bin);
+        _sBinList.SelectionChanged += (_, _) => SchedulePreview();
         binsPanel.Children.Add(_sBinList);
         tabs.SelectedIndex = 0;
-        UpdateNote();
-        Activated += (_, _) => RefreshChoices();
+        RefreshFocusedRows();
+        Activated += (_, _) => RefreshFocusedRows();
         Closing += (_, e) => { if (_applying) e.Cancel = true; };
+        Closed += (_, _) => { _closed = true; _previewTimer.Stop(); _previewCancellation?.Cancel(); };
     }
 
-    public void UpdateItems(IReadOnlyList<TestItemData> items, RetestMode mode)
+    private static Style EnabledCell(string property)
     {
-        _mode = mode;
-        if (!ReferenceEquals(items, _sourceItems)) { CommitRows(); _rows.Clear(); _removedConditions = 0; _sourceItems = items; _error.Text = "数据已更新，请重新添加筛选条件。"; }
-        RefreshChoices();
+        var style = new Style(typeof(DataGridCell));
+        style.Setters.Add(new Setter(IsEnabledProperty, new Binding(property)));
+        var disabled = new Trigger { Property = IsEnabledProperty, Value = false };
+        disabled.Setters.Add(new Setter(OpacityProperty, .5));
+        style.Triggers.Add(disabled);
+        return style;
+    }
+
+    private RangeRow MakeRow(TestItemData item, SampleRange? rule)
+    {
+        string Number(double? value, double scale) => (value * scale)?.ToString("G", CultureInfo.InvariantCulture) ?? "";
+        var row = new RangeRow { Item = item, SavedGolden = rule?.Deviation is { Baseline: SampleBaseline.Golden } saved ? saved : null };
+        if (rule?.Deviation is { } deviation)
+        {
+            row.Calculation = deviation.Calculation;
+            row.Baseline = deviation.Baseline;
+            var scale = deviation.Calculation == SampleCalculation.Relative ? 1 : item.DisplayFactor;
+            row.Minimum = Number(deviation.Negative, scale);
+            row.Maximum = Number(deviation.Positive, scale);
+            if (deviation.Baseline == SampleBaseline.Custom) row.Reference = Number(deviation.Reference, item.DisplayFactor);
+        }
+        else
+        {
+            row.Minimum = Number(rule?.Minimum, item.DisplayFactor);
+            row.Maximum = Number(rule?.Maximum, item.DisplayFactor);
+        }
+        row.Edited += SchedulePreview;
+        return row;
+    }
+
+    internal void RefreshFocusedRows()
+    {
+        if (_applying || _closed) return;
+        var focused = _sourceItems.Where(i => i.Focus.IsFocused).ToArray();
+        if (!_rows.Select(row => row.Item.Id).SequenceEqual(focused.Select(item => item.Id)))
+        {
+            CommitRows();
+            _rows.Clear();
+            foreach (var item in focused)
+            {
+                if (!_drafts.TryGetValue(item.Id, out var row)) _drafts[item.Id] = row = MakeRow(item, null);
+                _rows.Add(row);
+            }
+            _grid.Items.Refresh();
+        }
+        UpdateNote();
+        SchedulePreview();
     }
 
     private void UpdateNote()
     {
-        if (_note == null || _union == null) return;
-        _note.Text = (_sourceItems.Any(i => i.Focus.IsFocused) ? "仅列出主列表已关注的测试项。" : "请先在主列表勾选关注的测试项。") +
-            (_removedConditions > 0 ? $" {_removedConditions} 个未关注项条件将在应用时移除；关闭保留当前筛选。" : "") +
-            "\n≤ 小值、≥ 大值选两侧；≤ 大值、≥ 小值选中间。边界包含；留空表示单侧不限。\n" +
-            (_mode == RetestMode.All ? "按原始记录匹配；" : "按当前复测口径匹配芯片，支持分段测试（仅复测取末次复测值）；") +
-            (MatchMode == SampleMatchMode.Union ? "满足任一测项条件即保留。" : "必须满足全部测项条件。") + "缺测/无效值不满足对应条件。";
+        var visible = _rows.Select(row => row.Item.Id).ToHashSet(StringComparer.Ordinal);
+        int removed = Rules.Count(rule => !visible.Contains(rule.ItemId));
+        _note.Text = (_rows.Count == 0 ? "在主窗口勾选「关注」，测项会自动加入表格。" : "已关注的测项自动加入。两侧都留空时，该测项暂停参与筛选。") +
+            (removed == 0 ? "" : $" 已取消关注的 {removed} 个条件将在应用时移除。") +
+            "\n范围内包含边界，范围外排除边界。两侧偏差可分别填写；缺测或无效值不匹配。" +
+            (_mode == RetestMode.All ? " 当前逐条匹配原始记录。" : " 当前按复测口径匹配芯片。");
     }
 
-    private void RefreshChoices()
+    private void SetGolden()
     {
-        if (_applying) return;
         CommitRows();
-        var focused = _sourceItems.Where(i => i.Focus.IsFocused).ToArray();
-        string? selected = (_picker.SelectedItem as RangeRow)?.Item.Id;
-        _picker.ItemsSource = focused.Select(i => new RangeRow { Item = i }).ToArray();
-        _picker.SelectedItem = _picker.Items.OfType<RangeRow>().FirstOrDefault(r => r.Item.Id == selected);
-        _picker.IsEnabled = _add.IsEnabled = focused.Length > 0;
-        int removed = _rows.RemoveAll(r => !focused.Any(i => i.Id == r.Item.Id));
-        _removedConditions += removed; UpdateNote();
-        if (removed > 0) _error.Text = "已移除未关注项的待编辑条件；点击应用后生效。";
-        _grid.Items.Refresh();
+        if (_currentRun?.Invoke() is not { } record)
+        {
+            _error.Text = "请先在对应的主窗口选择一个有效 Run。";
+            return;
+        }
+        _goldenRecord = record;
+        _goldenLabel = string.Join(" / ", new[] { record.Lot.Trim(), record.WaferId, "Run " + record.SerialNumber }.Where(s => s.Length > 0));
+        _goldenNote.Text = "Golden：" + _goldenLabel;
+        _error.Text = "";
+        SchedulePreview();
     }
 
     private void CommitRows()
     { _grid.CommitEdit(DataGridEditingUnit.Cell, true); _grid.CommitEdit(DataGridEditingUnit.Row, true); }
+
+    private SampleRange? MakeRule(RangeRow row)
+    {
+        if (string.IsNullOrWhiteSpace(row.Minimum) && string.IsNullOrWhiteSpace(row.Maximum)) return null;
+        double? Parse(string text, double divisor) => string.IsNullOrWhiteSpace(text) ? null :
+            DatasetService.TryValue(text, out double value) && double.IsFinite(value / divisor)
+                ? value / divisor : throw new FormatException("请输入有限数字。");
+        double scale = row.Calculation == SampleCalculation.Relative ? 1 : row.Item.DisplayFactor;
+        var min = Parse(row.Minimum, scale);
+        var max = Parse(row.Maximum, scale);
+        if (!row.UsesDeviation) return new(row.Item.Id, min, max) { Outside = Outside };
+        if (min < 0 || max < 0) throw new FormatException("负偏差和正偏差请填写非负的幅度。");
+        double? reference = null;
+        string? goldenLabel = null;
+        if (row.Baseline == SampleBaseline.Custom)
+            reference = Parse(row.Reference, row.Item.DisplayFactor) ?? throw new FormatException("请填写自定义基准值。");
+        else if (row.Baseline == SampleBaseline.Golden)
+        {
+            reference = _goldenRecord == null ? row.SavedGolden?.Reference : SampleFilterService.ReadValue(_goldenRecord, row.Item.Id);
+            if (!reference.HasValue) throw new FormatException("请用含该测项有效测量值的 Run 设置 Golden。");
+            goldenLabel = _goldenLabel ?? row.SavedGolden?.GoldenLabel;
+        }
+        return new(row.Item.Id, null, null)
+        {
+            Outside = Outside, Deviation = new(row.Calculation, row.Baseline, min, max, reference, goldenLabel)
+        };
+    }
+
+    private string[] SelectedSBins() => _sBinList.SelectedItems.Cast<string>().Order(StringComparer.Ordinal).ToArray();
+
+    private void SchedulePreview()
+    {
+        if (_closed || _applying || _preview == null) return;
+        _previewCancellation?.Cancel();
+        _previewTimer.Stop();
+        _previewTimer.Start();
+    }
+
+    private async Task UpdatePreviewsAsync()
+    {
+        if (_closed || _applying || _preview == null) return;
+        var rules = new List<SampleRange>();
+        foreach (var row in _rows)
+        {
+            try
+            {
+                if (MakeRule(row) is { } rule) { rules.Add(rule); row.Preview = "正在计算…"; }
+                else row.Preview = "填写后预览";
+            }
+            catch (FormatException ex) { row.Preview = ex.Message; }
+        }
+        if (rules.Count == 0) return;
+        using var cancellation = new CancellationTokenSource();
+        _previewCancellation = cancellation;
+        var token = cancellation.Token;
+        try
+        {
+            await _previewGate.WaitAsync(token);
+            try
+            {
+                var result = await _preview(rules, SelectedSBins(), token);
+                if (!token.IsCancellationRequested && !_closed)
+                    foreach (var row in _rows)
+                        if (result.TryGetValue(row.Item.Id, out var text)) row.Preview = text;
+            }
+            finally { _previewGate.Release(); }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            if (!token.IsCancellationRequested && !_closed) _error.Text = "范围预览：" + ex.Message;
+        }
+        finally { if (ReferenceEquals(_previewCancellation, cancellation)) _previewCancellation = null; }
+    }
 
     private void Apply()
     {
@@ -151,34 +348,32 @@ public sealed class SampleFilterWindow : Window
         var rules = new List<SampleRange>();
         foreach (var row in _rows)
         {
-            double? Parse(string text) => text.Trim().Length == 0 ? null : DatasetService.TryValue(text, out double value)
-                ? value / row.Item.DisplayFactor : throw new FormatException("范围必须是有限数字。");
-            try
-            {
-                double? min = Parse(row.Minimum), max = Parse(row.Maximum);
-                if (min == null && max == null) throw new FormatException("至少填写一个边界。");
-                rules.Add(new(row.Item.Id, min, max));
-            }
+            try { if (MakeRule(row) is { } rule) rules.Add(rule); }
             catch (FormatException ex) { _error.Text = row.Item.DisplayName + "：" + ex.Message; return; }
         }
-        _ = SubmitAsync(rules, _sBinList.SelectedItems.Cast<string>().Order(StringComparer.Ordinal).ToArray());
+        _ = SubmitAsync(rules, SelectedSBins());
     }
 
-    private async Task SubmitAsync(IReadOnlyList<SampleRange> rules, IReadOnlyList<string> sBins)
+    private async Task SubmitAsync(IReadOnlyList<SampleRange> rules, IReadOnlyList<string> sBins, bool clearDrafts = false)
     {
         if (_applying) return;
+        _previewTimer.Stop(); _previewCancellation?.Cancel();
         _applying = true; IsEnabled = false;
         try
         {
             if (_apply != null) await _apply(rules, MatchMode, sBins);
             Rules = rules;
-            if (rules.Count == 0) { CommitRows(); _rows.Clear(); _grid.Items.Refresh(); }
+            if (clearDrafts)
+            {
+                CommitRows();
+                _drafts.Clear(); _rows.Clear(); _grid.Items.Refresh();
+                _goldenRecord = null; _goldenLabel = null; _goldenNote.Text = "Golden：从主窗口选定 Run 后设置";
+            }
             if (sBins.Count == 0) _sBinList.UnselectAll();
             _error.Text = rules.Count == 0 && sBins.Count == 0 ? "已取消数据筛选。" : "已应用，可以继续操作主窗口或修改条件。";
-            _removedConditions = 0; UpdateNote();
         }
         catch (OperationCanceledException) { _error.Text = "已取消计算，保留原筛选。"; }
         catch (Exception ex) { _error.Text = ex.Message; }
-        finally { _applying = false; IsEnabled = true; }
+        finally { _applying = false; IsEnabled = true; RefreshFocusedRows(); }
     }
 }

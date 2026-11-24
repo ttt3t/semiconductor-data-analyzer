@@ -14,6 +14,7 @@ public partial class MainWindow
     private string _scopeRetestDefinition = "";
     private SampleMatchMode _sampleMatch, _scopeMatch;
     private HashSet<string>? _sampleIncludedIds;
+    private event Action? SampleFilterContextChanged;
     private CsvParseResult ActiveData => _scopeData ?? _data;
     private int SampleFilterCount => _sampleRanges.Count + _sampleSBins.Count;
 
@@ -23,21 +24,42 @@ public partial class MainWindow
         var source = _data;
         var mode = _retestMode;
         var config = _config;
-        // Only definitions and focus flags are copied; numeric columns are not needed by this editor.
-        var items = source.Items.Select(item =>
-        {
-            var copy = DatasetService.CloneItem(item);
-            copy.Focus = new Models.TestItemFocus { IsFocused = item.Focus.IsFocused };
-            return copy;
-        }).ToArray();
-        IndependentWindow.Show(new SampleFilterWindow(items, _sampleRanges, mode, _sampleMatch,
+        var items = source.Items.Select(DatasetService.CloneItem).ToArray();
+        var stores = _runLookup.Stores;
+        Models.CsvRecord? CurrentRun() => !_closing && ReferenceEquals(_data, source) &&
+            (uint)_runIndex < (uint)source.Records.Count ? source.Records[_runIndex] : null;
+        var window = new SampleFilterWindow(items, _sampleRanges, mode, _sampleMatch,
             (rules, match, sBins) =>
             {
                 EnsureWindowSource(source);
                 if (_retestMode != mode || !ReferenceEquals(_config, config))
                     throw new InvalidOperationException("分析口径或配置已变化，请重新打开筛选窗口后应用。");
                 return ApplySampleFiltersAsync(rules, match, sBins);
-            }, _runLookup.SBins, _sampleSBins));
+            }, _runLookup.SBins, _sampleSBins, CurrentRun,
+            async (rules, sBins, token) =>
+            {
+                using var previewLease = new DatasetLease(stores);
+                var run = CurrentRun();
+                return await Task.Run(() =>
+                {
+                    using var operation = new AnalysisOperation(token);
+                    return SampleFilterService.Preview(source, rules, mode, config, sBins, run);
+                }, token);
+            });
+        var lease = new DatasetLease(stores);
+        SampleFilterContextChanged += window.RefreshFocusedRows;
+        window.Closed += (_, _) =>
+        {
+            SampleFilterContextChanged -= window.RefreshFocusedRows;
+            lease.Dispose();
+        };
+        try { IndependentWindow.Show(window); }
+        catch
+        {
+            SampleFilterContextChanged -= window.RefreshFocusedRows;
+            lease.Dispose();
+            throw;
+        }
     }
 
     private async Task ApplySampleFiltersAsync(IReadOnlyList<SampleRange> rules, SampleMatchMode match, IReadOnlyList<string> sBins)

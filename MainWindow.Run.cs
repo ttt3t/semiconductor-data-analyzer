@@ -168,7 +168,11 @@ public partial class MainWindow
         bool changed = index != _runIndex;
         _runIndex = index;
         UpdateRunInput();
-        if (changed) RefreshRunValues();
+        if (changed)
+        {
+            RefreshRunValues();
+            SampleFilterContextChanged?.Invoke();
+        }
         var record = _data.Records[index];
         TxtStatus.Text = $"Run {record.SerialNumber} · 第 {index + 1}/{_data.Records.Count} 条 · {record.WaferId} · Site {SiteKey(record.Site)}";
     }

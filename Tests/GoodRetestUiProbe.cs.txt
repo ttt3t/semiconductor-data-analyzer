@@ -85,6 +85,61 @@ static class Probe
             grid.Items.OfType<TestItemSummary>().Single().Mean == 25, "clearing data filters restores all records and unchecks the SBIN tab");
         filter.Close(); Pump();
     }
+    static void CheckRangeFilter(MainWindow main, DataGrid grid, CsvParseResult original)
+    {
+        void Until(Func<bool> ready)
+        {
+            var timer = Stopwatch.StartNew();
+            while (!ready())
+            {
+                if (timer.Elapsed > TimeSpan.FromSeconds(20)) throw new TimeoutException("Measurement range filter");
+                Pump(); Thread.Sleep(3);
+            }
+            Pump();
+        }
+        Call(main, "SampleFilter_Click", main, new RoutedEventArgs());
+        var popup = Application.Current.Windows.OfType<SampleFilterWindow>().Single();
+        popup.UpdateLayout(); Pump();
+        var rows = (List<SampleFilterWindow.RangeRow>)Field(popup, "_rows")!;
+        void Focus(bool value)
+        {
+            original.Items[0].Focus.IsFocused = value;
+            Call(main, "Focus_Click", main, new RoutedEventArgs());
+            Pump();
+        }
+        void Click(string content)
+        {
+            Children<Button>(popup).Single(button => Equals(button.Content, content)).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            Until(() => popup.IsEnabled);
+        }
+        Check(rows.Count == 0, "measurement table starts empty when no test item is focused");
+        Focus(true);
+        var row = rows.Single();
+        Check(row.Item.Id == original.Items[0].Id && row.Minimum == "" && row.Maximum == "",
+            "focusing a measurement in the main analyzer immediately adds a blank row to the open table");
+        row.Calculation = SampleCalculation.Relative;
+        row.Reference = "20"; row.Minimum = "5"; row.Maximum = "5";
+        Until(() => row.Preview.Contains("19 ~ 21"));
+        Click("应用");
+        Check(popup.Rules.Single().Deviation?.Reference == 20 &&
+            ((CsvParseResult)Field(main, "_scopeData")!).Records.Count == 2 &&
+            grid.Items.OfType<TestItemSummary>().Single().Mean == 20,
+            "the relative interval preview matches the membership applied to the main analyzer");
+        Call(main, "SelectRun", 0);
+        row.Baseline = SampleBaseline.Golden;
+        Click("将当前 Run 设为 Golden");
+        ((RadioButton)Field(popup, "_outside")!).IsChecked = true;
+        Until(() => row.Preview.Contains("范围外 0.95 ~ 1.05"));
+        Click("应用");
+        Check(popup.Rules.Single() is { Outside: true, Deviation.Reference: 1 } &&
+            grid.Items.OfType<TestItemSummary>().Single().Mean == 25,
+            "the selected raw Run supplies the Golden value and outside membership reaches the analyzer");
+        Focus(false);
+        Click("应用");
+        Check(rows.Count == 0 && popup.Rules.Count == 0 && ReferenceEquals(original, Field(main, "_scopeData")),
+            "unfocusing removes the row and Apply clears its measurement condition");
+        popup.Close(); Pump();
+    }
     static void CheckBinClassification(string folder)
     {
         var config = ConfigLoader.Parse("[HBINClassification]\nPassHBins=4\n[SBINClassification]\nPassSBins=7\nPartialPassSBins=1");
@@ -177,6 +232,7 @@ static class Probe
             Wait((Task)Call(main, "ApplySampleFiltersAsync", Array.Empty<SampleRange>(), SampleMatchMode.Intersection, Array.Empty<string>())!);
             Check(grid.Items.OfType<TestItemSummary>().Single().Mean == 25 && ReferenceEquals(original, Field(main, "_data")), "removing filter restores latest statistics over unchanged loaded data");
             CheckSBinFilter(main, grid, original);
+            CheckRangeFilter(main, grid, original);
             CheckBinClassification(folder);
             edited.PreferGoodRetest = true;
             string report = Path.Combine(folder, "preferred.xlsx");

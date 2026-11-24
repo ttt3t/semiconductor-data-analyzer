@@ -112,6 +112,7 @@ public partial class MainWindow
     private void Focus_Click(object sender, RoutedEventArgs e) => RefreshFocusColumnFilter();
     private void RefreshFocusColumnFilter()
     {
+        SampleFilterContextChanged?.Invoke();
         if (_columnValueFilters.ContainsKey("Focus") || ColumnSearch("Focus").IsSearchActive) ScheduleFilter();
     }
 
