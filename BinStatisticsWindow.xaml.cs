@@ -83,8 +83,12 @@ public partial class BinStatisticsWindow : Window
         var siteRows = result.SiteRows.Select(r => new BinSiteRow(r.Category, r.Bin,
             indices.Select(i => i >= 0 ? r.Percentages[i] : null).ToArray()) { Description = r.Description }).ToList();
         DgSites.ItemsSource = new ListCollectionView(siteRows);
-        TxtInfo.Text = $"晶圆内去重芯片：{result.ChipCount}  |  无 SBIN：{result.MissingSBin}  |  无 HBIN：{result.MissingHBin}  |  " +
-            $"Pass：{100.0 * result.PassCount / Math.Max(1, result.ChipCount):F2}%  |  Pass + PartialPass：{100.0 * (result.PassCount + result.PartialPassCount) / Math.Max(1, result.ChipCount):F2}%";
+        int total = Math.Max(1, result.ChipCount);
+        string Rates(string name, int pass, int partial) =>
+            $"{name} Pass：{100.0 * pass / total:F2}%  |  Pass + PartialPass：{100.0 * (pass + partial) / total:F2}%";
+        TxtInfo.Text = $"晶圆内去重芯片：{result.ChipCount}  |  无 SBIN：{result.MissingSBin}  |  无 HBIN：{result.MissingHBin}\n" +
+            Rates("HBIN", result.PassCount, result.PartialPassCount) + "   ·   " +
+            Rates(result.HasSBinClassification ? "SBIN" : "SBIN（沿用 HBIN）", result.SBinPassCount, result.SBinPartialPassCount);
     }
 
     private string BuildClipboardText()
@@ -99,15 +103,15 @@ public partial class BinStatisticsWindow : Window
         Row("复测模式", FirstMode.IsChecked == true ? "只保留首测" : "复测覆盖首测");
         text.AppendLine();
         Row("SBIN 明细");
-        Row("分类", "SBIN", "释义", "数量", "占比%");
+        Row("分类", "SBIN", "判定", "释义", "数量", "占比%");
         // Read the entire sorted view, not just selected/realized cells.
         foreach (var row in DgSbin.Items.OfType<BinCountRow>())
-            Row(row.Category, row.Bin, row.Description, Number(row.Count), Percent(row.Percent));
+            Row(row.Category, row.Bin, row.DispositionText, row.Description, Number(row.Count), Percent(row.Percent));
         text.AppendLine();
         Row("HBIN 明细");
-        Row("HBIN", "数量", "占比%");
+        Row("HBIN", "判定", "数量", "占比%");
         foreach (var row in DgHbin.Items.OfType<BinCountRow>())
-            Row(row.Bin, Number(row.Count), Percent(row.Percent));
+            Row(row.Bin, row.DispositionText, Number(row.Count), Percent(row.Percent));
         text.AppendLine();
         Row("SBIN 分类汇总");
         Row("分类", "数量", "占比%");

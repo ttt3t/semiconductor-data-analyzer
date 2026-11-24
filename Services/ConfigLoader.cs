@@ -109,6 +109,8 @@ public static class ConfigLoader
 
             case "PASSHBINS": c.PassHBins = List(value); break;
             case "PARTIALPASSHBINS": c.PartialPassHBins = List(value); break;
+            case "PASSSBINS": c.PassSBins = List(value); break;
+            case "PARTIALPASSSBINS": c.PartialPassSBins = List(value); break;
             case "PREFERGOODRETEST": c.PreferGoodRetest = ParseBool(value); break;
             case "GOODRETESTINCLUDEPARTIALPASS": c.GoodRetestIncludePartialPass = ParseBool(value); break;
             case "PRODUCTCOLUMN": c.ProductColumn = ParseNonNegativeInt(key, value); break;
@@ -159,6 +161,9 @@ public static class ConfigLoader
         var pass = c.PassHBins.Select(BinStatisticsService.NormalizeBin).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (c.PartialPassHBins.Select(BinStatisticsService.NormalizeBin).Any(pass.Contains))
             throw new InvalidDataException("PassHBins 与 PartialPassHBins 不允许重叠。");
+        if (c.PassSBins != null && c.PartialPassSBins != null &&
+            c.PassSBins.Select(BinStatisticsService.NormalizeBin).Intersect(c.PartialPassSBins.Select(BinStatisticsService.NormalizeBin)).Any())
+            throw new InvalidDataException("PassSBins 与 PartialPassSBins 不允许重叠。");
         var programs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var group in c.ProgramCompatibility.Values)
             foreach (string program in group)
@@ -273,6 +278,11 @@ public static class ConfigLoader
             [HBINClassification]
             PassHBins={string.Join(",", c.PassHBins)}
             PartialPassHBins={string.Join(",", c.PartialPassHBins)}
+
+            [SBINClassification]
+            ; 两项均未配置时，SBIN 按同条记录的 HBIN 判定。
+            {(c.PassSBins == null ? "; PassSBins=" : "PassSBins=" + string.Join(",", c.PassSBins))}
+            {(c.PartialPassSBins == null ? "; PartialPassSBins=" : "PartialPassSBins=" + string.Join(",", c.PartialPassSBins))}
 
             [RetestSelection]
             PreferGoodRetest={c.PreferGoodRetest}

@@ -31,7 +31,7 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 
 ## V2.0.22 更新
 
-- 数据管理的“Bin分类”增加 CP 多温综合和 FT 多温综合。必测步骤全为 Bin 1 才归入 Bin 1；仅有 Bin 1 和 PartialPass 时取最小的 PartialPass；有普通不良 Bin 时按最小数字编号归类。支持 HBIN / SBIN 显示及 XLSX 管理报告。
+- 数据管理的“Bin分类”增加 CP 多温综合和 FT 多温综合。各温度按 INI 的 HBIN／SBIN 规则判定，按普通不良、PartialPass、Pass 的顺序选取对应编号；同组取最小的数字编号。占不良芯片数与 HBIN 综合良率使用同一组不良芯片。支持 HBIN / SBIN 显示及 XLSX 管理报告。
 
 ## V2.0.21 更新
 
@@ -162,7 +162,7 @@ Fail 芯片 XLSX 拆为“Fail 芯片”和“复测良品芯片”两个工作�
 - **CP / FT**：默认 CP；FT 按指定的一个或多个 Test Num 读取 eFuse / OTP 原文，按顺序拼接 UUID 识别复测，支持预览与 INI 保存。UUID 缺失的记录独立保留并提示，原始测量值及 Run 序列号不改写。部分复测导出的整合 CSV 同时保存派生身份。
 - **图表性能**：直方图直接绘制清晰的柱形与坐标；散点合成一个可复用的点图层，游标独立更新，不再额外缓存整张图。拉伸和缩放按真实数据重绘，切换测项保留旧图直至最新结果就绪，避免闪白。
 - **主表与散点**：Fails、Max、Min；粉红色超限 Value、良率热力底色；Combine Site / Wafer；按 SN、Site、Wafer 排序；绿色良品、红色超限点、蓝色标记、细线 X 与绿色单像素虚线连接、组名与分隔线；可锁定纵轴对比测项。
-- **BIN Map**：图例单项勾选或点击列头全选 / 取消；未勾选以灰色显示，统计不变。仅 SBIN 1 / HBIN 1 使用绿色，其他 BIN 的 50 色配色避开灰色和绿色系，报告颜色一致。
+- **BIN Map**：图例单项勾选或点击列头全选 / 取消；未勾选以灰色显示，统计不变。INI 判为 Pass 的 BIN 使用绿色，其他 BIN 的 50 色配色避开灰色和绿色系，报告颜色一致。
 - **热力图与 Run**：自定义蓝 / 绿 / 红色标，多晶圆统一范围；Run 可按序列号或晶圆 + X/Y 定位。
 
 当前源码版本为 V2.0.9；已发布的运行包版本以 Releases 页面为准。详细操作和统计口径见 [使用手册](Docs/UserGuide.md)。

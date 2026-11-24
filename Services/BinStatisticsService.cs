@@ -6,6 +6,7 @@ namespace SemiconductorCsvAnalyzer.Services;
 public sealed record BinCountRow(string Bin, string Category, int Count, double Percent)
 {
     public string Description { get; init; } = "";
+    public string DispositionText { get; init; } = "";
     public double BinSort => NumericText.SortKey(Bin);
 }
 public sealed record BinCategoryRow(string Category, int Count, double Percent);
@@ -19,6 +20,9 @@ public sealed record BinStatisticsResult(int ChipCount, int MissingSBin, int Mis
 {
     public int PassCount { get; init; }
     public int PartialPassCount { get; init; }
+    public int SBinPassCount { get; init; }
+    public int SBinPartialPassCount { get; init; }
+    public bool HasSBinClassification { get; init; }
     public List<string> Sites { get; init; } = new();
     public List<BinSiteRow> SiteRows { get; init; } = new();
 }
@@ -37,6 +41,9 @@ public static class BinStatisticsService
         // Bin is a whole-chip result: never mix a partial retest's item values to determine its Bin.
         var chosen = RetestPreference.SelectWhole(records, mode, config);
         var hbinClassifier = new HBinClassifier(config);
+        var sbinClassifier = HBinClassifier.ForSBin(config);
+        var sClasses = new Dictionary<string, OriginalDisposition?>();
+        int sPass = 0, sPartial = 0;
         var classification = config.SBinCategories.SelectMany(c => c.Value.Select(b => (Bin: NormalizeBin(b), Category: c.Key)))
             .ToDictionary(p => p.Bin, p => p.Category, StringComparer.OrdinalIgnoreCase);
         var categoryCounts = config.SBinCategories.Keys.ToDictionary(c => c, _ => 0, StringComparer.OrdinalIgnoreCase);
@@ -53,6 +60,11 @@ public static class BinStatisticsService
             if (!string.IsNullOrWhiteSpace(record.SBin))
             {
                 sbins[record.SBin] = sbins.GetValueOrDefault(record.SBin) + 1;
+                var disposition = hbinClassifier.ClassifySBin(record.HBin, record.SBin, sbinClassifier);
+                if (disposition == OriginalDisposition.Pass) sPass++;
+                else if (disposition == OriginalDisposition.PartialPass) sPartial++;
+                sClasses[record.SBin] = sClasses.TryGetValue(record.SBin, out var previous) && previous != disposition
+                    ? null : disposition;
                 string site = Site(record);
                 siteTotals[site] = siteTotals.GetValueOrDefault(site) + 1;
                 var key = (site, record.SBin); siteBins[key] = siteBins.GetValueOrDefault(key) + 1;
@@ -69,9 +81,11 @@ public static class BinStatisticsService
         var order = categoryCounts.Keys.Select((name, index) => (name, index)).ToDictionary(p => p.name, p => p.index);
         double Percent(int count, int total) => total == 0 ? 0 : count * 100.0 / total;
         var sRows = sbins.Select(p => new BinCountRow(p.Key, Category(p.Key), p.Value, Percent(p.Value, sTotal))
-            { Description = config.SBinDescriptions.GetValueOrDefault(NormalizeBin(p.Key), "") })
+            { Description = config.SBinDescriptions.GetValueOrDefault(NormalizeBin(p.Key), ""),
+                DispositionText = sClasses[p.Key]?.ToString() ?? "混合" })
             .OrderBy(r => order[r.Category]).ThenBy(r => r.BinSort).ThenBy(r => r.Bin, StringComparer.OrdinalIgnoreCase).ToList();
-        var hRows = hbins.Select(p => new BinCountRow(p.Key, "", p.Value, Percent(p.Value, hTotal)))
+        var hRows = hbins.Select(p => new BinCountRow(p.Key, "", p.Value, Percent(p.Value, hTotal))
+            { DispositionText = hbinClassifier.Classify(p.Key).ToString() })
             .OrderBy(r => r.BinSort).ThenBy(r => r.Bin, StringComparer.OrdinalIgnoreCase).ToList();
         return new(chosen.Count, chosen.Count - sTotal, chosen.Count - hTotal, sRows, hRows,
             categoryCounts.Select(p => new BinCategoryRow(p.Key, p.Value, Percent(p.Value, sTotal))).ToList())
@@ -79,6 +93,9 @@ public static class BinStatisticsService
             Sites = sites,
             PassCount = chosen.Count(r => hbinClassifier.Classify(r.HBin) == OriginalDisposition.Pass),
             PartialPassCount = chosen.Count(r => hbinClassifier.Classify(r.HBin) == OriginalDisposition.PartialPass),
+            SBinPassCount = sPass,
+            SBinPartialPassCount = sPartial,
+            HasSBinClassification = sbinClassifier != null,
             SiteRows = sRows.Select(r => new BinSiteRow(r.Category, r.Bin, sites.Select(s =>
                 siteTotals.GetValueOrDefault(s) == 0 ? (double?)null : Percent(siteBins.GetValueOrDefault((s, r.Bin)), siteTotals[s])).ToArray())
                 { Description = r.Description }).ToList()

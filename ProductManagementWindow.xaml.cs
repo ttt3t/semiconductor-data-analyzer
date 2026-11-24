@@ -244,7 +244,7 @@ public partial class ProductManagementWindow : Window
             TxtCombinedBinNote.Text = _product?.Snapshot?.AnalyticsVersion is not (>= ProductYieldService.CombinedBinAnalyticsVersion)
                 ? "请点击「重新计算」，从源文件生成多温综合 Bin 分布。"
                 : data.Labels.Length == 0 ? "当前范围内暂无可用于综合分 Bin 的逐颗记录。"
-                    : "按必测步骤逐颗分 Bin。PartialPass 取产品配置的 HBIN，未完成单列。";
+                    : "按 INI 的 HBIN／SBIN 规则逐颗分 Bin。「占不良芯片数」与 HBIN 综合良率使用同一组不良芯片。";
         CategoryTrend.SetData(data);
     }
     private void InvalidateTab(TabItem? tab)

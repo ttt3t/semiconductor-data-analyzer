@@ -560,6 +560,7 @@ public static partial class DatasetService
         {
             layout.TestMode = config.TestMode; layout.UuidTestNumbers = config.UuidTestNumbers;
             layout.PassHBins = config.PassHBins; layout.PartialPassHBins = config.PartialPassHBins;
+            layout.PassSBins = config.PassSBins; layout.PartialPassSBins = config.PartialPassSBins;
             layout.MissingTokens = config.MissingTokens; layout.NotApplicableTokens = config.NotApplicableTokens;
         }
         var data = DataFileService.Parse(source.Path, layout, cancellationToken: AnalysisOperation.Token, stdfMode: source.StdfMode,

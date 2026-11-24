@@ -92,7 +92,10 @@ public sealed class ManagementSnapshot
 }
 
 public sealed record ManagedCombinedBinCount(string Kind, string Lot, string Wafer, string Period,
-    string BinType, string Bin, bool IsFailure, int Count);
+    string BinType, string Bin, string? FailureBin, Services.OriginalDisposition? Disposition, int Count)
+{
+    [JsonIgnore] public bool IsFailure => FailureBin != null;
+}
 
 public sealed class ManagedFailBinCount
 {

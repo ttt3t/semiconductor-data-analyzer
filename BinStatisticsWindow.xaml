@@ -43,6 +43,7 @@
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="分类" Binding="{Binding Category, Mode=OneTime}" Width="*"/>
                         <DataGridTextColumn Header="SBIN" Binding="{Binding Bin, Mode=OneTime}" SortMemberPath="BinSort" Width="70"/>
+                        <DataGridTextColumn Header="判定" Binding="{Binding DispositionText, Mode=OneTime}" Width="90"/>
                         <DataGridTextColumn Header="释义" Binding="{Binding Description, Mode=OneTime}" Width="140"/>
                         <DataGridTextColumn Header="数量" Binding="{Binding Count, Mode=OneTime}" Width="70"/>
                         <DataGridTextColumn Header="占比%" Binding="{Binding Percent, Mode=OneTime, StringFormat='{}{0:F2}%'}" Width="75"/>
@@ -54,6 +55,7 @@
                 <DataGrid x:Name="DgHbin">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="HBIN" Binding="{Binding Bin, Mode=OneTime}" SortMemberPath="BinSort" Width="*"/>
+                        <DataGridTextColumn Header="判定" Binding="{Binding DispositionText, Mode=OneTime}" Width="90"/>
                         <DataGridTextColumn Header="数量" Binding="{Binding Count, Mode=OneTime}" Width="70"/>
                         <DataGridTextColumn Header="占比%" Binding="{Binding Percent, Mode=OneTime, StringFormat='{}{0:F2}%'}" Width="75"/>
                     </DataGrid.Columns>

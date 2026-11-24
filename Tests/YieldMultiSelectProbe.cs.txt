@@ -45,7 +45,19 @@ static class Probe
             "combined SBIN percentages use all chips including the incomplete population");
         trend.CountDisplay = ManagementCountDisplay.PercentOfFailures;
         Check(trend.SelectedData.Series.Count == 0, "failure percentages exclude incomplete chips");
+        var classified = ProductCatalogStore.Clone(product);
+        classified.Snapshot!.CombinedBins = new()
+        {
+            new("CP", "L1", "W1", "2026-10", "SBIN", "7", null, OriginalDisposition.Pass, 1),
+            new("CP", "L1", "W1", "2026-10", "SBIN", "2", "1", OriginalDisposition.Fail, 1)
+        };
+        trend.SetData(ManagementTrendService.BinTrend(classified, stages.Single(s => s.CombinedKind == "CP"), "SBIN", "", ManagementPeriod.Wafer));
+        Check(trend.SelectedData.Series.Single() is { Category: "Bin 1" } fail && fail.Values.Single() == 100 &&
+            fail.LineBrush != BinPalette.PassBrush,
+            "failure-only view shows the official failed SBIN even when the full chart chose another code");
         trend.CountDisplay = ManagementCountDisplay.Count;
+        Check(trend.SelectedData.Series.Any(s => s.Category == "Bin 7" && s.LineBrush == BinPalette.PassBrush) &&
+            trend.SelectedData.Series.All(s => s.Category != "Bin 1"), "all-bin mode restores classified codes and configured Pass colors");
         ((RadioButton)window.FindName("CategoryHbin")).IsChecked = true;
         var selected = ManagementAnalytics.Select(product, new() { new("CP", "L1", "W1") });
         var scoped = ManagementTrendService.BinTrend(selected, stages.Single(stage => stage.CombinedKind == "CP"), "HBIN", "", ManagementPeriod.Month);

@@ -4,26 +4,18 @@ using SemiconductorCsvAnalyzer.Models;
 
 namespace SemiconductorCsvAnalyzer.Services;
 
-/// <summary>Fifty frozen BIN colors; green is reserved for BIN 1 and P/F pass.</summary>
+/// <summary>Fifty frozen BIN colors, plus the configured Pass color.</summary>
 public static class BinPalette
 {
     private static readonly Brush[] Colors = CreatePalette();
-    private static readonly Brush BinOneGreen = MakeGreen();
+    public static Brush PassBrush { get; } = MakeGreen();
     private static Brush MakeGreen()
     {
         var brush = new SolidColorBrush(Color.FromRgb(46, 160, 67)); brush.Freeze(); return brush;
     }
-    private static bool IsBinOne(string category)
-    {
-        string text = category.Trim().ToUpperInvariant();
-        foreach (string prefix in new[] { "SBIN", "HBIN", "BIN" })
-            if (text.StartsWith(prefix)) { text = text[prefix.Length..]; break; }
-        return BinStatisticsService.NormalizeBin(text) == "1";
-    }
-
     public static string Key(string category) => string.IsNullOrWhiteSpace(category) ? "(空)" : category;
 
-    public static IReadOnlyDictionary<string, Brush> Create(IEnumerable<string> categories)
+    public static IReadOnlyDictionary<string, Brush> Create(IEnumerable<string> categories, Func<string, bool>? isPass = null)
     {
         // Use all wafers and raw attempts, so wafer/retest selection cannot shift the legend colors.
         // Rank distinct bins instead of taking bin number % 50: arbitrary IDs must not collide.
@@ -31,13 +23,29 @@ public static class BinPalette
         int index = 0;
         foreach (string category in categories.Select(Key).Distinct(StringComparer.Ordinal)
             .OrderBy(NumericText.SortKey).ThenBy(s => s, StringComparer.Ordinal))
-            result[category] = IsBinOne(category) ? BinOneGreen : Colors[index++ % Colors.Length];
+            result[category] = isPass?.Invoke(category) == true ? PassBrush : Colors[index++ % Colors.Length];
         return result;
+    }
+
+    internal static IReadOnlyDictionary<string, Brush> ForBins(IEnumerable<CsvRecord> records, bool soft, AnalyzerConfig config)
+    {
+        var hard = new HBinClassifier(config);
+        var sbins = soft ? HBinClassifier.ForSBin(config) : null;
+        var pass = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var record in records)
+        {
+            AnalysisOperation.CheckCancellation();
+            string category = Key(soft ? record.SBin : record.HBin);
+            if (pass.TryGetValue(category, out bool allPass) && (!allPass || !soft || sbins != null)) continue;
+            var disposition = soft ? hard.ClassifySBin(record.HBin, record.SBin, sbins) : hard.Classify(record.HBin);
+            // A single legend swatch must not mark a mixed legacy SBIN as wholly Pass.
+            pass[category] = disposition == OriginalDisposition.Pass;
+        }
+        return Create(pass.Keys, bin => pass[bin]);
     }
 
     public static Brush ColorForCategory(string category)
     {
-        if (IsBinOne(category)) return BinOneGreen;
         if (long.TryParse(category, NumberStyles.Integer, CultureInfo.InvariantCulture, out long bin))
             return Colors[(int)((bin % Colors.Length + Colors.Length - 1) % Colors.Length)];
         uint hash = 2166136261;

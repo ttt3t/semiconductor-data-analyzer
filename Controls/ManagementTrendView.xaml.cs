@@ -30,8 +30,6 @@ public partial class ManagementTrendView : UserControl
     }
     public void SetData(ManagementTrendData data)
     {
-        var previous = _choices.ToDictionary(c => c.Category, c => c.IsVisible);
-        foreach (var choice in _choices) choice.PropertyChanged -= Choice_Changed;
         bool sameColumns = _data.Mode == data.Mode && _data.Labels.SequenceEqual(data.Labels);
         _data = data;
         ReferencePanel.Visibility = data.Mode == ManagementChartMode.YieldBars ? Visibility.Visible : Visibility.Collapsed;
@@ -49,13 +47,20 @@ public partial class ManagementTrendView : UserControl
                 Binding = new Binding($"Values[{i}]") { Mode = BindingMode.OneTime, StringFormat = ValueFormat, TargetNullValue = "–" }, ElementStyle = style
             });
         }
-        _choices = data.Series.Select(s => new WaferCategoryTrendWindow.CategoryChoice(s.Category, s.LineBrush)).ToList();
+        UpdateLegend();
+        _pendingOffset = 0; Chart.HorizontalOffset = 0; ResizeColumns(); Refresh();
+    }
+    private void UpdateLegend()
+    {
+        var previous = _choices.ToDictionary(c => c.Category, c => c.IsVisible);
+        foreach (var choice in _choices) choice.PropertyChanged -= Choice_Changed;
+        var series = CountDisplay == ManagementCountDisplay.PercentOfFailures ? _data.FailureSeries ?? _data.Series : _data.Series;
+        _choices = series.Select(s => new WaferCategoryTrendWindow.CategoryChoice(s.Category, s.LineBrush)).ToList();
         bool restore = _choices.Any(c => previous.ContainsKey(c.Category));
         for (int i = 0; i < _choices.Count; i++)
-            _choices[i].IsVisible = restore ? previous.GetValueOrDefault(_choices[i].Category, true) : data.Mode != ManagementChartMode.YieldBars || i == _choices.Count - 1;
+            _choices[i].IsVisible = restore ? previous.GetValueOrDefault(_choices[i].Category, true) : _data.Mode != ManagementChartMode.YieldBars || i == _choices.Count - 1;
         foreach (var choice in _choices) choice.PropertyChanged += Choice_Changed;
         Legend.ItemsSource = _choices;
-        _pendingOffset = 0; Chart.HorizontalOffset = 0; ResizeColumns(); Refresh();
     }
     public double TargetYield => double.TryParse(TxtTarget.Text, out double value) && double.IsFinite(value) && value is >= 0 and <= 100 ? value : 85;
     public ManagementCountDisplay CountDisplay
@@ -90,6 +95,7 @@ public partial class ManagementTrendView : UserControl
         foreach (var column in Table.Columns.OfType<DataGridTextColumn>())
             if (column.Binding is Binding binding) column.Binding = new Binding(binding.Path.Path)
             { Mode = BindingMode.OneTime, StringFormat = ValueFormat, TargetNullValue = "–" };
+        if (_data.FailureSeries != null) UpdateLegend();
         Refresh();
     }
     public double WidthZoom => _widthZoom;

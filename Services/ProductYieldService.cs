@@ -8,7 +8,7 @@ namespace SemiconductorCsvAnalyzer.Services;
 
 public static partial class ProductYieldService
 {
-    internal const int CombinedBinAnalyticsVersion = 2;
+    internal const int CombinedBinAnalyticsVersion = 3;
     private readonly record struct DeviceKey(string Kind, string Lot, string Wafer, string Identity);
     private sealed record Observation(bool KnownIdentity, string HBin, string SBin, OriginalDisposition Disposition, DateTime? TestTime);
 
@@ -34,6 +34,7 @@ public static partial class ProductYieldService
         var original = ConfigLoader.Parse(product.ConfigText, product.Name + ".ini");
         var config = file.ConfigText.Length > 0 ? ConfigLoader.Parse(file.ConfigText, product.Name + "-文件配置.ini") : original;
         config.PassHBins = original.PassHBins; config.PartialPassHBins = original.PartialPassHBins;
+        config.PassSBins = original.PassSBins; config.PartialPassSBins = original.PartialPassSBins;
         config.SBinCategories = original.SBinCategories;
         config.SBinDescriptions = original.SBinDescriptions;
         config.TestMode = kind == "FT" ? TestAnalysisMode.FT : TestAnalysisMode.CP;
@@ -44,7 +45,7 @@ public static partial class ProductYieldService
     }
 
     public static string Signature(ManagedProduct product) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-        JsonSerializer.Serialize(new { Schema = 7, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
+        JsonSerializer.Serialize(new { Schema = 8, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
             product.IncludePartialPass, product.PreferGoodRetest, product.Files }))));
 
     internal sealed record SourceStatus(bool Current, Dictionary<string, string> FileStatuses);
@@ -119,6 +120,7 @@ public static partial class ProductYieldService
         var config = ConfigLoader.Parse(product.ConfigText);
         AddAnalytics(product, result, devices, token);
         var binCodes = new Dictionary<string, RankedBin>(StringComparer.Ordinal);
+        var sbinClassifier = HBinClassifier.ForSBin(config);
         var categories = config.SBinCategories.SelectMany(c => c.Value.Select(bin => (Bin: BinStatisticsService.NormalizeBin(bin), Name: c.Key)))
             .ToDictionary(c => c.Bin, c => c.Name);
         foreach (var group in devices.GroupBy(d => (d.Key.Kind, d.Key.Lot, d.Key.Wafer)))
@@ -153,7 +155,7 @@ public static partial class ProductYieldService
                     AddStage(month.ToArray(), month.Key, result.MonthlyYields, result.MonthlyCategories);
             }
             var required = stages.Where(s => s.Required).Select(s => s.Id).ToArray();
-            Dictionary<(string Period, string BinType, string Bin, bool IsFailure), int>? combinedBins =
+            Dictionary<(string Period, string BinType, CombinedBin Bin), int>? combinedBins =
                 required.Length > 1 ? new() : null;
             var combined = Row(group.Key, "COMBINED:" + group.Key.Kind, group.Key.Kind + " 综合", true);
             foreach (var stage in stages) combined.SourceFileIds.UnionWith(sources.Find(group.Key, stage.Id, null));
@@ -184,13 +186,16 @@ public static partial class ProductYieldService
                 bool known = observations.Values.All(o => o.KnownIdentity);
                 bool sufficientIdentity = known || required.Length == 1; // One required step needs no cross-temperature matching.
                 bool missingStage = required.Any(s => !observations.ContainsKey(s));
-                if (combinedBins != null)
-                {
-                    CountCombinedBin(combinedBins, tested, sufficientIdentity && !missingStage, month, false, product.IncludePartialPass, binCodes);
-                    CountCombinedBin(combinedBins, tested, sufficientIdentity && !missingStage, month, true, product.IncludePartialPass, binCodes);
-                }
                 bool missing = required.Any(s => !observations.TryGetValue(s, out var o) || o.HBin.Length == 0);
                 bool failed = required.Any(s => observations.TryGetValue(s, out var o) && o.HBin.Length > 0 && !HBinClassifier.IsGood(o.Disposition, product.IncludePartialPass));
+                if (combinedBins != null)
+                {
+                    bool complete = sufficientIdentity && !missingStage;
+                    var hbin = (month, "HBIN", CombineBin(tested, complete, false, failed, null, binCodes));
+                    combinedBins[hbin] = combinedBins.GetValueOrDefault(hbin) + 1;
+                    var sbin = (month, "SBIN", CombineBin(tested, complete, true, failed, sbinClassifier, binCodes));
+                    combinedBins[sbin] = combinedBins.GetValueOrDefault(sbin) + 1;
+                }
                 foreach (var target in new[] { combined, periodRow })
                 {
                     target.Total++;
@@ -207,7 +212,8 @@ public static partial class ProductYieldService
             result.MonthlyYields.AddRange(monthly.Values);
             if (combinedBins != null)
                 foreach (var (key, count) in combinedBins)
-                    result.CombinedBins.Add(new(group.Key.Kind, group.Key.Lot, group.Key.Wafer, key.Period, key.BinType, key.Bin, key.IsFailure, count));
+                    result.CombinedBins.Add(new(group.Key.Kind, group.Key.Lot, group.Key.Wafer, key.Period, key.BinType,
+                        key.Bin.Code, key.Bin.FailureCode, key.Bin.Disposition, count));
         }
         ApplySpecified(product, result);
         var overridden = result.Yields.Where(r => r.IsCombined && !r.HasDispositionCounts)

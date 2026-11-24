@@ -322,7 +322,7 @@ public static class XlsxReportService
 
     private static void BinSheet(IXLWorksheet sheet, CsvParseResult data, AnalyzerConfig config, XlsxReportOptions options, bool soft)
     {
-        var colors = BinPalette.Create(data.Records.Select(r => soft ? r.SBin : r.HBin));
+        var colors = BinPalette.ForBins(data.Records, soft, config);
         XLColor BinColor(string bin)
         {
             var color = ((SolidColorBrush)colors[BinPalette.Key(bin)]).Color;
@@ -373,7 +373,7 @@ public static class XlsxReportService
             }
             int statRow = Math.Max(row + 26, legendRow + 2);
             var bins = soft ? stats.SBins : stats.HBins;
-            WriteHeader(sheet, statRow, 2, soft ? new[] { "SBIN", "数量", "占比", "分类", "释义" } : new[] { "HBIN", "数量", "占比" });
+            WriteHeader(sheet, statRow, 2, soft ? new[] { "SBIN", "数量", "占比", "分类", "释义", "判定" } : new[] { "HBIN", "数量", "占比", "判定" });
             int detailRow = statRow + 1;
             foreach (var bin in bins)
             {
@@ -385,6 +385,7 @@ public static class XlsxReportService
                 sheet.Cell(detailRow, 4).Value = bin.Percent / 100;
                 sheet.Cell(detailRow, 4).Style.NumberFormat.Format = "0.00%";
                 if (soft) { sheet.Cell(detailRow, 5).Value = bin.Category; sheet.Cell(detailRow, 6).Value = bin.Description; }
+                sheet.Cell(detailRow, soft ? 7 : 5).Value = bin.DispositionText;
                 detailRow++;
             }
             if (soft)

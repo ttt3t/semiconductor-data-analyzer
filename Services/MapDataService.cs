@@ -42,9 +42,12 @@ public static class MapDataService
 
     public static List<WaferMapPage> BinPages(CsvParseResult data, bool soft, AnalyzerConfig? config = null)
     {
-        var colors = BinPalette.Create(data.Records.Select(r => soft ? r.SBin : r.HBin));
-        if (config?.PreferGoodRetest == true) data = DatasetService.SelectRetests(data, RetestMode.Last, config);
-        var classifier = new HBinClassifier(config ?? new AnalyzerConfig());
+        config ??= new AnalyzerConfig();
+        var colors = BinPalette.ForBins(data.Records, soft, config);
+        if (config.PreferGoodRetest) data = DatasetService.SelectRetests(data, RetestMode.Last, config);
+        var classifier = new HBinClassifier(config);
+        var sbins = soft ? HBinClassifier.ForSBin(config) : null;
+        string basis = !soft ? "HBIN" : sbins == null ? "SBIN（沿用同记录的 HBIN 判定）" : "SBIN";
         return data.Records.GroupBy(r => (Lot: r.Lot.Trim(), r.WaferId)).Select(group =>
         {
             string wafer = group.Key.WaferId;
@@ -58,8 +61,9 @@ public static class MapDataService
                     Category = category, Color = colors[category]
                 };
             }).ToList();
-            return new WaferMapPage(wafer, dies, PassCount: dies.Count(d => classifier.Classify(d.HBin) == OriginalDisposition.Pass),
-                YieldBasis: "配置的 HBIN Pass / 图中有坐标芯片；不含无坐标记录", Lot: group.Key.Lot);
+            return new WaferMapPage(wafer, dies, PassCount: dies.Count(d => (soft
+                    ? classifier.ClassifySBin(d.HBin, d.SBin, sbins) : classifier.Classify(d.HBin)) == OriginalDisposition.Pass),
+                YieldBasis: $"配置的 {basis} Pass / 图中有坐标芯片；不含无坐标记录", Lot: group.Key.Lot);
         }).ToList();
     }
 }

@@ -29,7 +29,7 @@ static class Probe
         int Count(string kind, string type, string bin, string? month = null) => snapshot.CombinedBins
             .Where(row => row.Kind == kind && row.BinType == type && row.Bin == bin && (month == null || row.Period == month))
             .Sum(row => row.Count);
-        Check(snapshot.FailedFiles == 0 && snapshot.AnalyticsVersion == 2, "combined bin snapshot prepares both CP and FT from source files");
+        Check(snapshot.FailedFiles == 0 && snapshot.AnalyticsVersion == 3, "combined bin snapshot prepares both CP and FT from source files");
         Check(Count("CP", "HBIN", "1") == 2 && Count("CP", "HBIN", "3") == 1 && Count("CP", "HBIN", "2") == 1,
             "CP uses the latest record, ignores optional temperatures, and requires all Bin 1 for combined Bin 1");
         Check(Count("CP", "HBIN", "8") == 1 && Count("CP", "HBIN", "10") == 0 && Count("CP", "HBIN", "4") == 1 &&
@@ -53,6 +53,49 @@ static class Probe
             UseSpecifiedYield = true, SpecifiedKind = "CP", SpecifiedPercent = 90 });
         snapshot = ProductYieldService.Calculate(product);
         Check(snapshot.CombinedBins.All(row => row.Kind == "FT"), "a manually specified required result supplies no CP per-chip distribution");
+    }
+    static void CheckConfiguredBins(string folder, AnalyzerConfig layout)
+    {
+        layout.PassHBins = new() { "1", "4" };
+        var product = new ManagedProduct { Name = "Configured bins", ConfigText = ConfigLoader.Serialize(layout) };
+        var rows = "a,0,0,1,7,1,W,10\nb,1,0,1,1,5,W,11\nc,2,0,1,9,4,W,12\nd,3,0,1,,5,W,13\n";
+        for (int step = 0; step < 2; step++)
+        {
+            string id = "configured-" + step;
+            string path = Path.Combine(folder, id + ".csv");
+            string different = step == 0 ? "e,4,0,1,8,5,W,14\n" : "e,4,0,1,2,4,W,14\n";
+            File.WriteAllText(path, "SN,X,Y,Site,SBIN,HBIN,Wafer,A\nLSL,,,,,,,0\nUSL,,,,,,,200\nUnit,,,,,,,V\nTest Num,,,,,,,101\n" + rows + different);
+            product.Flow.Add(new() { Id = id, Temperature = 25 + step * 60 });
+            product.Files.Add(new() { Id = id, StageId = id, Lot = "L", FilePath = path });
+        }
+        var legacy = ProductYieldService.Calculate(product);
+        var yield = legacy.Yields.Single(row => row.IsCombined);
+        var soft = legacy.CombinedBins.Where(row => row.BinType == "SBIN").ToArray();
+        Check(legacy.FailedFiles == 0 && yield.Good == 2 && yield.Failed == 3 &&
+            soft.Single(row => row.Bin == "7") is { Disposition: OriginalDisposition.Pass, FailureBin: null } &&
+            soft.Single(row => row.Bin == "1") is { Disposition: OriginalDisposition.Fail, FailureBin: "1" } &&
+            soft.Single(row => row.Bin == "9") is { Disposition: OriginalDisposition.Pass, FailureBin: null },
+            "legacy SBIN honors record HBIN for 1/7, 5/1 and configured HBIN 4 counterexamples");
+        Check(soft.Where(row => row.IsFailure).Sum(row => row.Count) == yield.Failed && soft.Any(row => row.FailureBin == ""),
+            "combined failure attribution includes chips with unrecorded SBINs");
+
+        product.ConfigText += "\n[SBINClassification]\nPassSBins=01,8\nPartialPassSBins=7\n";
+        var config = ConfigLoader.Parse(product.ConfigText);
+        var round = ConfigLoader.Parse(ConfigLoader.Serialize(config));
+        Check(round.PassSBins!.SequenceEqual(new[] { "01", "8" }) && round.PartialPassSBins!.SequenceEqual(new[] { "7" }) &&
+            ConfigLoader.Parse(ConfigLoader.Serialize(layout)).PassSBins == null,
+            "explicit SBIN rules round-trip while omitted rules stay compatible");
+        bool overlap = false;
+        try { ConfigLoader.Parse("[SBINClassification]\nPassSBins=1\nPartialPassSBins=01.0"); }
+        catch (InvalidDataException) { overlap = true; }
+        Check(overlap, "normalized SBIN Pass and PartialPass sets cannot overlap");
+        var explicitSnapshot = ProductYieldService.Calculate(product);
+        soft = explicitSnapshot.CombinedBins.Where(row => row.BinType == "SBIN").ToArray();
+        Check(soft.Single(row => row.Bin == "7") is { Disposition: OriginalDisposition.PartialPass, FailureBin: null } &&
+            soft.Single(row => row.Bin == "1") is { Disposition: OriginalDisposition.Pass, FailureBin: "1" } &&
+            soft.Single(row => row.Bin == "2") is { Disposition: OriginalDisposition.Fail, FailureBin: "8" } &&
+            soft.Where(row => row.IsFailure).Sum(row => row.Count) == explicitSnapshot.Yields.Single(row => row.IsCombined).Failed,
+            "explicit SBIN classification changes the full chart while failure counts and attribution follow HBIN yield");
     }
     static int Main(string[] args)
     {
@@ -106,6 +149,7 @@ static class Probe
             var csvConfig = new AnalyzerConfig { TestItemRow = 1, LowLimitRow = 2, HighLimitRow = 3, UnitRow = 4, TestNumberRow = 5,
                 DataStartRow = 6, TestItemStartColumn = 8, SerialNumberColumn = 1, XColumn = 2, YColumn = 3, SiteColumn = 4, SBinColumn = 5, HBinColumn = 6, WaferColumn = 7, PartialPassHBins = new() { "3" } };
             CheckCombinedBins(folder, ConfigLoader.Parse(ConfigLoader.Serialize(csvConfig)));
+            CheckConfiguredBins(folder, ConfigLoader.Parse(ConfigLoader.Serialize(csvConfig)));
             var stage = new ProductTestStage { Id = "CP", Kind = "CP" };
             var product = new ManagedProduct { Name = "good priority", ConfigText = ConfigLoader.Serialize(csvConfig), Flow = new() { stage } };
             foreach (var (name, month, body) in new[] { ("old", 1, "1,0,0,1,1,1,W,1\n2,1,0,1,2,2,W,20\n3,2,0,1,1,1,W,2\n"),

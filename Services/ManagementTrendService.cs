@@ -46,7 +46,7 @@ public static partial class ManagementTrendService
 
     public static Brush FailColor(string bin)
     {
-        string hex = bin switch { "2" => "#EF4444", "5" => "#EAB308", "4" => "#F97316", "8" => "#38BDF8", "21" => "#8B5CF6", "22" => "#22C55E", _ => "" };
+        string hex = bin switch { "2" => "#EF4444", "5" => "#EAB308", "4" => "#F97316", "8" => "#38BDF8", "21" => "#8B5CF6", "22" => "#6366F1", _ => "" };
         if (hex.Length == 0) return BinPalette.ColorForCategory(bin);
         var brush = (SolidColorBrush)new BrushConverter().ConvertFromString(hex)!; brush.Freeze(); return brush;
     }
@@ -61,9 +61,9 @@ public static partial class ManagementTrendService
     public static ManagementTrendData BinTrend(ManagedProduct product, ManagementBinStage stage, string type, string filter, ManagementPeriod period)
     {
         if (stage.CombinedKind == null) return FailTrend(product, stage.Id, type, filter, period);
-        var rows = product.Snapshot?.CombinedBins.Where(row =>
-            row.Kind == stage.CombinedKind && row.BinType == type && Matches(row.Lot, row.Wafer, filter)).ToArray()
-            ?? Array.Empty<ManagedCombinedBinCount>();
+        var rows = product.Snapshot is { AnalyticsVersion: >= ProductYieldService.CombinedBinAnalyticsVersion } snapshot
+            ? snapshot.CombinedBins.Where(row => row.Kind == stage.CombinedKind && row.BinType == type && Matches(row.Lot, row.Wafer, filter)).ToArray()
+            : Array.Empty<ManagedCombinedBinCount>();
         string Label(ManagedCombinedBinCount row) => period switch
         {
             ManagementPeriod.Wafer => row.Lot + (row.Kind == "FT" ? " / FT" : " / " + row.Wafer),
@@ -77,18 +77,20 @@ public static partial class ManagementTrendService
         var labels = groups.Select(group => group.Key).ToArray();
         var totals = groups.Select(group => (double?)group.Sum(row => row.Count)).ToArray();
 
-        List<WaferCategorySeries> BuildSeries(IEnumerable<ManagedCombinedBinCount> entries)
+        var passBins = rows.GroupBy(row => row.Bin).Where(group => group.All(row => row.Disposition == OriginalDisposition.Pass))
+            .Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
+        List<WaferCategorySeries> BuildSeries(IEnumerable<ManagedCombinedBinCount> entries, bool failures)
         {
-            var counts = entries.GroupBy(row => (Label(row), row.Bin))
+            var counts = entries.GroupBy(row => (Label(row), Bin: failures ? row.FailureBin! : row.Bin))
                 .ToDictionary(group => group.Key, group => group.Sum(row => row.Count));
             return counts.Keys.Select(key => key.Bin).Distinct(StringComparer.Ordinal)
                 .OrderBy(bin => bin.Length == 0).ThenBy(NumericText.SortKey).ThenBy(bin => bin, StringComparer.Ordinal)
-                .Select(bin => new WaferCategorySeries(bin.Length == 0 ? "未完成" : "Bin " + bin,
-                    bin.Length == 0 ? Brushes.Gray : FailColor(bin),
+                .Select(bin => new WaferCategorySeries(bin.Length == 0 ? (failures ? "未记录" : "未完成") : "Bin " + bin,
+                    bin.Length == 0 ? Brushes.Gray : !failures && passBins.Contains(bin) ? BinPalette.PassBrush : FailColor(bin),
                     labels.Select(label => (double?)counts.GetValueOrDefault((label, bin))).ToArray())).ToList();
         }
-        return new(labels, BuildSeries(rows), ManagementChartMode.StackedCounts, "综合 Bin 芯片数（颗）",
-            SampleCounts: totals, FailureSeries: BuildSeries(rows.Where(row => row.IsFailure)));
+        return new(labels, BuildSeries(rows, false), ManagementChartMode.StackedCounts, "综合 Bin 芯片数（颗）",
+            SampleCounts: totals, FailureSeries: BuildSeries(rows.Where(row => row.IsFailure), true));
     }
 
     public static ManagementTrendData FailTrend(ManagedProduct product, string stageId, string type, string filter, ManagementPeriod period)

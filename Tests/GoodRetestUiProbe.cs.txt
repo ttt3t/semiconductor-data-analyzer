@@ -85,6 +85,44 @@ static class Probe
             grid.Items.OfType<TestItemSummary>().Single().Mean == 25, "clearing data filters restores all records and unchecks the SBIN tab");
         filter.Close(); Pump();
     }
+    static void CheckBinClassification(string folder)
+    {
+        var config = ConfigLoader.Parse("[HBINClassification]\nPassHBins=4\n[SBINClassification]\nPassSBins=7\nPartialPassSBins=1");
+        var records = new List<CsvRecord>
+        {
+            new() { Id = "a", X = 0, Y = 0, WaferId = "W", HBin = "4", SBin = "9" },
+            new() { Id = "b", X = 1, Y = 0, WaferId = "W", HBin = "1", SBin = "7" },
+            new() { Id = "c", X = 2, Y = 0, WaferId = "W", HBin = "5", SBin = "1" }
+        };
+        foreach (var record in records) record.Measurements["t"] = "1";
+        var source = DatasetService.Build(new() { new() { Id = "t", Name = "T", DisplayName = "T" } }, records);
+        using var lease = new DatasetLease(records);
+        var hard = MapDataService.BinPages(source, false, config).Single();
+        var soft = MapDataService.BinPages(source, true, config).Single();
+        Check(hard.PassCount == 1 && hard.Dies.Single(d => d.HBin == "4").Color == BinPalette.PassBrush &&
+            hard.Dies.Single(d => d.HBin == "1").Color != BinPalette.PassBrush,
+            "HBIN Map uses configured Pass color and count, including HBIN 4");
+        Check(soft.PassCount == 1 && soft.Dies.Single(d => d.SBin == "7").Color == BinPalette.PassBrush &&
+            soft.Dies.Single(d => d.SBin == "1").Color != BinPalette.PassBrush,
+            "SBIN Map applies its own configured Pass group");
+        var fallback = new AnalyzerConfig { PassHBins = new() { "4" } };
+        var legacy = MapDataService.BinPages(source, true, fallback).Single();
+        Check(legacy.PassCount == 1 && legacy.Dies.Single(d => d.SBin == "9").Color == BinPalette.PassBrush,
+            "SBIN Map without explicit rules follows the same record HBIN");
+        var result = BinStatisticsService.Build(records, RetestMode.Last, config);
+        var table = new BinStatisticsWindow(result, result);
+        Check(result.PassCount == 1 && result.SBinPassCount == 1 && result.SBinPartialPassCount == 1 &&
+            ((DataGrid)table.FindName("DgSbin")).Items.OfType<BinCountRow>().Single(row => row.Bin == "1").DispositionText == "PartialPass" &&
+            ((DataGrid)table.FindName("DgHbin")).Items.OfType<BinCountRow>().Single(row => row.Bin == "1").DispositionText == "Fail",
+            "BIN Table exposes configured dispositions separately for HBIN and SBIN");
+        table.Close();
+        string path = Path.Combine(folder, "configured-bin-map.xlsx");
+        Wait(XlsxReportService.SaveAsync(path, source, config, new(new[] { "W" }, RetestMode.Last, null, 0, true, Array.Empty<string>()), "bin rules"));
+        using var book = new XLWorkbook(path);
+        var sheet = book.Worksheet("SBIN Map");
+        Check(sheet.CellsUsed().Any(cell => cell.Address.ColumnNumber == 7 && cell.GetString() == "PartialPass"),
+            "XLSX BIN sheet exports configured SBIN dispositions");
+    }
     [STAThread] static int Main(string[] args)
     {
         try
@@ -139,6 +177,7 @@ static class Probe
             Wait((Task)Call(main, "ApplySampleFiltersAsync", Array.Empty<SampleRange>(), SampleMatchMode.Intersection, Array.Empty<string>())!);
             Check(grid.Items.OfType<TestItemSummary>().Single().Mean == 25 && ReferenceEquals(original, Field(main, "_data")), "removing filter restores latest statistics over unchanged loaded data");
             CheckSBinFilter(main, grid, original);
+            CheckBinClassification(folder);
             edited.PreferGoodRetest = true;
             string report = Path.Combine(folder, "preferred.xlsx");
             Wait(XlsxReportService.SaveAsync(report, original, edited, new(new[] { "W" }, RetestMode.Last, null, 0, true, Array.Empty<string>()), "test"));

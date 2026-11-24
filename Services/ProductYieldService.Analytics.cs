@@ -61,15 +61,21 @@ public static partial class ProductYieldService
                 : candidate.Number == null && StringComparer.Ordinal.Compare(Code, candidate.Code) < 0);
     }
 
-    private static void CountCombinedBin(Dictionary<(string Period, string BinType, string Bin, bool IsFailure), int> counts,
-        Observation[] observations, bool complete, string period, bool soft, bool includePartial,
-        Dictionary<string, RankedBin> binCodes)
+    private readonly record struct CombinedBin(string Code, string? FailureCode, OriginalDisposition? Disposition);
+
+    private static CombinedBin CombineBin(Observation[] observations, bool complete, bool soft, bool officialFailure,
+        HBinClassifier? sbinClassifier, Dictionary<string, RankedBin> binCodes)
     {
-        RankedBin? fail = null, partial = null;
+        RankedBin? fail = null, partial = null, pass = null;
+        RankedBin? hardFailure = null, partialFailure = null;
+        bool hasHardFailure = false;
         foreach (var observation in observations)
         {
             string raw = soft ? observation.SBin : observation.HBin;
-            if (raw.Length == 0 || observation.HBin.Length == 0)
+            bool hasHBin = observation.HBin.Length > 0;
+            bool hard = hasHBin && observation.Disposition == OriginalDisposition.Fail;
+            hasHardFailure |= hard;
+            if (raw.Length == 0 || !hasHBin && sbinClassifier == null)
             {
                 complete = false;
                 continue;
@@ -80,18 +86,28 @@ public static partial class ProductYieldService
                 binCodes.Add(raw, bin = new(code, decimal.TryParse(code, NumberStyles.Float,
                     CultureInfo.InvariantCulture, out decimal number) ? number : null));
             }
-            if (bin.Code == "1") continue;
-            // PartialPass is configured on the product's HBIN, including when retaining an SBIN number.
-            if (observation.Disposition == OriginalDisposition.PartialPass)
+            var disposition = sbinClassifier?.ClassifyNormalized(bin.Code) ?? observation.Disposition;
+            switch (disposition)
             {
-                if (bin.Precedes(partial)) partial = bin;
+                case OriginalDisposition.Pass:
+                    if (bin.Precedes(pass)) pass = bin;
+                    break;
+                case OriginalDisposition.PartialPass:
+                    if (bin.Precedes(partial)) partial = bin;
+                    break;
+                default:
+                    if (bin.Precedes(fail)) fail = bin;
+                    break;
             }
-            else if (bin.Precedes(fail)) fail = bin;
+            if (officialFailure && hard && bin.Precedes(hardFailure)) hardFailure = bin;
+            if (officialFailure && hasHBin && observation.Disposition == OriginalDisposition.PartialPass &&
+                bin.Precedes(partialFailure)) partialFailure = bin;
         }
-        // A known failure remains attributable even when another mandatory test is missing.
-        string combined = fail?.Code ?? (complete ? partial?.Code ?? "1" : "");
-        bool isFailure = fail.HasValue || complete && partial.HasValue && !includePartial;
-        var key = (period, soft ? "SBIN" : "HBIN", combined, isFailure);
-        counts[key] = counts.GetValueOrDefault(key) + 1;
+        // Both failure breakdowns attribute the same chips as the HBIN yield to the actual failing steps.
+        string? failureCode = officialFailure ? (hasHardFailure ? hardFailure : partialFailure)?.Code ?? "" : null;
+        if (fail is { } failed) return new(failed.Code, failureCode, OriginalDisposition.Fail);
+        if (!complete) return new("", failureCode, null);
+        if (partial is { } partialPass) return new(partialPass.Code, failureCode, OriginalDisposition.PartialPass);
+        return new(pass?.Code ?? "", failureCode, pass.HasValue ? OriginalDisposition.Pass : null);
     }
 }
