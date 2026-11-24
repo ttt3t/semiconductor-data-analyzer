@@ -45,10 +45,15 @@ static class Probe
         Check(waferOnly.Records.Single().Id == "second-lot" &&
             lotOnly.Records.Select(r => r.Id).SequenceEqual(records.Take(6).Select(r => r.Id)),
             "an individual wafer is qualified by lot and a complete lot includes every wafer");
-        var union = SampleFilterService.Apply(data, new SampleRange[] { new("a", 10, 10), new("a", 9, 11) }, RetestMode.All,
-            sBins: new[] { "2" }, locations: new SampleLocation[] { new("L", "W2"), new("L2", "W") });
-        Check(union.Records.Select(r => r.Id).SequenceEqual(new[] { "middle", "second-wafer", "second-lot" }),
-            "ranges use their own AND rules, then union with selected bins and locations without duplicates");
+        var rangeRules = new SampleRange[] { new("a", 8, 100), new("a", 10, null) };
+        string[] bins = ["01", "2"];
+        SampleLocation[] locations = [new("L", "W"), new("L", "W2")];
+        var intersection = SampleFilterService.Apply(data, rangeRules, RetestMode.All, sBins: bins, locations: locations);
+        Check(intersection.Records.Select(r => r.Id).SequenceEqual(new[] { "middle", "high" }),
+            "each active tab excludes records that satisfy only the other two");
+        var orWithinRanges = SampleFilterService.Apply(data, new SampleRange[] { new("a", 8, 8), new("a", 100, 100) },
+            RetestMode.All, SampleMatchMode.Union, sBins: bins, locations: locations);
+        Check(orWithinRanges.Records.Single().Id == "low", "measurement OR still intersects with SBIN and lot/wafer");
     }
     static void CheckCombinedBins(string folder, AnalyzerConfig config)
     {
@@ -179,8 +184,8 @@ static class Probe
                 binScope.Items[0].Values.Count == 5 && data.Records.Count == 10, "multiple normalized SBINs retain only eligible raw records");
             var binAndRanges = SampleFilterService.Apply(data, new[] { new SampleRange("a", null, 3), new SampleRange("a", 23, 23) },
                 RetestMode.Last, SampleMatchMode.Union, config, new[] { "2" });
-            Check(binAndRanges.Records.Select(r => r.Id).SequenceEqual(rows.Where(r => r.Id is not ("pass" or "partial")).Select(r => r.Id)),
-                "measurement and bin filters independently include range-matching chip histories and raw bin matches");
+            Check(binAndRanges.Records.Select(r => r.Id).SequenceEqual(new[] { "bad-later", "bad-first", "fail-old" }),
+                "SBIN limits retained history without changing which retest values satisfy the measurement rules");
             Check(SampleFilterService.Apply(data, Array.Empty<SampleRange>(), RetestMode.All, sBins: new[] { "999" }).Records.Count == 0,
                 "an SBIN selection with no records creates an empty view");
             var snapshot = SimulationSnapshot.Build(data, config, RetestMode.Last, default);

@@ -32,14 +32,14 @@ public static partial class SampleFilterService
         var byRawBin = new Dictionary<string, bool>(StringComparer.Ordinal);
         bool MatchesBin(string bin)
         {
-            if (allowedBins is not { Count: > 0 }) return false;
+            if (allowedBins is not { Count: > 0 }) return true;
             if (!byRawBin.TryGetValue(bin, out bool keep))
                 byRawBin[bin] = keep = allowedBins.Contains(BinStatisticsService.NormalizeBin(bin));
             return keep;
         }
         bool MatchesLocation(CsvRecord record)
         {
-            if (allowedLocations is not { Count: > 0 }) return false;
+            if (allowedLocations is not { Count: > 0 }) return true;
             var location = SampleLocation.FromRecord(record);
             return allowedLocations.Contains(location) || allowedLocations.Contains(new(location.Lot));
         }
@@ -47,7 +47,7 @@ public static partial class SampleFilterService
         foreach (var record in data.Records)
         {
             AnalysisOperation.CheckCancellation();
-            if (MatchesBin(record.SBin) || MatchesLocation(record) || matchesRange?.Invoke(record) == true)
+            if (MatchesBin(record.SBin) && MatchesLocation(record) && (matchesRange == null || matchesRange(record)))
                 records.Add(record);
         }
         AnalysisOperation.CheckCancellation();

@@ -109,7 +109,7 @@ public sealed class SampleFilterWindow : Window
             Array.Empty<SampleLocation>(), clearDrafts: true)));
         actions.Children.Add(Button("应用", Apply)); actions.Children.Add(Button("关闭", Close));
 
-        var description = new TextBlock { Text = "测项范围、批次／晶圆、SBIN 独立筛选，命中任一页即保留。空白页不参与，三页都空时保留全部。",
+        var description = new TextBlock { Text = "测项范围、批次／晶圆、SBIN 取交集，同时满足所有已设置的页面才保留。空白页不限制结果，三页都空时保留全部。",
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) };
         DockPanel.SetDock(description, Dock.Top); root.Children.Add(description);
         var tabs = new TabControl(); root.Children.Add(tabs);
@@ -119,7 +119,7 @@ public sealed class SampleFilterWindow : Window
         DockPanel.SetDock(_note, Dock.Top); rangesPanel.Children.Add(_note);
         var modes = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
         DockPanel.SetDock(modes, Dock.Top); rangesPanel.Children.Add(modes);
-        modes.Children.Add(new TextBlock { Text = "条件组合", VerticalAlignment = VerticalAlignment.Center });
+        modes.Children.Add(new TextBlock { Text = "测项组合", VerticalAlignment = VerticalAlignment.Center });
         RadioButton Radio(string text, string group, bool active)
         {
             var button = new RadioButton { Content = text, GroupName = group, Margin = new Thickness(8, 2, 12, 2), IsChecked = active };
