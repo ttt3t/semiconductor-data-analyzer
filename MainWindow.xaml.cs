@@ -147,6 +147,7 @@ public partial class MainWindow : Window
             _devices = new();
             _data = new(); _scopeData = _scopeSource = null; _sampleRanges = _scopeRanges = Array.Empty<SampleRange>(); _sampleIncludedIds = null;
             _sampleSBins = _scopeSBins = Array.Empty<string>();
+            _sampleLocations = _scopeLocations = Array.Empty<SampleLocation>();
             _sources.Clear();
             _datasetLease?.Dispose(); _datasetLease = null;
             _runIndex = -1;
@@ -574,7 +575,7 @@ public partial class MainWindow : Window
 
     private sealed record PreparedAnalysis(CsvParseResult Data, List<string> Sites, List<TestItemSummary> Summaries,
         CsvParseResult Source, CsvParseResult Scope, IReadOnlyList<SampleRange> Ranges, SampleMatchMode Match, IReadOnlyList<string> SBins,
-        RunLookup? NewRunLookup, HashSet<string>? IncludedIds, int RunRow);
+        IReadOnlyList<SampleLocation> Locations, RunLookup? NewRunLookup, HashSet<string>? IncludedIds, int RunRow);
 
     private Task<PreparedAnalysis> PrepareAnalysisAsync(CsvParseResult data, AnalyzerConfig config)
     {
@@ -591,8 +592,10 @@ public partial class MainWindow : Window
         var ranges = sameSource ? _sampleRanges.ToArray() : Array.Empty<SampleRange>();
         var match = sameSource ? _sampleMatch : SampleMatchMode.Intersection;
         var sBins = sameSource ? _sampleSBins : Array.Empty<string>();
+        var locations = sameSource ? _sampleLocations : Array.Empty<SampleLocation>();
         var cachedScope = ReferenceEquals(data, scopeSource) && _scopeRetestDefinition == definition && _scopeMode == mode &&
-            _scopeMatch == match && _scopeRanges.SequenceEqual(ranges) && _scopeSBins.SequenceEqual(sBins) ? _scopeData : null;
+            _scopeMatch == match && _scopeRanges.SequenceEqual(ranges) && _scopeSBins.SequenceEqual(sBins) &&
+            _scopeLocations.SequenceEqual(locations) ? _scopeData : null;
         return Task.Run(() =>
         {
             using var progress = ImportProgress.Stage(.85, .99, "计算统计");
@@ -601,7 +604,8 @@ public partial class MainWindow : Window
                 data = RetestIdentityService.Prepare(data, config);
             CsvParseResult scope, analysis;
             using (ImportProgress.Stage(.1, .3, "筛选数据"))
-                scope = ReferenceEquals(data, scopeSource) && cachedScope != null ? cachedScope : SampleFilterService.Apply(data, ranges, mode, match, config, sBins);
+                scope = ReferenceEquals(data, scopeSource) && cachedScope != null ? cachedScope :
+                    SampleFilterService.Apply(data, ranges, mode, match, config, sBins, locations);
             using (ImportProgress.Stage(.3, .65, "整理复测记录"))
                 analysis = DatasetService.SelectRetests(scope, mode, config);
             List<string> sites;
@@ -616,7 +620,7 @@ public partial class MainWindow : Window
             {
                 var lookup = ReferenceEquals(currentSource, data) ? null : RunLookup.Build(data);
                 HashSet<string>? included = null;
-                if (ranges.Length > 0 || sBins.Count > 0)
+                if (ranges.Length > 0 || sBins.Count > 0 || locations.Count > 0)
                 {
                     included = new(StringComparer.Ordinal);
                     foreach (var record in scope.Records)
@@ -628,7 +632,7 @@ public partial class MainWindow : Window
                 AnalysisOperation.CheckCancellation();
                 int row = lookup == null ? currentRun : FirstRun(data, lookup, runMode);
                 SetRunValues(summaries, data, lookup ?? currentLookup, row, included, AnalysisOperation.Token);
-                return new PreparedAnalysis(analysis, sites, summaries, data, scope, ranges, match, sBins, lookup, included, row);
+                return new PreparedAnalysis(analysis, sites, summaries, data, scope, ranges, match, sBins, locations, lookup, included, row);
             }
         });
     }
@@ -662,6 +666,7 @@ public partial class MainWindow : Window
         _scopeSource = data; _scopeMode = _config.PreferGoodRetest ? RetestMode.Last : _retestMode; _scopeRetestDefinition = RetestPreference.Signature(_config); _scopeRanges = prepared.Ranges;
         _sampleMatch = _scopeMatch = prepared.Match;
         _sampleSBins = _scopeSBins = prepared.SBins;
+        _sampleLocations = _scopeLocations = prepared.Locations;
         _sampleIncludedIds = prepared.IncludedIds;
         TxtSampleFilterAction.Text = SampleFilterCount == 0 ? "数据筛选" : $"数据筛选（{SampleFilterCount}）";
         _allItems = prepared.Data.Items;

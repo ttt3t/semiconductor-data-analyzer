@@ -54,16 +54,21 @@ public sealed class SampleFilterWindow : Window
         [SampleBaseline.Custom] = "自定义基准", [SampleBaseline.Mean] = "数据均值", [SampleBaseline.Median] = "数据中位数",
         [SampleBaseline.SpecCenter] = "Spec 中心值", [SampleBaseline.Golden] = "Golden 样品", [SampleBaseline.WaferMean] = "Wafer 均值"
     };
+    private sealed record LocationChoice(SampleLocation Location)
+    {
+        public string Label => (Location.Lot.Length == 0 ? "未指定批次" : Location.Lot) +
+            (Location.Wafer == null ? "" : " / " + (Location.Wafer.Length == 0 ? "未指定晶圆" : Location.Wafer));
+    }
 
     private readonly List<RangeRow> _rows = new();
     private readonly Dictionary<string, RangeRow> _drafts = new(StringComparer.Ordinal);
     private readonly DataGrid _grid;
-    private readonly ListBox _sBinList;
+    private readonly ListBox _sBinList, _lotList, _waferList;
     private readonly RadioButton _union, _outside;
     private readonly TextBlock _note, _goldenNote;
     private readonly IReadOnlyList<TestItemData> _sourceItems;
-    private readonly Func<IReadOnlyList<SampleRange>, SampleMatchMode, IReadOnlyList<string>, Task>? _apply;
-    private readonly Func<IReadOnlyList<SampleRange>, IReadOnlyList<string>, CancellationToken, Task<Dictionary<string, string>>>? _preview;
+    private readonly Func<IReadOnlyList<SampleRange>, SampleMatchMode, IReadOnlyList<string>, IReadOnlyList<SampleLocation>, Task>? _apply;
+    private readonly Func<IReadOnlyList<SampleRange>, CancellationToken, Task<Dictionary<string, string>>>? _preview;
     private readonly Func<CsvRecord?>? _currentRun;
     private readonly DispatcherTimer _previewTimer;
     private readonly SemaphoreSlim _previewGate = new(1, 1);
@@ -79,10 +84,11 @@ public sealed class SampleFilterWindow : Window
 
     public SampleFilterWindow(IReadOnlyList<TestItemData> items, IReadOnlyList<SampleRange> rules, RetestMode mode,
         SampleMatchMode match = SampleMatchMode.Intersection,
-        Func<IReadOnlyList<SampleRange>, SampleMatchMode, IReadOnlyList<string>, Task>? apply = null,
+        Func<IReadOnlyList<SampleRange>, SampleMatchMode, IReadOnlyList<string>, IReadOnlyList<SampleLocation>, Task>? apply = null,
         IReadOnlyList<string>? sBins = null, IReadOnlyList<string>? selectedSBins = null,
+        IReadOnlyList<SampleLocation>? locations = null, IReadOnlyList<SampleLocation>? selectedLocations = null,
         Func<CsvRecord?>? currentRun = null,
-        Func<IReadOnlyList<SampleRange>, IReadOnlyList<string>, CancellationToken, Task<Dictionary<string, string>>>? preview = null)
+        Func<IReadOnlyList<SampleRange>, CancellationToken, Task<Dictionary<string, string>>>? preview = null)
     {
         _sourceItems = items; _apply = apply; _mode = mode; _currentRun = currentRun; _preview = preview;
         Rules = rules;
@@ -99,9 +105,13 @@ public sealed class SampleFilterWindow : Window
         var footer = new StackPanel(); DockPanel.SetDock(footer, Dock.Bottom); root.Children.Add(footer); footer.Children.Add(_error);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right }; footer.Children.Add(actions);
         Button Button(string text, Action action) { var b = new Button { Content = text, Padding = new Thickness(14, 6, 14, 6), Margin = new Thickness(5, 6, 0, 0) }; b.Click += (_, _) => action(); return b; }
-        actions.Children.Add(Button("取消数据筛选", () => _ = SubmitAsync(Array.Empty<SampleRange>(), Array.Empty<string>(), clearDrafts: true)));
+        actions.Children.Add(Button("取消数据筛选", () => _ = SubmitAsync(Array.Empty<SampleRange>(), Array.Empty<string>(),
+            Array.Empty<SampleLocation>(), clearDrafts: true)));
         actions.Children.Add(Button("应用", Apply)); actions.Children.Add(Button("关闭", Close));
 
+        var description = new TextBlock { Text = "测项范围、批次／晶圆、SBIN 独立筛选，命中任一页即保留。空白页不参与，三页都空时保留全部。",
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) };
+        DockPanel.SetDock(description, Dock.Top); root.Children.Add(description);
         var tabs = new TabControl(); root.Children.Add(tabs);
         var rangesPanel = new DockPanel { Margin = new Thickness(12) };
         tabs.Items.Add(new TabItem { Header = "测项范围", Content = rangesPanel });
@@ -165,28 +175,59 @@ public sealed class SampleFilterWindow : Window
         tabs.Items.Add(new TabItem { Header = "SBIN", Content = binsPanel });
         var binsNote = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10),
             Text = sBins is { Count: > 0 }
-                ? "勾选要保留的 SBIN，可同时选多项。全部不勾选时保留所有 SBIN。先按 SBIN 保留记录，再按当前复测口径和测项范围筛选。"
+                ? "可同时勾选多个 SBIN，保留命中任一所选 SBIN 的记录。"
                 : "当前数据没有可筛选的 SBIN。" };
         DockPanel.SetDock(binsNote, Dock.Top); binsPanel.Children.Add(binsNote);
-        var checkBox = new FrameworkElementFactory(typeof(CheckBox));
-        checkBox.SetValue(FrameworkElement.MarginProperty, new Thickness(4, 3, 4, 3));
-        checkBox.SetBinding(ContentControl.ContentProperty, new Binding());
-        checkBox.SetBinding(ToggleButton.IsCheckedProperty, new Binding(nameof(ListBoxItem.IsSelected))
-        {
-            RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(ListBoxItem), 1),
-            Mode = BindingMode.TwoWay
-        });
-        _sBinList = new ListBox { SelectionMode = SelectionMode.Multiple, ItemsSource = sBins ?? Array.Empty<string>(),
-            ItemTemplate = new DataTemplate { VisualTree = checkBox } };
-        if (selectedSBins != null)
-            foreach (string bin in selectedSBins) _sBinList.SelectedItems.Add(bin);
-        _sBinList.SelectionChanged += (_, _) => SchedulePreview();
+        _sBinList = SelectionList(sBins ?? Array.Empty<string>());
+        foreach (string bin in selectedSBins ?? Array.Empty<string>()) _sBinList.SelectedItems.Add(bin);
         binsPanel.Children.Add(_sBinList);
+
+        var locationsPanel = new DockPanel { Margin = new Thickness(12) };
+        tabs.Items.Add(new TabItem { Header = "批次／晶圆", Content = locationsPanel });
+        var locationsNote = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10),
+            Text = "可勾选整批，也可只勾选指定晶圆。选中整批会保留该批的全部记录。同名晶圆按批次区分。" };
+        DockPanel.SetDock(locationsNote, Dock.Top); locationsPanel.Children.Add(locationsNote);
+        var lists = new Grid();
+        lists.ColumnDefinitions.Add(new());
+        lists.ColumnDefinitions.Add(new());
+        var wafers = locations ?? Array.Empty<SampleLocation>();
+        var lots = wafers.Select(location => new SampleLocation(location.Lot)).Distinct();
+        var savedLocations = selectedLocations?.ToHashSet() ?? new HashSet<SampleLocation>();
+        ListBox AddLocations(string name, IEnumerable<SampleLocation> choices, int column)
+        {
+            var panel = new DockPanel { Margin = column == 0 ? new Thickness(0, 0, 8, 0) : new Thickness(8, 0, 0, 0) };
+            var header = new TextBlock { Text = name, Margin = new Thickness(0, 0, 0, 4) };
+            DockPanel.SetDock(header, Dock.Top); panel.Children.Add(header);
+            var entries = choices.Select(location => new LocationChoice(location)).ToArray();
+            var list = SelectionList(entries, nameof(LocationChoice.Label));
+            foreach (var entry in entries)
+                if (savedLocations.Contains(entry.Location)) list.SelectedItems.Add(entry);
+            panel.Children.Add(list);
+            Grid.SetColumn(panel, column); lists.Children.Add(panel);
+            return list;
+        }
+        _lotList = AddLocations("批次", lots, 0);
+        _waferList = AddLocations("批次 / 晶圆", wafers, 1);
+        locationsPanel.Children.Add(lists);
         tabs.SelectedIndex = 0;
         RefreshFocusedRows();
         Activated += (_, _) => RefreshFocusedRows();
         Closing += (_, e) => { if (_applying) e.Cancel = true; };
         Closed += (_, _) => { _closed = true; _previewTimer.Stop(); _previewCancellation?.Cancel(); };
+    }
+
+    private static ListBox SelectionList(System.Collections.IEnumerable items, string? displayProperty = null)
+    {
+        var checkBox = new FrameworkElementFactory(typeof(CheckBox));
+        checkBox.SetValue(FrameworkElement.MarginProperty, new Thickness(4, 3, 4, 3));
+        checkBox.SetBinding(ContentControl.ContentProperty, displayProperty == null ? new Binding() : new Binding(displayProperty));
+        checkBox.SetBinding(ToggleButton.IsCheckedProperty, new Binding(nameof(ListBoxItem.IsSelected))
+        {
+            RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(ListBoxItem), 1),
+            Mode = BindingMode.TwoWay
+        });
+        return new ListBox { SelectionMode = SelectionMode.Multiple, ItemsSource = items,
+            ItemTemplate = new DataTemplate { VisualTree = checkBox } };
     }
 
     private static Style EnabledCell(string property)
@@ -296,6 +337,10 @@ public sealed class SampleFilterWindow : Window
     }
 
     private string[] SelectedSBins() => _sBinList.SelectedItems.Cast<string>().Order(StringComparer.Ordinal).ToArray();
+    private SampleLocation[] SelectedLocations() => _lotList.SelectedItems.Cast<LocationChoice>()
+        .Concat(_waferList.SelectedItems.Cast<LocationChoice>())
+        .Select(entry => entry.Location).OrderBy(location => location.Lot, StringComparer.Ordinal)
+        .ThenBy(location => location.Wafer, StringComparer.Ordinal).ToArray();
 
     private void SchedulePreview()
     {
@@ -327,7 +372,7 @@ public sealed class SampleFilterWindow : Window
             await _previewGate.WaitAsync(token);
             try
             {
-                var result = await _preview(rules, SelectedSBins(), token);
+                var result = await _preview(rules, token);
                 if (!token.IsCancellationRequested && !_closed)
                     foreach (var row in _rows)
                         if (result.TryGetValue(row.Item.Id, out var text)) row.Preview = text;
@@ -351,17 +396,18 @@ public sealed class SampleFilterWindow : Window
             try { if (MakeRule(row) is { } rule) rules.Add(rule); }
             catch (FormatException ex) { _error.Text = row.Item.DisplayName + "：" + ex.Message; return; }
         }
-        _ = SubmitAsync(rules, SelectedSBins());
+        _ = SubmitAsync(rules, SelectedSBins(), SelectedLocations());
     }
 
-    private async Task SubmitAsync(IReadOnlyList<SampleRange> rules, IReadOnlyList<string> sBins, bool clearDrafts = false)
+    private async Task SubmitAsync(IReadOnlyList<SampleRange> rules, IReadOnlyList<string> sBins,
+        IReadOnlyList<SampleLocation> locations, bool clearDrafts = false)
     {
         if (_applying) return;
         _previewTimer.Stop(); _previewCancellation?.Cancel();
         _applying = true; IsEnabled = false;
         try
         {
-            if (_apply != null) await _apply(rules, MatchMode, sBins);
+            if (_apply != null) await _apply(rules, MatchMode, sBins, locations);
             Rules = rules;
             if (clearDrafts)
             {
@@ -370,7 +416,9 @@ public sealed class SampleFilterWindow : Window
                 _goldenRecord = null; _goldenLabel = null; _goldenNote.Text = "Golden：从主窗口选定 Run 后设置";
             }
             if (sBins.Count == 0) _sBinList.UnselectAll();
-            _error.Text = rules.Count == 0 && sBins.Count == 0 ? "已取消数据筛选。" : "已应用，可以继续操作主窗口或修改条件。";
+            if (locations.Count == 0) { _lotList.UnselectAll(); _waferList.UnselectAll(); }
+            _error.Text = rules.Count == 0 && sBins.Count == 0 && locations.Count == 0
+                ? "已取消数据筛选。" : "已应用，可以继续操作主窗口或修改条件。";
         }
         catch (OperationCanceledException) { _error.Text = "已取消计算，保留原筛选。"; }
         catch (Exception ex) { _error.Text = ex.Message; }

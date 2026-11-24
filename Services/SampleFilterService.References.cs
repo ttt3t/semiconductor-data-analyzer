@@ -19,10 +19,10 @@ public static partial class SampleFilterService
         }
     }
 
-    private sealed record ResolvedRange(Interval? Fixed, Dictionary<(string Lot, string Wafer), Interval>? ByWafer = null)
+    private sealed record ResolvedRange(Interval? Fixed, Dictionary<SampleLocation, Interval>? ByWafer = null)
     {
         public Interval? ForRecord(CsvRecord? record) => ByWafer == null ? Fixed :
-            record != null && ByWafer.TryGetValue(WaferKey(record), out var interval) ? interval : null;
+            record != null && ByWafer.TryGetValue(SampleLocation.FromRecord(record), out var interval) ? interval : null;
     }
 
     private readonly record struct RunningMean(int Count, double Mean)
@@ -37,8 +37,6 @@ public static partial class SampleFilterService
             return new(Count + 1, next);
         }
     }
-
-    private static (string Lot, string Wafer) WaferKey(CsvRecord record) => (record.Lot.Trim(), record.WaferId);
 
     internal static double? ReadValue(CsvRecord record, string id) =>
         record.Measurements.TryGetText(id, out var raw) && DatasetService.TryValue(raw, out double value) ? value : null;
@@ -70,12 +68,12 @@ public static partial class SampleFilterService
 
         if (deviation.Baseline == SampleBaseline.WaferMean)
         {
-            var means = new Dictionary<(string Lot, string Wafer), RunningMean>();
+            var means = new Dictionary<SampleLocation, RunningMean>();
             foreach (var record in records)
             {
                 AnalysisOperation.CheckCancellation();
                 if (ReadValue(record, item.Id) is not double value) continue;
-                var wafer = WaferKey(record);
+                var wafer = SampleLocation.FromRecord(record);
                 means[wafer] = means.GetValueOrDefault(wafer).Add(value);
             }
             if (means.Count == 0) throw Error("当前数据没有可用的 Wafer 均值。");
@@ -127,11 +125,11 @@ public static partial class SampleFilterService
     }
 
     internal static Dictionary<string, string> Preview(CsvParseResult data, IReadOnlyList<SampleRange> rules, RetestMode mode,
-        AnalyzerConfig config, IReadOnlyList<string> sBins, CsvRecord? currentRun)
+        AnalyzerConfig config, CsvRecord? currentRun)
     {
         var items = data.Items.ToDictionary(item => item.Id, StringComparer.Ordinal);
         IReadOnlyList<CsvRecord> selected = rules.Any(rule => rule.Deviation?.Baseline is SampleBaseline.Mean or SampleBaseline.Median or SampleBaseline.WaferMean)
-            ? DatasetService.SelectRetestRecords(EligibleRecords(data, sBins), mode, config) : Array.Empty<CsvRecord>();
+            ? DatasetService.SelectRetestRecords(data.Records, mode, config) : Array.Empty<CsvRecord>();
         var previews = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var rule in rules)
         {

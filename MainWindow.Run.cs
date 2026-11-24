@@ -22,17 +22,20 @@ public partial class MainWindow
         public readonly int[] Positions = new int[records];
         public readonly HashSet<RawMeasurementStore> Stores = new();
         public string[] SBins { get; private set; } = Array.Empty<string>();
+        public SampleLocation[] Locations { get; private set; } = Array.Empty<SampleLocation>();
 
         public static RunLookup Build(CsvParseResult data)
         {
             var lookup = new RunLookup(data.Records.Count, data.Items.Count);
             var rawSBins = new HashSet<string>(StringComparer.Ordinal);
+            var locations = new HashSet<SampleLocation>();
             for (int row = 0; row < data.Records.Count; row++)
             {
                 if ((row & 1023) == 0) AnalysisOperation.CheckCancellation();
                 var record = data.Records[row];
                 lookup.BySerial.TryAdd(record.SerialNumber.Trim(), row);
                 rawSBins.Add(record.SBin);
+                locations.Add(SampleLocation.FromRecord(record));
                 if (record.Measurements.RawStore is { } store) lookup.Stores.Add(store);
                 lookup.Positions[row] = -1;
                 if (record.X is not int x || record.Y is not int y) continue;
@@ -49,6 +52,8 @@ public partial class MainWindow
             foreach (var item in data.Items) lookup.Items[item.Id] = item;
             lookup.SBins = rawSBins.Select(BinStatisticsService.NormalizeBin).Where(bin => bin.Length > 0)
                 .Distinct(StringComparer.Ordinal).OrderBy(NumericText.SortKey).ThenBy(bin => bin, StringComparer.Ordinal).ToArray();
+            lookup.Locations = locations.OrderBy(location => location.Lot, StringComparer.Ordinal)
+                .ThenBy(location => location.Wafer, StringComparer.Ordinal).ToArray();
             return lookup;
         }
     }

@@ -12,12 +12,12 @@ static class Probe
     {
         var records = new List<CsvRecord> { R("negative", 0, "1", "-12"), R("low", 1, "1", "8"),
             R("middle", 2, "1", "10"), R("high", 3, "1", "12"), R("missing", 4, "1", "NaN"),
-            R("second-wafer", 0, "2", "80", "W2"), R("second-lot", 0, "2", "100") };
+            R("second-wafer", 0, "3", "80", "W2"), R("second-lot", 0, "2", "100") };
         records[^1].Lot = "L2";
         using var lease = new DatasetLease(records);
         var data = DatasetService.Build(new() { new() { Id = "a", DisplayName = "A", LowLimit = 8, HighLimit = 12 } }, records);
-        string[] Select(SampleRange rule, params string[] bins) =>
-            SampleFilterService.Apply(data, new[] { rule }, RetestMode.All, sBins: bins).Records.Select(r => r.Id).ToArray();
+        string[] Select(SampleRange rule) =>
+            SampleFilterService.Apply(data, new[] { rule }, RetestMode.All).Records.Select(r => r.Id).ToArray();
         SampleRange Deviation(SampleBaseline source, double? negative, double? positive, double? reference = null,
             SampleCalculation calculation = SampleCalculation.Absolute) =>
             new("a", null, null) { Deviation = new(calculation, source, negative, positive, reference) };
@@ -27,17 +27,28 @@ static class Probe
             Select(new("a", 8, null) { Outside = true }).SequenceEqual(new[] { "negative" }) &&
             Select(new("a", 12, 8)).SequenceEqual(new[] { "negative", "low", "high", "second-wafer", "second-lot" }),
             "outside excludes boundary and invalid values, with one-sided and legacy reversed bounds supported");
-        Check(Select(Deviation(SampleBaseline.Mean, 1, 4), "1").SequenceEqual(new[] { "low" }) &&
-            Select(Deviation(SampleBaseline.Median, 0, 1), "1").SequenceEqual(new[] { "middle" }),
-            "mean and median use the selected SBIN population and skip invalid values");
+        Check(Select(Deviation(SampleBaseline.Mean, 24, 0)).SequenceEqual(new[] { "middle", "high" }) &&
+            Select(Deviation(SampleBaseline.Median, 0, 1)).SequenceEqual(new[] { "high" }),
+            "mean and median use original records and skip invalid values");
         Check(Select(Deviation(SampleBaseline.SpecCenter, 0, 0)).SequenceEqual(new[] { "middle" }) &&
             Select(Deviation(SampleBaseline.Golden, null, 0, 8)).SequenceEqual(new[] { "negative", "low" }),
             "spec center uses both limits and Golden uses the stored raw reference with a one-sided deviation");
         var byWafer = Deviation(SampleBaseline.WaferMean, 1, 4);
         Check(Select(byWafer).SequenceEqual(new[] { "low", "second-wafer", "second-lot" }) &&
-            SampleFilterService.Preview(data, new[] { byWafer }, RetestMode.All, new(), Array.Empty<string>(), records[^1])["a"]
+            SampleFilterService.Preview(data, new[] { byWafer }, RetestMode.All, new(), records[^1])["a"]
                 .Contains("99 ~ 104"),
             "wafer means separate lots with the same wafer name and preview the current run's interval");
+        var waferOnly = SampleFilterService.Apply(data, Array.Empty<SampleRange>(), RetestMode.All,
+            locations: new SampleLocation[] { new("L2", "W") });
+        var lotOnly = SampleFilterService.Apply(data, Array.Empty<SampleRange>(), RetestMode.All,
+            locations: new SampleLocation[] { new("L") });
+        Check(waferOnly.Records.Single().Id == "second-lot" &&
+            lotOnly.Records.Select(r => r.Id).SequenceEqual(records.Take(6).Select(r => r.Id)),
+            "an individual wafer is qualified by lot and a complete lot includes every wafer");
+        var union = SampleFilterService.Apply(data, new SampleRange[] { new("a", 10, 10), new("a", 9, 11) }, RetestMode.All,
+            sBins: new[] { "2" }, locations: new SampleLocation[] { new("L", "W2"), new("L2", "W") });
+        Check(union.Records.Select(r => r.Id).SequenceEqual(new[] { "middle", "second-wafer", "second-lot" }),
+            "ranges use their own AND rules, then union with selected bins and locations without duplicates");
     }
     static void CheckCombinedBins(string folder, AnalyzerConfig config)
     {
@@ -166,10 +177,10 @@ static class Probe
             var binScope = SampleFilterService.Apply(data, Array.Empty<SampleRange>(), RetestMode.Last, config: config, sBins: new[] { "02", "4.0" });
             Check(binScope.Records.Select(r => r.Id).SequenceEqual(new[] { "bad-later", "bad-first", "fail-old", "fail-last", "other-wafer" }) &&
                 binScope.Items[0].Values.Count == 5 && data.Records.Count == 10, "multiple normalized SBINs retain only eligible raw records");
-            var binAndRanges = SampleFilterService.Apply(data, new[] { new SampleRange("a", null, 20), new SampleRange("a", 23, null) },
+            var binAndRanges = SampleFilterService.Apply(data, new[] { new SampleRange("a", null, 3), new SampleRange("a", 23, 23) },
                 RetestMode.Last, SampleMatchMode.Union, config, new[] { "2" });
-            Check(binAndRanges.Records.Select(r => r.Id).SequenceEqual(new[] { "bad-later", "other-wafer" }),
-                "range union runs after SBIN filtering and does not bring back another SBIN from chip history");
+            Check(binAndRanges.Records.Select(r => r.Id).SequenceEqual(rows.Where(r => r.Id is not ("pass" or "partial")).Select(r => r.Id)),
+                "measurement and bin filters independently include range-matching chip histories and raw bin matches");
             Check(SampleFilterService.Apply(data, Array.Empty<SampleRange>(), RetestMode.All, sBins: new[] { "999" }).Records.Count == 0,
                 "an SBIN selection with no records creates an empty view");
             var snapshot = SimulationSnapshot.Build(data, config, RetestMode.Last, default);
