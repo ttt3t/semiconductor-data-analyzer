@@ -17,6 +17,8 @@ public sealed record ManagementTrendData(string[] Labels, List<WaferCategorySeri
 
 public static partial class ManagementTrendService
 {
+    public const string SBinCategory = "SBIN 分类";
+
     public static ManagementTrendData CreateCategoryTrend(ManagedProduct product, string stageId, string filter, ManagementPeriod period = ManagementPeriod.Wafer)
     {
         var result = Categories(product, stageId, filter, period);
@@ -60,37 +62,65 @@ public static partial class ManagementTrendService
 
     public static ManagementTrendData BinTrend(ManagedProduct product, ManagementBinStage stage, string type, string filter, ManagementPeriod period)
     {
-        if (stage.CombinedKind == null) return FailTrend(product, stage.Id, type, filter, period);
-        var rows = product.Snapshot is { AnalyticsVersion: >= ProductYieldService.CombinedBinAnalyticsVersion } snapshot
-            ? snapshot.CombinedBins.Where(row => row.Kind == stage.CombinedKind && row.BinType == type && Matches(row.Lot, row.Wafer, filter)).ToArray()
-            : Array.Empty<ManagedCombinedBinCount>();
-        string Label(ManagedCombinedBinCount row) => period switch
+        bool grouped = type == SBinCategory;
+        string binType = grouped ? "SBIN" : type;
+        var categories = grouped ? SBinCategoryNames(product) : null;
+        string Label(string kind, string lot, string wafer, string month) => period switch
         {
-            ManagementPeriod.Wafer => row.Lot + (row.Kind == "FT" ? " / FT" : " / " + row.Wafer),
-            ManagementPeriod.Lot => row.Lot,
-            _ => row.Period.Length == 0 ? "未指定时间" : PeriodKey(row.Period, period)
+            ManagementPeriod.Wafer => lot + (kind == "FT" ? " / FT" : " / " + wafer),
+            ManagementPeriod.Lot => lot,
+            _ => month.Length == 0 ? "未指定时间" : PeriodKey(month, period)
         };
-        var byLabel = rows.GroupBy(Label);
-        var groups = (period is ManagementPeriod.Month or ManagementPeriod.Year
-            ? byLabel.OrderBy(group => group.Key == "未指定时间").ThenBy(group => group.Key, StringComparer.Ordinal)
-            : byLabel).ToArray();
-        var labels = groups.Select(group => group.Key).ToArray();
-        var totals = groups.Select(group => (double?)group.Sum(row => row.Count)).ToArray();
-
-        var passBins = rows.GroupBy(row => row.Bin).Where(group => group.All(row => row.Disposition == OriginalDisposition.Pass))
-            .Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
-        List<WaferCategorySeries> BuildSeries(IEnumerable<ManagedCombinedBinCount> entries, bool failures)
+        var snapshot = product.Snapshot;
+        TrendBin[] all, failures;
+        IEnumerable<string> scopes;
+        if (stage.CombinedKind == null)
         {
-            var counts = entries.GroupBy(row => (Label(row), Bin: failures ? row.FailureBin! : row.Bin))
-                .ToDictionary(group => group.Key, group => group.Sum(row => row.Count));
-            return counts.Keys.Select(key => key.Bin).Distinct(StringComparer.Ordinal)
-                .OrderBy(bin => bin.Length == 0).ThenBy(NumericText.SortKey).ThenBy(bin => bin, StringComparer.Ordinal)
-                .Select(bin => new WaferCategorySeries(bin.Length == 0 ? (failures ? "未记录" : "未完成") : "Bin " + bin,
-                    bin.Length == 0 ? Brushes.Gray : !failures && passBins.Contains(bin) ? BinPalette.PassBrush : FailColor(bin),
-                    labels.Select(label => (double?)counts.GetValueOrDefault((label, bin))).ToArray())).ToList();
+            all = snapshot?.StageBins.Where(row => row.StageId == stage.Id && row.BinType == binType && Matches(row.Lot, row.Wafer, filter))
+                .Select(row => new TrendBin(Label(row.Kind, row.Lot, row.Wafer, row.Period), row.Bin, row.Disposition, row.Count)).ToArray()
+                ?? Array.Empty<TrendBin>();
+            failures = snapshot?.FailBins.Where(row => row.StageId == stage.Id && row.BinType == binType && Matches(row.Lot, row.Wafer, filter))
+                .Select(row => new TrendBin(Label(row.Kind, row.Lot, row.Wafer, row.Period), row.Bin == "未记录" ? "" : row.Bin, null, row.Count))
+                .ToArray() ?? Array.Empty<TrendBin>();
+            scopes = YieldRows(product, filter, period).Where(row => row.StageId == stage.Id)
+                .Select(row => Label(row.Kind, row.Lot, row.Wafer, row.Period));
         }
-        return new(labels, BuildSeries(rows, false), ManagementChartMode.StackedCounts, "综合 Bin 芯片数（颗）",
-            SampleCounts: totals, FailureSeries: BuildSeries(rows.Where(row => row.IsFailure), true));
+        else
+        {
+            var rows = snapshot is { AnalyticsVersion: >= ProductYieldService.CombinedBinAnalyticsVersion }
+                ? snapshot.CombinedBins.Where(row => row.Kind == stage.CombinedKind && row.BinType == binType && Matches(row.Lot, row.Wafer, filter)).ToArray()
+                : Array.Empty<ManagedCombinedBinCount>();
+            all = rows.Select(row => new TrendBin(Label(row.Kind, row.Lot, row.Wafer, row.Period), row.Bin, row.Disposition, row.Count)).ToArray();
+            failures = rows.Where(row => row.IsFailure)
+                .Select(row => new TrendBin(Label(row.Kind, row.Lot, row.Wafer, row.Period), row.FailureBin!, null, row.Count)).ToArray();
+            scopes = Array.Empty<string>();
+        }
+        scopes = scopes.Concat(all.Select(row => row.Scope)).Concat(failures.Select(row => row.Scope)).Distinct(StringComparer.Ordinal);
+        if (period is ManagementPeriod.Month or ManagementPeriod.Year)
+            scopes = scopes.OrderBy(label => label == "未指定时间").ThenBy(label => label, StringComparer.Ordinal);
+        var labels = scopes.ToArray();
+        var totals = all.GroupBy(row => row.Scope).ToDictionary(group => group.Key, group => (double?)group.Sum(row => row.Count));
+        return new(labels, BinSeries(labels, all, categories, stage.CombinedKind == null ? "未记录" : "未完成"),
+            ManagementChartMode.StackedCounts, "Bin 芯片数（颗）",
+            SampleCounts: labels.Select(label => totals.GetValueOrDefault(label)).ToArray(),
+            FailureSeries: BinSeries(labels, failures, categories, "未记录"));
+    }
+
+    private readonly record struct TrendBin(string Scope, string Bin, OriginalDisposition? Disposition, int Count);
+
+    private static List<WaferCategorySeries> BinSeries(string[] labels, TrendBin[] rows, Dictionary<string, string>? categories, string missingName)
+    {
+        string Name(TrendBin row) => row.Bin.Length == 0 ? missingName : categories == null ? "Bin " + row.Bin :
+            categories.GetValueOrDefault(row.Bin, "未分类");
+        return rows.GroupBy(Name).OrderBy(group => group.Key == missingName).ThenBy(group => NumericText.SortKey(group.First().Bin))
+            .ThenBy(group => group.Key, StringComparer.Ordinal).Select(group =>
+            {
+                var counts = group.GroupBy(row => row.Scope).ToDictionary(entries => entries.Key, entries => entries.Sum(row => row.Count));
+                var color = group.All(row => row.Bin.Length == 0) ? Brushes.Gray :
+                    group.All(row => row.Disposition == OriginalDisposition.Pass) ? BinPalette.PassBrush :
+                    categories == null ? FailColor(group.First().Bin) : BinPalette.ColorForCategory(group.Key);
+                return new WaferCategorySeries(group.Key, color, labels.Select(label => (double?)counts.GetValueOrDefault(label)).ToArray());
+            }).ToList();
     }
 
     public static ManagementTrendData FailTrend(ManagedProduct product, string stageId, string type, string filter, ManagementPeriod period)
@@ -98,12 +128,14 @@ public static partial class ManagementTrendService
 
     public static ManagementTrendData DefectTrend(ManagedProduct product, string stageId, string filter, ManagementPeriod period)
     {
-        var categories = ConfigLoader.Parse(product.ConfigText).SBinCategories
-            .SelectMany(c => c.Value.Select(bin => (Bin: BinStatisticsService.NormalizeBin(bin), Category: c.Key)))
-            .ToDictionary(c => c.Bin, c => c.Category, StringComparer.OrdinalIgnoreCase);
+        var categories = SBinCategoryNames(product);
         return FailTrend(product, stageId, "SBIN", filter, period,
             bin => categories.GetValueOrDefault(BinStatisticsService.NormalizeBin(bin), "未分类"));
     }
+
+    private static Dictionary<string, string> SBinCategoryNames(ManagedProduct product) => ConfigLoader.Parse(product.ConfigText).SBinCategories
+        .SelectMany(c => c.Value.Select(bin => (Bin: BinStatisticsService.NormalizeBin(bin), Category: c.Key)))
+        .ToDictionary(c => c.Bin, c => c.Category, StringComparer.OrdinalIgnoreCase);
 
     private static ManagementTrendData FailTrend(ManagedProduct product, string stageId, string type, string filter, ManagementPeriod period, Func<string, string>? classify)
     {
@@ -136,7 +168,7 @@ public static partial class ManagementTrendService
         {
             Mode = ManagementChartMode.StackedPercentages,
             AxisTitle = display == ManagementCountDisplay.PercentOfTotal
-                ? data.FailureSeries == null ? "不良率（% · 占总芯片数）" : "综合 Bin 占比（% · 占总芯片数）"
+                ? data.FailureSeries == null ? "不良率（% · 占总芯片数）" : "Bin 占比（% · 占总芯片数）"
                 : "不良构成（% · 占不良芯片数）",
             Series = series.Select(s => s with
             {

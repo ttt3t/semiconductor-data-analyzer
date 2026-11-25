@@ -34,8 +34,37 @@ static class Probe
         var stages = stageList.Items.OfType<ManagementBinStage>().ToArray();
         Check(stages.Where(stage => stage.CombinedKind != null).Select(stage => stage.Label)
             .SequenceEqual(new[] { "CP 多温综合", "FT 多温综合" }), "Bin classification offers both configured multi-temperature steps");
-        stageList.SelectedItem = stages.Single(stage => stage.CombinedKind == "CP"); Pump();
         var trend = (ManagementTrendView)window.FindName("CategoryTrend");
+        var hbin = (RadioButton)window.FindName("CategoryHbin");
+        var sbin = (RadioButton)window.FindName("CategorySbin");
+        var grouped = (RadioButton)window.FindName("CategorySbinGrouped");
+        stageList.SelectedItem = stages.Single(stage => stage.Id == "cold"); Pump();
+        Check(Equals(hbin.Content, "HBIN 数量") && Equals(sbin.Content, "SBIN 数量") && Equals(grouped.Content, "SBIN 分类数量") &&
+            trend.SelectedData.Series.Single() is { Category: "Bin 4" } good && good.Values.Sum() == 2 && good.LineBrush == BinPalette.PassBrush,
+            "single-step controls display the configured HBIN Pass code and offer both SBIN views");
+        sbin.IsChecked = true; Pump();
+        Check(trend.SelectedData.Series.Select(series => series.Category).SequenceEqual(new[] { "Bin 7", "Bin 9" }),
+            "single-step SBIN lists both configured good bin numbers");
+        grouped.IsChecked = true; Pump();
+        Check(trend.SelectedData.Series.Single() is { Category: "良品分组" } category && category.Values.Sum() == 2 &&
+            category.LineBrush == BinPalette.PassBrush, "the SBIN category radio sums multiple good codes under their configured name");
+        var sample = ProductCatalogStore.Clone(product);
+        sample.Snapshot!.StageBins.Add(new("CP", "L1", "W1", "cold", "2026-10", "SBIN", "11", OriginalDisposition.Fail, 1));
+        sample.Snapshot.StageBins.Add(new("CP", "L1", "W1", "cold", "2026-10", "SBIN", "12", OriginalDisposition.Fail, 1));
+        sample.Snapshot.StageBins.Add(new("CP", "L1", "W1", "cold", "2026-10", "SBIN", "13", OriginalDisposition.Fail, 1));
+        sample.Snapshot.FailBins.Add(new() { Kind = "CP", Lot = "L1", Wafer = "W1", StageId = "cold", Period = "2026-10",
+            BinType = "SBIN", Bin = "11", Count = 1 });
+        var monthly = ManagementTrendService.BinTrend(sample, stages.Single(stage => stage.Id == "cold"),
+            ManagementTrendService.SBinCategory, "L1", ManagementPeriod.Month);
+        var total = ManagementTrendService.DisplayCounts(monthly, ManagementCountDisplay.PercentOfTotal);
+        var failures = ManagementTrendService.DisplayCounts(monthly, ManagementCountDisplay.PercentOfFailures);
+        Check(monthly.Labels.SequenceEqual(new[] { "2026-10" }) &&
+            total.Series.Single(series => series.Category == "外观").Values.Single() == 50 &&
+            total.Series.Single(series => series.Category == "未分类").Values.Single() == 25 &&
+            failures.Series.Single() is { Category: "外观" } bad && bad.Values.Single() == 100,
+            "grouped monthly percentages honor the lot filter and the separate official failure population");
+        hbin.IsChecked = true; Pump();
+        stageList.SelectedItem = stages.Single(stage => stage.CombinedKind == "CP"); Pump();
         Check(Equals(((RadioButton)window.FindName("CategoryHbin")).Content, "综合 HBIN") &&
             trend.SelectedData.Labels.Length == 3 && trend.SelectedData.Series.Single().Category == "未完成",
             "selecting the combined step shows the complete automatic distribution in the existing chart and table");
@@ -58,15 +87,22 @@ static class Probe
         trend.CountDisplay = ManagementCountDisplay.Count;
         Check(trend.SelectedData.Series.Any(s => s.Category == "Bin 7" && s.LineBrush == BinPalette.PassBrush) &&
             trend.SelectedData.Series.All(s => s.Category != "Bin 1"), "all-bin mode restores classified codes and configured Pass colors");
+        var combinedCategory = ManagementTrendService.BinTrend(classified, stages.Single(s => s.CombinedKind == "CP"),
+            ManagementTrendService.SBinCategory, "", ManagementPeriod.Wafer);
+        Check(combinedCategory.Series.Any(s => s.Category == "良品分组" && s.Values.Single() == 1),
+            "multi-temperature SBIN also groups the final combined bin code");
         ((RadioButton)window.FindName("CategoryHbin")).IsChecked = true;
         var selected = ManagementAnalytics.Select(product, new() { new("CP", "L1", "W1") });
         var scoped = ManagementTrendService.BinTrend(selected, stages.Single(stage => stage.CombinedKind == "CP"), "HBIN", "", ManagementPeriod.Month);
         Check(scoped.Labels.SequenceEqual(new[] { "2026-10" }) && scoped.SampleCounts!.Single() == 1,
             "combined monthly bins keep only the selected wafer in report scope");
         string report = Path.Combine(folder, "combined-bins.xlsx");
-        ManagementReportService.SaveWorkbook(report, product);
+        ManagementReportService.SaveWorkbook(report, product,
+            options: new(ManagementAnalytics.Scopes(product).ToHashSet(), BinType: ManagementTrendService.SBinCategory));
         using var book = new XLWorkbook(report);
-        Check(book.Worksheet("Bin分类图").Pictures.Count() == 3, "XLSX includes the combined bin chart alongside both populated CP step charts");
+        var sheet = book.Worksheet("Bin分类图");
+        Check(sheet.Pictures.Count() == 3 && sheet.Cell(4, 1).GetString().Contains("SBIN 分类"),
+            "XLSX exports the selected SBIN category charts for single and combined steps");
         tabs.SelectedItem = window.FindName("YieldDetailsTab"); Pump();
     }
     [STAThread] static int Main(string[] args)
@@ -79,7 +115,9 @@ static class Probe
             var failures = new List<Exception>(); app.DispatcherUnhandledException += (_, e) => { failures.Add(e.Exception); Console.Error.WriteLine(e.Exception); e.Handled = true; };
             var config = new AnalyzerConfig { TestItemRow = 1, LowLimitRow = 2, HighLimitRow = 3, UnitRow = 4, TestNumberRow = 5,
                 DataStartRow = 6, TestItemStartColumn = 8, SerialNumberColumn = 1, XColumn = 2, YColumn = 3, SiteColumn = 4,
-                SBinColumn = 5, HBinColumn = 6, WaferColumn = 7, SBinRow = 0, HBinRow = 0 };
+                SBinColumn = 5, HBinColumn = 6, WaferColumn = 7, SBinRow = 0, HBinRow = 0,
+                PassHBins = new() { "4" }, PassSBins = new() { "7", "9" },
+                SBinCategories = new() { ["良品分组"] = new() { "7", "9" }, ["外观"] = new() { "11", "12" } } };
             var cold = new ProductTestStage { Id = "cold", Kind = "CP", Name = "常温" };
             var hot = new ProductTestStage { Id = "hot", Kind = "CP", Name = "高温", Temperature = 85 };
             var product = new ManagedProduct { Name = "multi-row", ConfigText = ConfigLoader.Serialize(config),
@@ -87,7 +125,8 @@ static class Probe
             for (int i = 1; i <= 3; i++)
             {
                 string path = Path.Combine(folder, "file" + i + ".csv");
-                File.WriteAllText(path, "SN,X,Y,Site,SBIN,HBIN,Wafer,A\nLSL,,,,,,,0\nUSL,,,,,,,10\nUnit,,,,,,,V\nTest Num,,,,,,,101\n" + $"{i},{i},0,1,1,1,W{i},{i}\n");
+                File.WriteAllText(path, "SN,X,Y,Site,SBIN,HBIN,Wafer,A\nLSL,,,,,,,0\nUSL,,,,,,,10\nUnit,,,,,,,V\nTest Num,,,,,,,101\n" +
+                    $"{i},{i},0,1,{(i == 2 ? 9 : 7)},4,W{i},{i}\n");
                 product.Files.Add(new() { Id = "F" + i, StageId = i == 3 ? hot.Id : cold.Id, Lot = "L" + (i == 3 ? 1 : i), FilePath = path, TestTime = new DateTime(2026, 10, 25) });
             }
             product.Snapshot = ProductYieldService.Calculate(product);

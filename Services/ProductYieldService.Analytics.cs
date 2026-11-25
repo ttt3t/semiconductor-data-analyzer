@@ -5,10 +5,9 @@ namespace SemiconductorCsvAnalyzer.Services;
 
 public static partial class ProductYieldService
 {
-    private static void AddAnalytics(ManagedProduct product, ManagementSnapshot snapshot,
+    private static void AddAnalytics(ManagedProduct product, AnalyzerConfig config, HBinClassifier? sbinClassifier, ManagementSnapshot snapshot,
         Dictionary<DeviceKey, Dictionary<string, Observation>> devices, CancellationToken token)
     {
-        var config = ConfigLoader.Parse(product.ConfigText);
         bool Fail(Observation o) => o.HBin.Length > 0 && !HBinClassifier.IsGood(o.Disposition, product.IncludePartialPass);
         static (double X, double Y)? XY(DeviceKey key)
         {
@@ -29,15 +28,39 @@ public static partial class ProductYieldService
             {
                 token.ThrowIfCancellationRequested();
                 var selected = population.Where(d => d.Value.ContainsKey(stage.Id)).ToArray();
-                var failures = selected.Select(d => d.Value[stage.Id]).Where(Fail).ToArray();
                 foreach (string type in new[] { "HBIN", "SBIN" })
-                    foreach (var bin in failures.GroupBy(o => (Period: Month(o.TestTime), Bin: BinStatisticsService.NormalizeBin(type == "HBIN" ? o.HBin : o.SBin))))
+                {
+                    bool soft = type == "SBIN";
+                    var bins = new Dictionary<(string Period, string Bin, OriginalDisposition? Disposition), int>();
+                    var failures = new Dictionary<(string Period, string Bin), int>();
+                    foreach (var device in selected)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var observation = device.Value[stage.Id];
+                        string bin = BinStatisticsService.NormalizeBin(soft ? observation.SBin : observation.HBin);
+                        string month = Month(observation.TestTime);
+                        OriginalDisposition? disposition = bin.Length == 0 ? null :
+                            soft && sbinClassifier != null ? sbinClassifier.ClassifyNormalized(bin) :
+                            observation.HBin.Length == 0 ? null : observation.Disposition;
+                        var key = (month, bin, disposition);
+                        bins[key] = bins.GetValueOrDefault(key) + 1;
+                        if (Fail(observation))
+                        {
+                            var failure = (month, bin);
+                            failures[failure] = failures.GetValueOrDefault(failure) + 1;
+                        }
+                    }
+                    foreach (var (key, count) in bins)
+                        snapshot.StageBins.Add(new(scope.Key.Kind, scope.Key.Lot, scope.Key.Wafer, stage.Id,
+                            key.Period, type, key.Bin, key.Disposition, count));
+                    foreach (var (key, count) in failures)
                         snapshot.FailBins.Add(new()
                         {
                             Kind = scope.Key.Kind, Lot = scope.Key.Lot, Wafer = scope.Key.Wafer, StageId = stage.Id,
-                            Period = bin.Key.Period, BinType = type, Bin = bin.Key.Bin.Length == 0 ? "未记录" : bin.Key.Bin,
-                            Description = type == "SBIN" ? config.SBinDescriptions.GetValueOrDefault(bin.Key.Bin, "") : "", Count = bin.Count()
+                            Period = key.Period, BinType = type, Bin = key.Bin.Length == 0 ? "未记录" : key.Bin,
+                            Description = soft ? config.SBinDescriptions.GetValueOrDefault(key.Bin, "") : "", Count = count
                         });
+                }
                 if (radius <= 0 || !double.IsFinite(radius)) continue;
                 var rings = Enumerable.Range(0, 4).Select(region => new ManagedRadialCount
                 { Lot = scope.Key.Lot, Wafer = scope.Key.Wafer, StageId = stage.Id, Region = region, CenterX = cx, CenterY = cy, Radius = radius }).ToArray();

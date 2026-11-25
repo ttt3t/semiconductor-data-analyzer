@@ -174,14 +174,14 @@ public static class ManagementReportService
                         Write(timed, row++, c.PeriodLabel, c.Kind, product.Flow.FirstOrDefault(s => s.Id == c.StageId)?.Label, c.Category, c.Count, c.Total, c.Percent / 100);
                     timed.Cell(3, 1).Value = "各分类数量合计 ÷ 对应期间有效 SBIN 总数；只覆盖自动解析的逐颗记录。";
                 }
-                string binType = options?.BinType == "SBIN" ? "SBIN" : "HBIN";
-                var categoryPlots = Sheet("Bin分类图", new[] { binType + " 单温 Fail 与多温综合分布 · 每张最多 13 列 · 数量 / 百分比口径跟随界面 · 仅自动解析记录" }); row = 6;
+                string binType = options?.BinType is "SBIN" or ManagementTrendService.SBinCategory ? options.BinType : "HBIN";
+                var categoryPlots = Sheet("Bin分类图", new[] { binType + " 单温与多温综合分布 · 每张最多 13 列 · 数量 / 百分比口径跟随界面 · 仅自动解析记录" }); row = 6;
                 foreach (var stage in ManagementTrendService.BinStages(product))
                     foreach (var page in Pages(ManagementTrendService.DisplayCounts(ManagementTrendService.BinTrend(product, stage, binType, filter, period), options?.BinDisplay ?? ManagementCountDisplay.Count), 13, options?.BinLayout))
                     {
                         token.ThrowIfCancellationRequested();
                         var layout = options?.BinLayout;
-                        string title = product.Name + " · " + stage.Label + " · " + binType + (stage.CombinedKind == null ? " Fail" : "") + " · " + periodLabel;
+                        string title = product.Name + " · " + stage.Label + " · " + binType + " · " + periodLabel;
                         using var stream = new MemoryStream(TrendImage(page, title, false, layout));
                         int imageHeight = TrendImageHeight(page, layout), imageWidth = TrendImageWidth(page, layout);
                         int displayWidth = layout == null ? 1200 : imageWidth, displayHeight = (int)Math.Ceiling(imageHeight * (double)displayWidth / imageWidth);

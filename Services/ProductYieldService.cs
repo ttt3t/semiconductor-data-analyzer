@@ -9,6 +9,7 @@ namespace SemiconductorCsvAnalyzer.Services;
 public static partial class ProductYieldService
 {
     internal const int CombinedBinAnalyticsVersion = 3;
+    internal const int StageBinAnalyticsVersion = 4;
     private readonly record struct DeviceKey(string Kind, string Lot, string Wafer, string Identity);
     private sealed record Observation(bool KnownIdentity, string HBin, string SBin, OriginalDisposition Disposition, DateTime? TestTime);
 
@@ -45,7 +46,7 @@ public static partial class ProductYieldService
     }
 
     public static string Signature(ManagedProduct product) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-        JsonSerializer.Serialize(new { Schema = 8, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
+        JsonSerializer.Serialize(new { Schema = 9, product.ConfigText, product.Flow, product.UuidTestNumbers, product.RetestMode,
             product.IncludePartialPass, product.PreferGoodRetest, product.Files }))));
 
     internal sealed record SourceStatus(bool Current, Dictionary<string, string> FileStatuses);
@@ -118,9 +119,9 @@ public static partial class ProductYieldService
         }
         token.ThrowIfCancellationRequested();
         var config = ConfigLoader.Parse(product.ConfigText);
-        AddAnalytics(product, result, devices, token);
-        var binCodes = new Dictionary<string, RankedBin>(StringComparer.Ordinal);
         var sbinClassifier = HBinClassifier.ForSBin(config);
+        AddAnalytics(product, config, sbinClassifier, result, devices, token);
+        var binCodes = new Dictionary<string, RankedBin>(StringComparer.Ordinal);
         var categories = config.SBinCategories.SelectMany(c => c.Value.Select(bin => (Bin: BinStatisticsService.NormalizeBin(bin), Name: c.Key)))
             .ToDictionary(c => c.Bin, c => c.Name);
         foreach (var group in devices.GroupBy(d => (d.Key.Kind, d.Key.Lot, d.Key.Wafer)))
@@ -228,7 +229,7 @@ public static partial class ProductYieldService
             if (!current.Exists || current.Length != state.Length || current.LastWriteTimeUtc != state.LastWriteUtc)
                 throw new IOException($"文件“{file.FileName}”在计算期间又发生变化，本次结果未保存，请重新计算。");
         }
-        result.AnalyticsVersion = CombinedBinAnalyticsVersion;
+        result.AnalyticsVersion = StageBinAnalyticsVersion;
         result.CalculatedUtc = DateTime.UtcNow;
         return result;
     }

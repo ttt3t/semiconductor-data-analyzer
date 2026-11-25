@@ -1,6 +1,6 @@
 # Semiconductor Data Analyzer
 
-**CSV Analyzer V2.0.23 · GYF**
+**CSV Analyzer V2.0.24 · GYF**
 
 A Windows desktop application for semiconductor CSV / STDF test-data analysis, built with .NET 8 and WPF.
 
@@ -14,7 +14,7 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 - 综合以必测步骤芯片的并集为分母，全部通过才算良品；缺温、缺 HBIN 与身份缺失明确区分，不相乘各阶段良率。
 - 支持自动解析计算，或指定物理分 Bin 的良率（总数＋良品数，或只有百分比）；可独立登记物理测得的综合良率。只有各温度汇总率时不推算联合良率，缺少样本数时不虚构加权合计。
 - 提供晶圆 / 批次 / 月 / 年四种口径、表头关键字与右键勾选筛选、良率与分类趋势、源文件重新定位和后台重算；支持管理报告 XLSX 与 PNG 导出。单温度步骤的良率明细隐藏重复综合行。
-- 良率趋势使用柱状图，显示加权均值和可调整的参考良率。“Bin分类”按 HBIN / SBIN 编号显示不良堆叠数量；“不良分类”按配置的 SBIN 分类名称汇总不良数量，未配置的归入“未分类”。两个页面共用批次、晶圆及时间口径筛选。
+- 良率趋势使用柱状图，显示加权均值和可调整的参考良率。“Bin分类”可按 HBIN 编号、SBIN 编号或 INI 的 SBIN 分类名称汇总全量 Bin；“不良分类”按配置的 SBIN 分类名称汇总不良数量。两个页面共用批次、晶圆及时间口径筛选。
 - Bin分类和不良分类均支持“数量 / 占总芯片数 % / 占不良芯片数 %”切换；图表、数值表和管理报告同步，隐藏图例不改变分母。管理窗口、表格数据列及图表柱间距不再设固定最小宽度，窄窗口自动减少横轴标签。
 - 良率趋势、Bin分类和不良分类均支持 Ctrl + 滚轮按单柱宽度与间隔缩放，柱子与数值表列宽同步；切换晶圆、批次、月、年仅改变柱数，保持选定的柱宽与间隙。超出窗口后可横向滚动，双击比例恢复默认柱宽。XLSX 对应图表和数值表保留当前列宽及图表高度；两个分类页每张最多 13 列，良率趋势每张最多 10 列，完整数据分页导出。
 - Fail SBIN Pareto 保留 Top 12，每个编号均显示，并在编号下展示配置释义；累计占比保持全体不良芯片的分母，Top 12 不一定累计到 100%。
@@ -28,6 +28,10 @@ A Windows desktop application for semiconductor CSV / STDF test-data analysis, b
 - 良率明细“打开所在位置”按目录去重，每次最多请求 5 个窗口，超出部分在状态栏提示；文件存在性检查在后台进行，可取消。
 
 只启动独立分析器可使用 `SemiconductorCsvAnalyzer.exe --analyzer`。详细口径见 [使用手册](Docs/UserGuide.md)。
+
+## V2.0.24 更新
+
+- 数据管理的「Bin分类」包含 HBIN 数量、SBIN 数量和 SBIN 分类数量。单温和多温综合都能查看含良品的分布，图表、下方数量表和 XLSX 一致。已有产品需重新计算一次以生成完整的单温分布。
 
 ## V2.0.23 更新
 
@@ -192,7 +196,7 @@ Fail 芯片 XLSX 拆为“Fail 芯片”和“复测良品芯片”两个工作�
 
 ## 下载运行
 
-从 [V2.0.23 Release](https://github.com/ttt3t/semiconductor-data-analyzer/releases/tag/V2.0.23) 下载 Windows x64 单 EXE ZIP。自带运行时版解压即可运行，依赖框架版需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0)。每个 ZIP 只包含一个 `SemiconductorCsvAnalyzer.exe`。CSV 导入前请在“设置”加载或调整布局配置，STDF 可直接打开。
+从 [V2.0.24 Release](https://github.com/ttt3t/semiconductor-data-analyzer/releases/tag/V2.0.24) 下载 Windows x64 单 EXE ZIP。自带运行时版解压即可运行，依赖框架版需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0)。每个 ZIP 只包含一个 `SemiconductorCsvAnalyzer.exe`。CSV 导入前请在“设置”加载或调整布局配置，STDF 可直接打开。
 
 ## 开发与运行
 

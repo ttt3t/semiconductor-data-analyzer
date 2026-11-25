@@ -92,7 +92,8 @@ static class Probe
         int Count(string kind, string type, string bin, string? month = null) => snapshot.CombinedBins
             .Where(row => row.Kind == kind && row.BinType == type && row.Bin == bin && (month == null || row.Period == month))
             .Sum(row => row.Count);
-        Check(snapshot.FailedFiles == 0 && snapshot.AnalyticsVersion == 3, "combined bin snapshot prepares both CP and FT from source files");
+        Check(snapshot.FailedFiles == 0 && snapshot.AnalyticsVersion == ProductYieldService.StageBinAnalyticsVersion,
+            "current bin snapshot prepares both CP and FT from source files");
         Check(Count("CP", "HBIN", "1") == 2 && Count("CP", "HBIN", "3") == 1 && Count("CP", "HBIN", "2") == 1,
             "CP uses the latest record, ignores optional temperatures, and requires all Bin 1 for combined Bin 1");
         Check(Count("CP", "HBIN", "8") == 1 && Count("CP", "HBIN", "10") == 0 && Count("CP", "HBIN", "4") == 1 &&
@@ -141,6 +142,12 @@ static class Probe
             "legacy SBIN honors record HBIN for 1/7, 5/1 and configured HBIN 4 counterexamples");
         Check(soft.Where(row => row.IsFailure).Sum(row => row.Count) == yield.Failed && soft.Any(row => row.FailureBin == ""),
             "combined failure attribution includes chips with unrecorded SBINs");
+        var stage = legacy.StageBins.Where(row => row.StageId == "configured-0").ToArray();
+        Check(stage.Where(row => row.BinType == "HBIN").Sum(row => row.Count) == 5 &&
+            stage.Single(row => row.BinType == "HBIN" && row.Bin == "4").Disposition == OriginalDisposition.Pass &&
+            stage.Single(row => row.BinType == "SBIN" && row.Bin == "7").Disposition == OriginalDisposition.Pass &&
+            stage.Single(row => row.BinType == "SBIN" && row.Bin == "").Disposition == null,
+            "single-step snapshot records configured good bins, legacy SBIN disposition and missing codes");
 
         product.ConfigText += "\n[SBINClassification]\nPassSBins=01,8\nPartialPassSBins=7\n";
         var config = ConfigLoader.Parse(product.ConfigText);
@@ -153,6 +160,10 @@ static class Probe
         catch (InvalidDataException) { overlap = true; }
         Check(overlap, "normalized SBIN Pass and PartialPass sets cannot overlap");
         var explicitSnapshot = ProductYieldService.Calculate(product);
+        Check(explicitSnapshot.StageBins.Single(row => row.StageId == "configured-0" && row.BinType == "SBIN" && row.Bin == "1")
+                .Disposition == OriginalDisposition.Pass &&
+            explicitSnapshot.FailBins.Single(row => row.StageId == "configured-0" && row.BinType == "SBIN" && row.Bin == "1").Count == 1,
+            "single-step full SBIN classification and official HBIN failure attribution stay independent");
         soft = explicitSnapshot.CombinedBins.Where(row => row.BinType == "SBIN").ToArray();
         Check(soft.Single(row => row.Bin == "7") is { Disposition: OriginalDisposition.PartialPass, FailureBin: null } &&
             soft.Single(row => row.Bin == "1") is { Disposition: OriginalDisposition.Pass, FailureBin: "1" } &&

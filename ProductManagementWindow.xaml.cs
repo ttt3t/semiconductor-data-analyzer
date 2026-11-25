@@ -226,6 +226,9 @@ public partial class ProductManagementWindow : Window
         YieldTrend.SetData(_product == null ? new(Array.Empty<string>(), new()) :
             ManagementTrendService.Create(_product, FtMode.IsChecked == true ? "FT" : "CP", TxtFilter.Text.Trim(), period: Period));
     }
+    private string SelectedBinType => CategorySbinGrouped.IsChecked == true ? ManagementTrendService.SBinCategory :
+        CategorySbin.IsChecked == true ? "SBIN" : "HBIN";
+
     private void RefreshCategories()
     {
         if (DgCategories == null) return;
@@ -235,16 +238,18 @@ public partial class ProductManagementWindow : Window
             ManagementTrendService.CategoryRows(_product, filter, Period).Where(c => c.StageId == stage?.Id).ToArray());
         if (CategoryTrend == null) return;
         var data = _product == null || stage == null ? new ManagementTrendData(Array.Empty<string>(), new()) :
-            ManagementTrendService.BinTrend(_product, stage, CategorySbin.IsChecked == true ? "SBIN" : "HBIN", filter, Period);
+            ManagementTrendService.BinTrend(_product, stage, SelectedBinType, filter, Period);
         bool combined = stage?.CombinedKind != null;
-        CategoryHbin.Content = combined ? "综合 HBIN" : "HBIN Fail 数量";
-        CategorySbin.Content = combined ? "综合 SBIN" : "SBIN Fail 数量";
-        TxtCombinedBinNote.Visibility = combined ? Visibility.Visible : Visibility.Collapsed;
-        if (combined)
-            TxtCombinedBinNote.Text = _product?.Snapshot?.AnalyticsVersion is not (>= ProductYieldService.CombinedBinAnalyticsVersion)
-                ? "请点击「重新计算」，从源文件生成多温综合 Bin 分布。"
-                : data.Labels.Length == 0 ? "当前范围内暂无可用于综合分 Bin 的逐颗记录。"
-                    : "按 INI 的 HBIN／SBIN 规则逐颗分 Bin。「占不良芯片数」与 HBIN 综合良率使用同一组不良芯片。";
+        CategoryHbin.Content = combined ? "综合 HBIN" : "HBIN 数量";
+        CategorySbin.Content = combined ? "综合 SBIN" : "SBIN 数量";
+        CategorySbinGrouped.Content = combined ? "综合 SBIN 分类" : "SBIN 分类数量";
+        int requiredVersion = combined ? ProductYieldService.CombinedBinAnalyticsVersion : ProductYieldService.StageBinAnalyticsVersion;
+        bool needsCalculation = _product != null && stage != null &&
+            (_product.Snapshot?.AnalyticsVersion ?? 0) < requiredVersion;
+        TxtBinNote.Visibility = combined || needsCalculation ? Visibility.Visible : Visibility.Collapsed;
+        TxtBinNote.Text = needsCalculation ? "请点击「重新计算」，从源文件生成完整 Bin 分布。" :
+            data.Labels.Length == 0 ? "当前范围内暂无可用于综合分 Bin 的逐颗记录。" :
+            "按 INI 的 HBIN／SBIN 规则逐颗分 Bin。「占不良芯片数」与 HBIN 综合良率使用同一组不良芯片。";
         CategoryTrend.SetData(data);
     }
     private void InvalidateTab(TabItem? tab)
@@ -490,7 +495,7 @@ public partial class ProductManagementWindow : Window
         RefreshTab(YieldTrendTab); RefreshTab(CategoryTab); RefreshTab(DefectTab);
         var product = ProductCatalogStore.Clone(_product); string filter = TxtFilter.Text.Trim(); var period = Period;
         var reportOptions = options.Options with { BinDisplay = CategoryTrend.CountDisplay, DefectDisplay = DefectTrend.CountDisplay,
-            BinType = CategorySbin.IsChecked == true ? "SBIN" : "HBIN", BinLayout = CategoryTrend.ReportLayout, DefectLayout = DefectTrend.ReportLayout,
+            BinType = SelectedBinType, BinLayout = CategoryTrend.ReportLayout, DefectLayout = DefectTrend.ReportLayout,
             YieldLayout = YieldTrend.ReportLayout };
         var cancellation = new CancellationTokenSource(); _calculation = cancellation; long version = ++_version; SetBusy(true);
         try { await ManagementReportService.RunStaAsync(() => ManagementReportService.SaveWorkbook(file.FileName, product, filter, cancellation.Token, period, reportOptions)); if (!_closed && version == _version) TxtStatus.Text = "管理报告已导出：" + file.FileName; }

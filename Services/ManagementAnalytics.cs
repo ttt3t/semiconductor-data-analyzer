@@ -46,6 +46,7 @@ public static class ManagementAnalytics
         snapshot.Categories = snapshot.Categories.Where(r => Selected(r.Kind, r.Lot, r.Wafer)).ToList();
         snapshot.MonthlyCategories = snapshot.MonthlyCategories.Where(r => Selected(r.Kind, r.Lot, r.Wafer)).ToList();
         snapshot.FailBins = snapshot.FailBins.Where(r => Selected(r.Kind, r.Lot, r.Wafer)).ToList();
+        snapshot.StageBins = snapshot.StageBins.Where(r => Selected(r.Kind, r.Lot, r.Wafer)).ToList();
         snapshot.CombinedBins = snapshot.CombinedBins.Where(r => Selected(r.Kind, r.Lot, r.Wafer)).ToList();
         snapshot.Radial = snapshot.Radial.Where(r => Selected("CP", r.Lot, r.Wafer)).ToList();
         var fileIds = snapshot.Yields.SelectMany(r => r.SourceFileIds).ToHashSet(StringComparer.Ordinal);

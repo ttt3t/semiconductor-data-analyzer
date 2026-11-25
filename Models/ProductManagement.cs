@@ -86,10 +86,14 @@ public sealed class ManagementSnapshot
     public List<ManagedCategoryCount> MonthlyCategories { get; set; } = new();
     public List<ManagedFileResult> Files { get; set; } = new();
     public List<ManagedFailBinCount> FailBins { get; set; } = new();
+    public List<ManagedStageBinCount> StageBins { get; set; } = new();
     public List<ManagedCombinedBinCount> CombinedBins { get; set; } = new();
     public List<ManagedRadialCount> Radial { get; set; } = new();
     [JsonIgnore] public int FailedFiles => Files.Count(f => f.Error.Length > 0);
 }
+
+public sealed record ManagedStageBinCount(string Kind, string Lot, string Wafer, string StageId, string Period,
+    string BinType, string Bin, Services.OriginalDisposition? Disposition, int Count);
 
 public sealed record ManagedCombinedBinCount(string Kind, string Lot, string Wafer, string Period,
     string BinType, string Bin, string? FailureBin, Services.OriginalDisposition? Disposition, int Count)
