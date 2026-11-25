@@ -55,6 +55,22 @@ static class Probe
             RetestMode.All, SampleMatchMode.Union, sBins: bins, locations: locations);
         Check(orWithinRanges.Records.Single().Id == "low", "measurement OR still intersects with SBIN and lot/wafer");
     }
+
+    static void CheckSigmaRange()
+    {
+        var records = new List<CsvRecord> { R("old-low", 0, "1", "100"), R("low", 0, "1", "0"),
+            R("middle", 1, "1", "2"), R("high", 2, "1", "4"), R("invalid", 3, "1", "inf") };
+        using var lease = new DatasetLease(records);
+        var data = DatasetService.Build(new() { new() { Id = "a", DisplayName = "A" } }, records);
+        var rule = new SampleRange("a", null, null) { Deviation = new(SampleCalculation.StandardDeviation, SampleBaseline.Mean, 1.1, null) };
+        var preview = SampleFilterService.Preview(data, new[] { rule }, RetestMode.Last, new(), null)["a"];
+        Check(preview.Contains("基准 2") && preview.Contains("σ 1.6329932") &&
+            SampleFilterService.Apply(data, new[] { rule }, RetestMode.Last).Records.Single().Id == "middle",
+            "sigma range uses population deviation and skips invalid measurements and superseded retests");
+        Check(SampleFilterService.Apply(data, new[] { rule with { Outside = true } }, RetestMode.Last)
+            .Records.Select(r => r.Id).SequenceEqual(new[] { "old-low", "low", "high" }),
+            "outside sigma range retains only matching chip histories");
+    }
     static void CheckCombinedBins(string folder, AnalyzerConfig config)
     {
         config.PartialPassHBins = new() { "2", "3" };
@@ -149,6 +165,7 @@ static class Probe
         try
         {
             CheckRangeFilters();
+            CheckSigmaRange();
             var config = new AnalyzerConfig { PreferGoodRetest = true, PartialPassHBins = new() { "3" } };
             var rows = new List<CsvRecord> { R("good-first", 0, "1", "1"), R("bad-later", 0, "2", "20"),
                 R("bad-first", 1, "2", "21"), R("good-middle", 1, "1", "2"), R("good-last", 1, "01", "3"),

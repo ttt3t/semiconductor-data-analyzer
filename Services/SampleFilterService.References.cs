@@ -6,7 +6,7 @@ namespace SemiconductorCsvAnalyzer.Services;
 
 public static partial class SampleFilterService
 {
-    private readonly record struct Interval(double? Minimum, double? Maximum, double? Reference = null)
+    private readonly record struct Interval(double? Minimum, double? Maximum, double? Reference = null, double? Sigma = null)
     {
         public bool Matches(double value, bool outside)
         {
@@ -52,19 +52,26 @@ public static partial class SampleFilterService
                 throw Error("请填写至少一个有限的范围边界。");
             return new(new Interval(rule.Minimum, rule.Maximum));
         }
+        Interval Around(double center, double? sigma = null)
+        {
+            double scale = sigma ?? (deviation.Calculation == SampleCalculation.Relative ? Math.Abs(center) / 100 : 1);
+            double? low = center - scale * deviation.Negative;
+            double? high = center + scale * (sigma.HasValue ? deviation.Negative : deviation.Positive);
+            if (!double.IsFinite(center) || Invalid(low) || Invalid(high)) throw Error("基准或计算范围超出有效数值。");
+            return new(low, high, center, sigma);
+        }
+
+        if (deviation.Calculation == SampleCalculation.StandardDeviation)
+        {
+            if (!deviation.Negative.HasValue || Invalid(deviation.Negative) || deviation.Negative < 0)
+                throw Error("请填写非负、有限的标准差倍数。");
+            var (mean, sigma) = MeanAndSigma(records, item.Id) ?? throw Error("当前样本没有可计算标准差的有效值。");
+            return new(Around(mean, sigma));
+        }
         if (deviation.Calculation is not (SampleCalculation.Relative or SampleCalculation.Absolute) ||
             (!deviation.Negative.HasValue && !deviation.Positive.HasValue) || Invalid(deviation.Negative) ||
             Invalid(deviation.Positive) || deviation.Negative < 0 || deviation.Positive < 0)
             throw Error("请填写至少一个非负、有限的偏差。");
-
-        Interval Around(double center)
-        {
-            double scale = deviation.Calculation == SampleCalculation.Relative ? Math.Abs(center) / 100 : 1;
-            double? low = center - scale * deviation.Negative;
-            double? high = center + scale * deviation.Positive;
-            if (!double.IsFinite(center) || Invalid(low) || Invalid(high)) throw Error("基准或计算范围超出有效数值。");
-            return new(low, high, center);
-        }
 
         if (deviation.Baseline == SampleBaseline.WaferMean)
         {
@@ -109,6 +116,33 @@ public static partial class SampleFilterService
         return mean.Count == 0 ? null : mean.Mean;
     }
 
+    private static (double Mean, double Sigma)? MeanAndSigma(IReadOnlyList<CsvRecord> records, string id)
+    {
+        var mean = new RunningMean();
+        double scale = 0;
+        foreach (var record in records)
+        {
+            AnalysisOperation.CheckCancellation();
+            if (ReadValue(record, id) is not double value) continue;
+            mean = mean.Add(value);
+            scale = Math.Max(scale, Math.Abs(value));
+        }
+        if (mean.Count == 0) return null;
+        if (scale == 0) return (0, 0);
+
+        // Scale differences before squaring so finite measurements do not overflow the variance.
+        double squared = 0;
+        foreach (var record in records)
+        {
+            AnalysisOperation.CheckCancellation();
+            if (ReadValue(record, id) is not double value) continue;
+            double difference = value - mean.Mean;
+            double scaled = double.IsFinite(difference) ? difference / scale : value / scale - mean.Mean / scale;
+            squared += scaled * scaled;
+        }
+        return (mean.Mean, Math.Sqrt(squared / mean.Count) * scale);
+    }
+
     private static double? Median(IReadOnlyList<CsvRecord> records, string id)
     {
         var values = new List<double>();
@@ -128,7 +162,9 @@ public static partial class SampleFilterService
         AnalyzerConfig config, CsvRecord? currentRun)
     {
         var items = data.Items.ToDictionary(item => item.Id, StringComparer.Ordinal);
-        IReadOnlyList<CsvRecord> selected = rules.Any(rule => rule.Deviation?.Baseline is SampleBaseline.Mean or SampleBaseline.Median or SampleBaseline.WaferMean)
+        IReadOnlyList<CsvRecord> selected = rules.Any(rule => rule.Deviation is { } options &&
+            (options.Calculation == SampleCalculation.StandardDeviation ||
+            options.Baseline is SampleBaseline.Mean or SampleBaseline.Median or SampleBaseline.WaferMean))
             ? DatasetService.SelectRetestRecords(data.Records, mode, config) : Array.Empty<CsvRecord>();
         var previews = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var rule in rules)
@@ -154,6 +190,7 @@ public static partial class SampleFilterService
                 };
                 if (rule.Outside && interval.Minimum.HasValue && interval.Maximum.HasValue) range = "范围外 " + range;
                 if (interval.Reference is double center) range += " · 基准 " + Number(center);
+                if (interval.Sigma is double sigma) range += " · σ " + Number(sigma);
                 if (resolved.ByWafer != null && currentRun != null)
                     range += " · " + string.Join(" / ", new[] { currentRun.Lot.Trim(), currentRun.WaferId }.Where(s => s.Length > 0));
                 previews[rule.ItemId] = range;

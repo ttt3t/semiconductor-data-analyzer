@@ -9,7 +9,7 @@ public sealed record SampleRange(string ItemId, double? Minimum, double? Maximum
     public SampleDeviation? Deviation { get; init; }
 }
 public enum SampleMatchMode { Intersection, Union }
-public enum SampleCalculation { Bounds, Relative, Absolute }
+public enum SampleCalculation { Bounds, Relative, Absolute, StandardDeviation }
 public enum SampleBaseline { Custom, Mean, Median, SpecCenter, Golden, WaferMean }
 public sealed record SampleDeviation(SampleCalculation Calculation, SampleBaseline Baseline,
     double? Negative, double? Positive, double? Reference = null, string? GoldenLabel = null);

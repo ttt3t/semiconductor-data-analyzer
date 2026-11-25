@@ -148,6 +148,7 @@ public partial class MainWindow : Window
             _data = new(); _scopeData = _scopeSource = null; _sampleRanges = _scopeRanges = Array.Empty<SampleRange>(); _sampleIncludedIds = null;
             _sampleSBins = _scopeSBins = Array.Empty<string>();
             _sampleLocations = _scopeLocations = Array.Empty<SampleLocation>();
+            _sampleFilterDraft = null;
             _sources.Clear();
             _datasetLease?.Dispose(); _datasetLease = null;
             _runIndex = -1;
@@ -654,6 +655,7 @@ public partial class MainWindow : Window
         ClearDetail();
         if (prepared.NewRunLookup is { } lookup)
         {
+            _sampleFilterDraft = null;
             var lease = new DatasetLease(lookup.Stores);
             var previousLease = _datasetLease;
             _datasetLease = lease;

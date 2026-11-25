@@ -15,7 +15,8 @@ public partial class MainWindow
     private string _scopeRetestDefinition = "";
     private SampleMatchMode _sampleMatch, _scopeMatch;
     private HashSet<string>? _sampleIncludedIds;
-    private event Action? SampleFilterContextChanged;
+    private event Action? SampleFilterFocusChanged;
+    private SampleFilterWindow.Draft? _sampleFilterDraft;
     private CsvParseResult ActiveData => _scopeData ?? _data;
     private int SampleFilterCount => _sampleRanges.Count + _sampleSBins.Count + _sampleLocations.Count;
 
@@ -47,17 +48,19 @@ public partial class MainWindow
                     return SampleFilterService.Preview(source, rules, mode, config, run);
                 }, token);
             });
+        window.DraftSaved += draft => _sampleFilterDraft = draft;
+        if (_sampleFilterDraft is { } saved) window.RestoreDraft(saved);
         var lease = new DatasetLease(stores);
-        SampleFilterContextChanged += window.RefreshFocusedRows;
+        SampleFilterFocusChanged += window.RefreshFocusedRows;
         window.Closed += (_, _) =>
         {
-            SampleFilterContextChanged -= window.RefreshFocusedRows;
+            SampleFilterFocusChanged -= window.RefreshFocusedRows;
             lease.Dispose();
         };
         try { IndependentWindow.Show(window); }
         catch
         {
-            SampleFilterContextChanged -= window.RefreshFocusedRows;
+            SampleFilterFocusChanged -= window.RefreshFocusedRows;
             lease.Dispose();
             throw;
         }
