@@ -39,9 +39,16 @@ public partial class ExportDataWindow : Window
         : KeepRetests.IsChecked == true ? RetestMode.OnlyRetests : RetestMode.All;
     public ExportDataWindow(IEnumerable<string> wafers, double defaultOutlierSigma = 6,
         bool report = false, int histogramMode = 0, bool combineSites = false, int focusedCount = 0, bool combineWafers = true,
-        ScatterOrder scatterOrder = ScatterOrder.SerialNumber, bool scatterUseLimitRange = false)
+        ScatterOrder scatterOrder = ScatterOrder.SerialNumber, bool scatterUseLimitRange = false, RetestMode retestMode = RetestMode.All)
     {
         InitializeComponent();
+        (retestMode switch
+        {
+            RetestMode.First => KeepFirst,
+            RetestMode.Last => KeepLast,
+            RetestMode.OnlyRetests => KeepRetests,
+            _ => KeepAll
+        }).IsChecked = true;
         TxtOutlierSigma.Text = (double.IsFinite(defaultOutlierSigma) && defaultOutlierSigma > 0
             ? defaultOutlierSigma : 6).ToString("G", CultureInfo.InvariantCulture);
         if (report)

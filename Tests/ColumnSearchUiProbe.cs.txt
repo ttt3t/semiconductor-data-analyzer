@@ -8,6 +8,7 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using ClosedXML.Excel;
 using SemiconductorCsvAnalyzer;
 using SemiconductorCsvAnalyzer.Controls;
 using SemiconductorCsvAnalyzer.Models;
@@ -63,6 +64,13 @@ static class Probe
         ((IEnumerable)Field(popup, "_choices")!).Cast<ColumnValueFilterPopup.Choice>();
     static TextBox ChecklistSearch(ColumnValueFilterPopup popup) => (TextBox)popup.FindName("SearchBox");
     static void Click(ColumnValueFilterPopup popup, string handler) => Call(popup, handler, popup, new RoutedEventArgs());
+    static bool Enter(TextBox box)
+    {
+        var args = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(box), Environment.TickCount, Key.Enter)
+            { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+        box.RaiseEvent(args);
+        return args.Handled;
+    }
     static void Checklist(MainWindow main, DataGrid grid, string key, string? selected)
     {
         var popup = OpenChecklist(main, grid, key);
@@ -78,7 +86,8 @@ static class Probe
     {
         var popup = OpenChecklist(main, grid, "TestNumber");
         ChecklistSearch(popup).Text = " 2 ";
-        Click(popup, "Apply_Click"); Refresh(main);
+        Check(Enter(ChecklistSearch(popup)), "Enter applies the open checklist search");
+        Refresh(main);
         Check(grid.Items.Cast<TestItemSummary>().Select(s => s.TestNumber).Order().SequenceEqual(new[] { "102", "201" }),
             "applying immediately uses the latest search and ignores previously checked hidden values");
 
@@ -97,6 +106,91 @@ static class Probe
         Check(grid.Items.Cast<TestItemSummary>().Select(s => s.TestNumber).SequenceEqual(new[] { "201" }),
             "clearing the search restores the candidate list and preserves its check marks");
         Checklist(main, grid, "TestNumber", null);
+    }
+
+    static void CheckColumnCascade(MainWindow main, DataGrid grid)
+    {
+        Checklist(main, grid, "TestNumber", "102");
+        var popup = OpenChecklist(main, grid, "DisplayName");
+        Check(Choices(popup).Single().Value == "B", "the second checklist only offers values allowed by the first column");
+        Click(popup, "Apply_Click");
+        Checklist(main, grid, "TestNumber", null);
+        Check(grid.Items.Cast<TestItemSummary>().Single().DisplayName == "B",
+            "applying all available values in a narrowed checklist keeps an independent column filter");
+        popup = OpenChecklist(main, grid, "DisplayName");
+        Check(Choices(popup).Count() == 5 && Choices(popup).Single(choice => choice.IsChecked).Value == "B",
+            "reopening a filtered column excludes its own filter from the candidates and restores checks");
+        Click(popup, "Clear_Click"); Refresh(main);
+        Box(grid, "TestNumber").Text = ">200";
+        Check(Enter(Box(grid, "TestNumber")) && Toggle(grid, "TestNumber").IsChecked == true && grid.Items.Count == 3,
+            "Enter enables a typed header query and applies it immediately");
+        popup = OpenChecklist(main, grid, "DisplayName");
+        Check(Choices(popup).Select(choice => choice.Value).ToHashSet().SetEquals(new[] { "Noise_X", "Missing", "Huge" }),
+            "active header text searches also constrain other checklist candidates");
+        Click(popup, "Cancel_Click");
+        Enable(grid, "TestNumber", false); Refresh(main);
+    }
+
+    static void CheckFilteredExports(MainWindow main, DataGrid grid, AnalyzerConfig config, string folder)
+    {
+        string input = Path.Combine(folder, "export-source.csv");
+        File.WriteAllText(input, "SN,X,Y,Site,Wafer,SBIN,HBIN,A,B,C\nLSL,,,,,,,0,0,0\nUSL,,,,,,,150,150,150\n" +
+            "Unit,,,,,,,V,V,V\nTest Num,,,,,,,101,102,103\n1,1,0,1,W1,2,2,10,90,100\n2,2,0,2,W2,2,2,90,20,100\n" +
+            "3,3,0,2,W1,2,2,90,90,100\n4,4,0,1,W3,9,9,10,20,100\n5,5,0,1,W1,9,9,99,20,100\n");
+        config.SBinColumn = 6; config.HBinColumn = 7; config.TestItemStartColumn = 8;
+        foreach (string field in new[] { "_combineSites", "_combineWafers" })
+            typeof(MainWindow).GetField(field, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(main, false);
+        Wait(main.OpenManagedFilesAsync(new[] { new CsvImportSource(input) }, config, RetestMode.Last));
+        Wait((Task)Call(main, "ApplySampleFiltersAsync", Array.Empty<SampleRange>(), SampleMatchMode.Intersection,
+            new[] { "2" }, Array.Empty<SampleLocation>())!);
+        Box(grid, "Mean").Text = "<=20"; Enable(grid, "Mean", true); Refresh(main);
+        Check(grid.Items.Cast<TestItemSummary>().Select(row => (row.DisplayName, row.Site, row.Wafer))
+            .SequenceEqual(new[] { ("A", "1", "W1"), ("B", "2", "W2") }), "fixture has sparse visible test, site and wafer combinations after both filters");
+        var snapshot = Call(main, "CaptureExportSelection")!;
+        var tests = (ExportTestScope[])snapshot.GetType().GetProperty("TestScopes")!.GetValue(snapshot)!;
+        var original = (CsvParseResult)Field(main, "_data")!;
+        original.Items.Where(item => item.DisplayName != "B").ToList().ForEach(item => item.Focus.IsFocused = true);
+        Call(main, "BtnExportReport_Click", main, new RoutedEventArgs()); Pump();
+        var options = Application.Current.Windows.OfType<ExportDataWindow>().Single();
+        Check(options.Mode == RetestMode.Last && ((TextBlock)options.FindName("ReportFocusInfo")).Text.Contains("1"),
+            "the real report dialog inherits current retest mode and only counts visible focused tests");
+        options.Close(); Pump();
+        Call(main, "BtnExportData_Click", main, new RoutedEventArgs()); Pump();
+        options = Application.Current.Windows.OfType<ExportDataWindow>().Single();
+        Check(options.Mode == RetestMode.Last, "the real data dialog also inherits the current retest mode");
+        options.Close(); Pump();
+        Enable(grid, "Mean", false); Refresh(main);
+        var scope = ((CsvParseResult Data, string[] Wafers))snapshot.GetType().GetMethod("Prepare")!
+            .Invoke(snapshot, new object[] { new[] { "W1", "W2" } })!;
+        Check(scope.Data.Records.Select(row => row.SerialNumber).SequenceEqual(new[] { "1", "2" }) &&
+            scope.Data.Records.All(row => row.Measurements.Count == 1) && original.Records.All(row => row.Measurements.Count == 3),
+            "the frozen export scope preserves the earlier filters without modifying the source");
+        string csv = Path.Combine(folder, "export-filtered.csv");
+        IntegratedCsvService.Save(csv, scope.Data, scope.Wafers, RetestMode.Last);
+        var loaded = IntegratedCsvService.Load(csv);
+        using var lease = new DatasetLease(loaded.Records);
+        Check(loaded.Items.Select(item => item.DisplayName).SequenceEqual(new[] { "A", "B" }) &&
+            loaded.Records.Select(row => row.SerialNumber).SequenceEqual(new[] { "1", "2" }) && loaded.Items.All(item => item.Values.Count == 1),
+            "integrated CSV contains only the two admitted tests and the original visible cells");
+        string rawXlsx = Path.Combine(folder, "export-filtered-fails.xlsx");
+        var failures = FailChipXlsxService.Save(rawXlsx, scope.Data, config, scope.Wafers, RetestMode.Last);
+        Check(failures.FailChips == 2 && failures.Records == 2, "Fail XLSX uses the same filtered chip population");
+        using (var book = new XLWorkbook(rawXlsx))
+            Check(book.Worksheet(1).Cell(1, 13).GetString() == "A" && book.Worksheet(1).Cell(1, 14).GetString() == "B" &&
+                book.Worksheet(1).Cell(1, 15).IsEmpty(), "Fail XLSX emits only the retained measurement columns");
+        string report = Path.Combine(folder, "export-filtered-report.xlsx");
+        Wait(XlsxReportService.SaveAsync(report, scope.Data, config, new(scope.Wafers, RetestMode.Last, null, 0, false,
+            new[] { scope.Data.Items[0].Id }, CombineWafers: false, TestScopes: tests), "filtered export"));
+        using (var book = new XLWorkbook(report))
+        {
+            var sheet = book.Worksheet("Testitem Yield");
+            Check(sheet.Cell(8, 4).GetString() == "A" && sheet.Cell(8, 5).GetString() == "1" &&
+                sheet.Cell(8, 6).GetString() == "W1" && sheet.Cell(8, 16).GetDouble() == 10 &&
+                sheet.Cell(9, 4).GetString() == "B" && sheet.Cell(9, 5).GetString() == "2" &&
+                sheet.Cell(9, 6).GetString() == "W2" && sheet.Cell(9, 16).GetDouble() == 20 &&
+                sheet.Cell(10, 4).IsEmpty() && book.Worksheet("关注测项").Pictures.Count() == 2,
+                "the XLSX report writes exactly the visible strata and draws only the retained focused test");
+        }
     }
 
     public sealed record ChecklistRow(string Value);
@@ -156,6 +250,7 @@ static class Probe
             CheckHeaderLayout(main);
             Check(grid.Items.Count == 5 && grid.Columns.Count == 24 && grid.Columns.All(c => Toggle(grid, Header<TextBox>((Panel)c.Header).Single().Tag.ToString()!).IsChecked == false), "all 24 columns start unchecked, including focus");
             CheckAnalysisChecklistSearch(main, grid);
+            CheckColumnCascade(main, grid);
             CheckManagementChecklistSearch(grid);
             var summaries = grid.Items.Cast<TestItemSummary>().ToArray();
             summaries[0].Data.DisplayName = "prefix MAIN middle TEST suffix";
@@ -202,6 +297,8 @@ static class Probe
             Check(grid.Items.Count == 0 && Equals(Box(grid, "TestNumber").BorderBrush, Brushes.Firebrick), "invalid active rule has a visible validation border without an exception");
             Enable(grid, "TestNumber", false); Refresh(main);
             Check(grid.Items.Count == 5 && failures.Count == 0, "disabling an invalid query restores rows without dispatcher errors");
+            CheckFilteredExports(main, grid, config, folder);
+            Check(failures.Count == 0, "filtered report and data export raise no dispatcher exceptions");
             main.Close(); app.Shutdown(); Console.WriteLine($"ALL {checks} COLUMN SEARCH UI CHECKS PASSED"); return 0;
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }

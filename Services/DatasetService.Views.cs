@@ -5,7 +5,7 @@ namespace SemiconductorCsvAnalyzer.Services;
 public static partial class DatasetService
 {
     /// <summary>Share numeric storage and one row mapping across all selected columns.</summary>
-    internal static CsvParseResult CreateView(CsvParseResult source, List<CsvRecord> records)
+    internal static CsvParseResult CreateView(CsvParseResult source, List<CsvRecord> records, IReadOnlySet<string>? testIds = null)
     {
         var sourceRows = new Dictionary<string, int>(source.Records.Count, StringComparer.Ordinal);
         for (int row = 0; row < source.Records.Count; row++)
@@ -21,10 +21,11 @@ public static partial class DatasetService
             rows[row] = sourceRows[records[row].Id];
             selected.Add(records[row].Id, records[row]);
         }
-        var items = new List<TestItemData>(source.Items.Count);
+        var items = new List<TestItemData>(testIds?.Count ?? source.Items.Count);
         foreach (var original in source.Items)
         {
             AnalysisOperation.CheckCancellation();
+            if (testIds != null && !testIds.Contains(original.Id)) continue;
             var item = CloneItem(original);
             item.Values.InitializeView(original.Values, records, rows, item.Id);
             foreach (var error in original.Errors)

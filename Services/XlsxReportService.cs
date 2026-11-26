@@ -14,7 +14,8 @@ public sealed record XlsxReportOptions(IReadOnlyCollection<string> Wafers, Retes
     bool ShowBinNumbers = false, bool ShowSiteBorders = false, bool CombineWafers = true,
     ScatterOrder ScatterOrder = ScatterOrder.SerialNumber,
     ChartImageSize? HistogramSize = null, ChartImageSize? ScatterSize = null, bool ScatterUseLimitRange = false,
-    bool HistogramShowBinCounts = false, bool HistogramAutoLogFrequency = true, bool HistogramShowPercentage = false);
+    bool HistogramShowBinCounts = false, bool HistogramAutoLogFrequency = true, bool HistogramShowPercentage = false,
+    IReadOnlyList<ExportTestScope>? TestScopes = null);
 
 public static class XlsxReportService
 {
@@ -117,7 +118,13 @@ public static class XlsxReportService
         if (sites.Length == 0) sites = new[] { "(空)" };
         var wafers = data.Wafers.Where(options.Wafers.Contains).ToArray();
         var focused = options.FocusedItemIds.ToHashSet(StringComparer.Ordinal);
-        if ((long)data.Items.Count * (options.CombineSites ? 1 : sites.Length) *
+        bool splitSites = !options.CombineSites && options.TestScopes?.Any(scope => scope.Site != null) == true;
+        bool splitWafers = !options.CombineWafers && options.TestScopes?.Any(scope => scope.Wafer != null) == true;
+        var allowedSummaries = options.TestScopes?
+            .Where(scope => scope.Wafer == null || options.Wafers.Contains(scope.Wafer))
+            .Select(scope => new ExportTestScope(scope.ItemId, splitSites ? scope.Site : null, splitWafers ? scope.Wafer : null))
+            .ToHashSet();
+        if (allowedSummaries == null && (long)data.Items.Count * (options.CombineSites ? 1 : sites.Length) *
             (options.CombineWafers ? 1 : wafers.Length) > 1_048_568)
             throw new InvalidDataException("统计行数超过 Excel 单个工作表上限，请减少所选晶圆或合并 Site / Wafer。");
         string temp = path + "." + Guid.NewGuid().ToString("N") + ".xlsx";
@@ -149,7 +156,13 @@ public static class XlsxReportService
                     progress.At("计算测项统计", item, i);
                     foreach (var summary in SummaryService.Build(new[] { item }, sites, wafers,
                         options.CombineSites, options.CombineWafers, config))
+                    {
+                        if (allowedSummaries != null && !allowedSummaries.Contains(new ExportTestScope(item.Id,
+                            splitSites ? summary.Site : null, splitWafers ? summary.Wafer : null))) continue;
+                        if (summaryRow > 1_048_576)
+                            throw new InvalidDataException("统计行数超过 Excel 单个工作表上限，请减少所选晶圆或合并 Site / Wafer。");
                         WriteSummary(summaries, summaryRow++, summary, focused.Contains(item.Id));
+                    }
                     if (!focused.Contains(item.Id)) continue;
                     progress.At("计算关注项统计", item, i);
                     var combined = SummaryService.Build(new[] { item }, sites, true, config)[0];

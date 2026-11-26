@@ -30,12 +30,14 @@ public partial class ColumnValueFilterPopup : Popup
     private Action<HashSet<string>?>? _apply;
     private readonly DispatcherTimer _searchTimer;
     private readonly string _filterHint;
+    private readonly bool _restrictedCandidates;
 
     public ColumnValueFilterPopup(string title, IEnumerable<string> values, ISet<string>? selected,
-        Action<HashSet<string>?> apply, string? filterHint = null)
+        Action<HashSet<string>?> apply, string? filterHint = null, bool restrictedCandidates = false)
     {
         _apply = apply;
         _filterHint = filterHint ?? "与表头关键字筛选同时生效";
+        _restrictedCandidates = restrictedCandidates;
         _choices = values.Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(s => s, StringComparer.OrdinalIgnoreCase).Select(s => new Choice(s, selected == null || selected.Contains(s))).ToList();
         _view = new ListCollectionView(_choices);
@@ -64,6 +66,13 @@ public partial class ColumnValueFilterPopup : Popup
         _searchTimer.Start();
     }
 
+    private void Search_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        e.Handled = true;
+        if (!e.IsRepeat) Apply_Click(sender, e);
+    }
+
     private void RefreshSearch()
     {
         _searchTimer.Stop();
@@ -85,7 +94,7 @@ public partial class ColumnValueFilterPopup : Popup
     {
         RefreshSearch();
         var selected = _view.Cast<Choice>().Where(c => c.IsChecked).Select(c => c.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        _apply?.Invoke(selected.Count == _choices.Count ? null : selected);
+        _apply?.Invoke(selected.Count == _choices.Count && !_restrictedCandidates ? null : selected);
         IsOpen = false;
     }
 }

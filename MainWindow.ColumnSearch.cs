@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using SemiconductorCsvAnalyzer.Models;
 using SemiconductorCsvAnalyzer.Services;
@@ -55,6 +56,19 @@ public partial class MainWindow
         e.Handled = true;
     }
 
+    private void ColumnFilter_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || _imeComposing || _isBusy || sender is not TextBox { Tag: string key }) return;
+        var state = ColumnSearch(key);
+        if (!state.CanSearch) return;
+        e.Handled = true;
+        if (e.IsRepeat) return;
+        state.Enable(!string.IsNullOrWhiteSpace(state.Text));
+        UpdateValueFilterHeaders();
+        _filterTimer.Stop();
+        ApplySearchFilter(_currentItem?.DisplayName, _currentSite, _currentWafer);
+    }
+
     private void UpdateValueFilterHeaders()
     {
         if (DgTestItems == null) return; // TextBox events may arrive while BAML creates the headers.
@@ -65,7 +79,7 @@ public partial class MainWindow
             state.SetValueFilterActive(_columnValueFilters.ContainsKey(key));
             box.IsEnabled = state.CanSearch;
             box.ToolTip = state.HasValueFilter ? "此列由右键筛选器控制；清除此列筛选后可勾选搜索。" :
-                state.Error is string error ? error + "\n" + ColumnSearchRule.Help : ColumnSearchRule.Help;
+                (state.Error is string error ? error + "\n" : "") + ColumnSearchRule.Help + "\n按回车应用此列搜索。";
             if (state.Error != null) box.BorderBrush = Brushes.Firebrick;
             else box.ClearValue(Control.BorderBrushProperty);
             if (HeaderControls<CheckBox>(panel).FirstOrDefault(c => Equals(c.Tag, key)) is { } toggle)

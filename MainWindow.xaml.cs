@@ -292,7 +292,7 @@ public partial class MainWindow : Window
     private void UpdateWindowTitle()
     {
         string configName = string.IsNullOrWhiteSpace(_config.ConfigFileName) ? "未加载配置" : _config.ConfigFileName;
-        Title = $"CSV Analyzer · V2.0.24 | 当前数据：{_currentDataName} | 配置：{configName}";
+        Title = $"CSV Analyzer · V2.0.25 | 当前数据：{_currentDataName} | 配置：{configName}";
     }
 
     private void UpdateConfigInfo()
@@ -462,15 +462,21 @@ public partial class MainWindow : Window
         catch (Exception ex) { MessageBox.Show(ex.Message, "导入失败", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
+    private AnalyzerExportSelection CaptureExportSelection() => new(ActiveData, HasColumnFilters()
+        ? _summaries.Where(summary => MatchesColumnFilters(summary)).Select(summary => new ExportTestScope(summary.Data.Id,
+            _combineSites ? null : summary.Site, summary.IsWaferCombined ? null : summary.Wafer)).ToArray()
+        : null);
+
     private async void BtnExportData_Click(object sender, RoutedEventArgs e)
     {
         if (_isBusy) return;
-        if (ActiveData.Records.Count == 0)
+        var selection = CaptureExportSelection();
+        var availableWafers = selection.Wafers();
+        if (availableWafers.Length == 0)
         { MessageBox.Show("没有可导出的数据，请先取消或调整数据筛选。", "导出数据", MessageBoxButton.OK, MessageBoxImage.Information); return; }
-        var data = ActiveData;
         var config = ConfigLoader.Parse(ConfigLoader.Serialize(_config));
-        using var lease = new DatasetLease(data.Records);
-        var options = new ExportDataWindow(data.Wafers, config.OutlierSigma);
+        using var lease = new DatasetLease(_runLookup.Stores);
+        var options = new ExportDataWindow(availableWafers, config.OutlierSigma, retestMode: _retestMode);
         if (!await IndependentWindow.ShowAsync(options, keepOpenOnAccept: true)) return;
         var wafers = options.SelectedWafers;
         var mode = options.Mode;
@@ -482,13 +488,14 @@ public partial class MainWindow : Window
         if (file.ShowDialog(options) != true) { options.Close(); return; }
         var exporting = IndependentOperationWindow.RunAsync("导出数据", async () =>
         {
+            var scope = await Task.Run(() => selection.Prepare(wafers));
             if (failOnly)
             {
-                var exported = await Task.Run(() => FailChipXlsxService.Save(file.FileName, data, config, wafers, mode, outlierSigma));
+                var exported = await Task.Run(() => FailChipXlsxService.Save(file.FileName, scope.Data, config, scope.Wafers, mode, outlierSigma));
                 return $"已导出 2 个工作表：{exported.FailChips} 颗 Fail 芯片、{exported.RetestGoodChips} 颗复测良品芯片，共 {exported.Records} 条记录。\n{file.FileName}";
             }
-            int count = await Task.Run(() => IntegratedCsvService.Save(file.FileName, data, wafers, mode, outlierSigma, config));
-            return $"已导出 {wafers.Length} 个 wafer、{count} 条测试记录（含异常原文），可直接重新打开。\n{file.FileName}";
+            int count = await Task.Run(() => IntegratedCsvService.Save(file.FileName, scope.Data, scope.Wafers, mode, outlierSigma, config));
+            return $"已导出 {scope.Wafers.Length} 个 wafer、{count} 条测试记录（含异常原文），可直接重新打开。\n{file.FileName}";
         });
         options.Close();
         await exporting;
@@ -497,22 +504,24 @@ public partial class MainWindow : Window
     private async void BtnExportReport_Click(object sender, RoutedEventArgs e)
     {
         if (_isBusy) return;
-        if (ActiveData.Records.Count == 0)
+        var selection = CaptureExportSelection();
+        var availableWafers = selection.Wafers();
+        if (availableWafers.Length == 0)
         { MessageBox.Show("没有可导出的数据，请先打开文件或调整数据筛选。", "导出报告", MessageBoxButton.OK, MessageBoxImage.Information); return; }
-        var focused = _data.Items.Where(i => i.Focus.IsFocused).Select(i => i.Id).ToArray();
-        var data = ActiveData;
+        var selectedTests = selection.TestScopes?.Select(scope => scope.ItemId).ToHashSet(StringComparer.Ordinal);
+        var focused = selection.Source.Items.Where(i => i.Focus.IsFocused && (selectedTests == null || selectedTests.Contains(i.Id))).Select(i => i.Id).ToArray();
         var config = ConfigLoader.Parse(ConfigLoader.Serialize(_config));
-        var dataName = _currentDataName + (SampleFilterCount > 0 ? "（已应用数据筛选）" : "");
+        var dataName = _currentDataName + (SampleFilterCount > 0 || selection.TestScopes != null ? "（已应用筛选）" : "");
         var histogramSize = ReportChartSize(Histogram, _histogramImageSize);
         bool histogramShowBinCounts = Histogram.ShowBinCounts;
         bool histogramAutoLogFrequency = Histogram.AutoLogFrequency;
         bool histogramShowPercentage = Histogram.ShowPercentage;
         var scatterSize = ReportChartSize(ScatterPlot, _scatterImageSize);
-        using var lease = new DatasetLease(data.Records);
-        var options = new ExportDataWindow(data.Wafers, config.OutlierSigma, report: true,
+        using var lease = new DatasetLease(_runLookup.Stores);
+        var options = new ExportDataWindow(availableWafers, config.OutlierSigma, report: true,
             histogramMode: _binMode, combineSites: _combineSites, focusedCount: focused.Length,
             combineWafers: _combineWafers, scatterOrder: _scatterOrder,
-            scatterUseLimitRange: ScatterPlot.UseLimitRange);
+            scatterUseLimitRange: ScatterPlot.UseLimitRange, retestMode: _retestMode);
         if (!await IndependentWindow.ShowAsync(options, keepOpenOnAccept: true)) return;
         var file = new SaveFileDialog { Filter = "Excel 报告 (*.xlsx)|*.xlsx", DefaultExt = ".xlsx", AddExtension = true,
             FileName = "测试分析报告.xlsx", Title = "导出 XLSX 报告" };
@@ -521,11 +530,19 @@ public partial class MainWindow : Window
             options.HistogramMode, options.CombineSites, focused, options.ShowBinNumbers, options.ShowSiteBorders,
             options.CombineWafers, options.ScatterOrder,
             histogramSize, scatterSize,
-            options.ScatterUseLimitRange, histogramShowBinCounts, histogramAutoLogFrequency, histogramShowPercentage);
+            options.ScatterUseLimitRange, histogramShowBinCounts, histogramAutoLogFrequency, histogramShowPercentage,
+            selection.TestScopes);
         var exporting = IndependentOperationWindow.RunAsync("导出 XLSX 报告", async () =>
         {
-            await XlsxReportService.SaveAsync(file.FileName, data, config, report, dataName);
-            return $"报告已导出：4 个工作表，{focused.Length} 个关注测项。\n{file.FileName}";
+            var scope = await Task.Run(() => selection.Prepare(report.Wafers.ToArray()));
+            var reportFocus = focused;
+            if (scope.Data.Items.Count < selection.Source.Items.Count)
+            {
+                var exportedTests = scope.Data.Items.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
+                reportFocus = focused.Where(exportedTests.Contains).ToArray();
+            }
+            await XlsxReportService.SaveAsync(file.FileName, scope.Data, config, report with { Wafers = scope.Wafers, FocusedItemIds = reportFocus }, dataName);
+            return $"报告已导出：4 个工作表，{reportFocus.Length} 个关注测项。\n{file.FileName}";
         });
         options.Close();
         await exporting;
@@ -760,13 +777,15 @@ public partial class MainWindow : Window
         CloseValueFilter();
         string title = column.Header is Panel panel ? panel.Children.OfType<TextBlock>().FirstOrDefault()?.Text ?? key : key;
         _columnValueFilters.TryGetValue(key, out var selected);
-        var popup = new ColumnValueFilterPopup(title, _summaries.Select(s => ColumnText(s, key)), selected, values =>
+        bool restricted = HasColumnFilters(key);
+        var candidates = restricted ? _summaries.Where(s => MatchesColumnFilters(s, key)) : _summaries;
+        var popup = new ColumnValueFilterPopup(title, candidates.Select(s => ColumnText(s, key)), selected, values =>
         {
             if (values == null) _columnValueFilters.Remove(key);
             else _columnValueFilters[key] = values;
             UpdateValueFilterHeaders();
             ScheduleFilter();
-        }, filterHint: "应用后接管此列搜索；其他列条件同时生效") { PlacementTarget = target };
+        }, filterHint: "候选值已按其他列筛选；应用后接管此列搜索", restrictedCandidates: restricted) { PlacementTarget = target };
         popup.Closed += (_, _) => { if (ReferenceEquals(_valueFilterPopup, popup)) _valueFilterPopup = null; };
         _valueFilterPopup = popup;
         popup.IsOpen = true;
@@ -827,12 +846,16 @@ public partial class MainWindow : Window
         }
     }
 
-    private bool MatchesColumnFilters(TestItemSummary s)
+    private bool HasColumnFilters(string? exceptColumn = null) =>
+        _columnValueFilters.Keys.Any(key => key != exceptColumn) ||
+        _columnFilters.Any(column => column.Key != exceptColumn && column.Value.IsSearchActive);
+
+    private bool MatchesColumnFilters(TestItemSummary s, string? exceptColumn = null)
     {
         foreach (var kv in _columnValueFilters)
-            if (!kv.Value.Contains(ColumnText(s, kv.Key))) return false;
+            if (kv.Key != exceptColumn && !kv.Value.Contains(ColumnText(s, kv.Key))) return false;
         foreach (var kv in _columnFilters)
-            if (kv.Value.IsSearchActive && !kv.Value.Matches(ColumnText(s, kv.Key), ColumnNumber(s, kv.Key))) return false;
+            if (kv.Key != exceptColumn && kv.Value.IsSearchActive && !kv.Value.Matches(ColumnText(s, kv.Key), ColumnNumber(s, kv.Key))) return false;
 
         return true;
     }
